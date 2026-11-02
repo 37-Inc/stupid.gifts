@@ -1,5 +1,11 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — Explicit model-credit failure
+
+- Report definitive model credit/spend limits without retrying each product.
+- Preserve transient-error retries, existing public copy and unfinished private
+  discoveries. OpenAI funding is separate from the current Cloudflare plan.
+
 ## 2026-11-02 — Launch measurement and current-plan readiness
 
 [owner+codex] Recorded Howie's final acceptance. Registered six safe GA4 event
