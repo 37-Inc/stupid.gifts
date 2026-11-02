@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFile, readdir } from 'node:fs/promises';
 import { createCatalogSnapshot } from '../lib/catalog/snapshot.ts';
 import { createProjectionPacket, projectionQueries, getRevisionProductsByPublicIds, visibleRevisionCountQuery } from '../lib/catalog/d1.ts';
+import { getProductsByPublicIds, keywordSearch } from '../lib/catalog/storage/d1.ts';
 import { hasReviewedGiftShortCopy } from '../lib/gift-slugs.ts';
 import { maintenanceProjection, maintenanceEmbeddingText, publishedMaintenanceProduct } from '../scripts/catalog/maintenance-state.ts';
 import { createD1CatalogMaintenanceStore } from '../scripts/catalog/maintenance-d1.ts';
@@ -67,6 +68,8 @@ test('approved short copy without an article becomes a factual public projection
     assert.equal(f.sealed.products[0].description,SHORT);
     assert.equal('editorialWriteup' in f.sealed.products[0],false);
     assert.deepEqual(await getRevisionProductsByPublicIds(f.db,[p.publicId],new Date(NOW),'test-short'),f.sealed.products);
+    assert.deepEqual(await getProductsByPublicIds(f.db,[p.publicId],new Date(NOW),'test-short'),f.sealed.products);
+    assert.deepEqual(await keywordSearch(f.db,'crab',60,new Date(NOW),'test-short'),f.sealed.products);
     const count=visibleRevisionCountQuery('test-short',new Date(NOW));
     assert.equal(Object.values(f.sqlite.prepare(count.sql).get(...count.params))[0],1);
     checkCurrent(f.sealed.products[0],f.packet.rows[0],{...f.current,timestamp_provenance_json:'{}'},new Date(NOW));
@@ -151,6 +154,8 @@ test('current finite short-copy quality/text drift cannot pass SQL or final sour
       f.sqlite.prepare(`INSERT INTO catalog_maintenance_products(product_id,version,semantic_json,embedding_present,embedding_provenance_json)
         VALUES(?,1,?,NULL,'{}')`).run(p.id,JSON.stringify(semantic));
       assert.deepEqual(await getRevisionProductsByPublicIds(f.db,[p.publicId],new Date(NOW),'test-short'),[]);
+      assert.deepEqual(await getProductsByPublicIds(f.db,[p.publicId],new Date(NOW),'test-short'),[]);
+      assert.deepEqual(await keywordSearch(f.db,'crab',60,new Date(NOW),'test-short'),[]);
       assert.throws(()=>checkCurrent(f.sealed.products[0],f.packet.rows[0],{...f.current,
         maintenance_semantic:JSON.stringify(semantic),timestamp_provenance_json:'{}'},new Date(NOW)),/current_hold_or_factual_drift/);
     }finally{f.close();}
@@ -166,6 +171,7 @@ test('short approval cannot smuggle a granted but unreviewed historical article 
     const packet=await createProjectionPacket(changed,{[p.publicId]:p.sourceFactsHash},'b'.repeat(64),new Date(NOW));
     for(const query of projectionQueries(packet))f.sqlite.prepare(query.sql).run(...query.params);
     assert.deepEqual(await getRevisionProductsByPublicIds(f.db,[p.publicId],new Date(NOW),'test-history'),[]);
+    assert.deepEqual(await getProductsByPublicIds(f.db,[p.publicId],new Date(NOW),'test-short'),[]);
     assert.throws(()=>checkCurrent(display,packet.rows[0],{...f.current,public_display_json:JSON.stringify(display),
       rights_json:JSON.stringify(grants),timestamp_provenance_json:'{}'},new Date(NOW)),/current_hold_or_factual_drift/);
   }finally{f.close();}

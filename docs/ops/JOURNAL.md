@@ -6,6 +6,31 @@ state changes without dirtying its retained execution checkout.
 
 ---
 
+## 2026-11-02 — Measurement, current-plan capacity and discovery
+
+Owner confirmed Howie's final acceptance and authorized measurement, traffic
+readiness and discovery, in that order. GA4 six safe EVENT dimensions registered
+through the existing authorized service account, with narrow automatic capture
+disabled and real QA HTTP204/one outbound/no automatic full-URL click. New safe
+dimensions query successfully but processed report rows lag; child .8.4.1 owns
+that follow-up. Exact private before/after receipt remains outside Git.
+
+Authenticated Cloudflare readback confirms existing Standard, site D1 about85MB,
+roughly40k weekly requests and zero reported errors. No new upgrade indicated.
+Alert-policy read API403 is recorded honestly, not worked around with new IAM.
+The old1.5M internal read guard was below the accepted1.83M full-catalog run;
+Standard's bounded profile now includes3Mreads/40kwrites/6kHTTP/12kSQL. Free and
+historical charges remain unchanged; no extra merchant/model batch authority.
+
+Full discovery integration testing exposed the missing permanent short-listing
+base and the native reader's obsolete long-article-only status. Added shared
+short-copy SQL validation and exact reviewed persistent factual copy/canonical
+link plus the already-owned fallback image. Fresh supplier photos retain their
+original finite overlay. No existing licensed base is replaced. A genuine
+permanent-predecessor test reaches publication/idle/successor with the new
+discovery, without fake pre-seeded grants or original-vector changes. Local
+proof is not an assertion of a scheduled live discovery or new human traffic.
+
 ## 2026-10-30 — Exact uploaded catalog accepted; daily-care handoff
 
 PR321 merged4298129; frozen finish operator2f6eb6f reused the original version

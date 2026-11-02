@@ -51,6 +51,12 @@ test('new reviewed short copy receives only exact same-observation display grant
   assert.equal(Date.parse(grant.imageUrl.observedAt),Date.parse(NOW));
   assert.equal(grant.description.value,candidate.wittyDescription);
   assert.equal(grant.description.reference,'fixture/review');
+  assert.equal(saved[0].title,candidate.title);
+  assert.equal(grant.persistent.title.value,candidate.title);
+  assert.equal(grant.persistent.description.value,candidate.wittyDescription);
+  assert.equal(grant.persistent.imageUrl.value,'/images/gift-placeholder.svg');
+  assert.equal(grant.persistent.imageUrl.expiresAt,undefined);
+  assert.equal(grant.imageUrl.expiresAt,new Date(Date.parse(NOW)+86400000).toISOString());
   await evidence.amazon('searchItems',async()=>[source]);
   assert.equal(evidence.intent('upsertProduct',[candidate,editorialSourceHash(candidate)]).rightsById,undefined);
 });
