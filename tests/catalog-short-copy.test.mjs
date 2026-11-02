@@ -18,7 +18,7 @@ const ledger = () => ({ runId: 'test-only', usage: createUsageLedger(), warnings
   items: { record() {}, async flush() {} } });
 let mockClient = 0;
 
-function mockModels(t, { reject = false, rejectIds = [], long = false, draftVeto = false } = {}) {
+function mockModels(t, { reject = false, rejectIds = [], long = false, draftVeto = false, expectedModel = 'gpt-6-luna' } = {}) {
   const calls = { drafted: [], reviewed: [], embedded: [] };
   const old = process.env.OPENAI_API_KEY;
   process.env.OPENAI_API_KEY = `TEST_ONLY_SHORT_COPY_${++mockClient}`;
@@ -27,8 +27,18 @@ function mockModels(t, { reject = false, rejectIds = [], long = false, draftVeto
     assert.ok(String(url).startsWith('https://api.openai.com/v1/'));
     const body = JSON.parse(init.body);
     if (String(url).endsWith('/embeddings')) {
+      assert.equal(body.model, 'text-embedding-3-small');
       calls.embedded.push(...body.input);
       return Response.json({ data: body.input.map((_, index) => ({ index, embedding: [1, 2, 3] })), usage: {} });
+    }
+    assert.equal(body.model, expectedModel);
+    if (expectedModel === 'gpt-6-luna') {
+      assert.equal(body.reasoning_effort, 'none');
+      assert.ok(body.max_completion_tokens >= 500);
+      assert.equal('max_tokens' in body, false);
+    } else {
+      assert.ok(body.max_tokens >= 500);
+      assert.equal('reasoning_effort' in body, false);
     }
     const reviewing = body.messages[0].content.includes('skeptical');
     const inputs = JSON.parse(body.messages[1].content.split(reviewing ? 'Drafts:\n' : 'Products:\n')[1]);
@@ -72,6 +82,17 @@ test('rejected descriptions never get new embeddings', async t => {
   assert.equal(after.editorialStatus, 'needs_review');
   assert.equal(calls.embedded.length, 0);
   assert.equal(after.wittyDescription, undefined);
+});
+
+test('an explicit legacy text-model override retains its compatible request shape', async t => {
+  const previous = process.env.CATALOG_EDITORIAL_MODEL;
+  process.env.CATALOG_EDITORIAL_MODEL = 'gpt-4o-mini';
+  t.after(() => { if (previous === undefined) delete process.env.CATALOG_EDITORIAL_MODEL; else process.env.CATALOG_EDITORIAL_MODEL = previous; });
+  const calls = mockModels(t, { expectedModel: 'gpt-4o-mini' });
+  const [after] = await enrichProducts([product()], { enrichmentBatchSize: 4 }, [], ledger());
+  assert.equal(after.editorialStatus, 'short_ready');
+  assert.equal(calls.drafted.length, 1);
+  assert.equal(calls.reviewed.length, 1);
 });
 
 test('one rejected draft cannot consume an embedding alongside an accepted draft', async t => {

@@ -6,6 +6,28 @@ latest protected receipt take precedence over historical journal entries.
 
 ## Current state
 
+Latest November2 acceptance: `daily-2026-11-02-564a2960` serves source564a296,
+snapshot`d0048850c3bf6964c01d2798b13b16afa8ad0d07354fdadce6d322f29641adf0`.
+All3352 public listings/41 articles remain;3385 identities include two new
+unfinished private candidates. Genuine D1 row receipt
+`27058e1c4ca57ab7840e399baba617c2679b73a7f0fa985a756a84a4954b9012`,
+resolved build, idle34/608 and accepted successor were independently checked.
+The subsequent owner-authorized API-key rotation is a SECRET-ONLY version:
+`3a9a9026-4029-48d0-957e-7a7bfd9f4d7e`, deployment
+`65159c17-8af3-41f4-a516-34e5f1505a0c`. Its script etag, other bindings and
+public catalog identity are unchanged; it is not another catalog publication.
+The normal operator captures this actual serving version in `servingPrior`.
+Historical completed recoveries below must never replay.
+
+Catalog writing/review now defaults to `gpt-6-luna`, with reasoning disabled
+and bounded `max_completion_tokens`; embeddings remain `text-embedding-3-small`.
+The replacement canonical Keychain item and Worker `OPENAI_API_KEY` secret have
+real successful API checks. No keys belong in source, docs, command arguments
+or output. Funding is restored; `.4.14.1` remains for a real new admission under
+normal cadence, not another batch today. Do manual preview builds outside the
+retained execution checkout, or clear only your verified generated preview
+outputs before using it as an operator.
+
 November2: recovery is **COMPLETE** and the existing08:30Pacific task is ACTIVE.
 Actual release `daily-2026-10-31-c08ca891` reuses acknowledged version
 `6ce008e1-742d-46d5-a66b-8bd306ff900e`, deployment
@@ -64,7 +86,7 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-release-simplification/stupid.gifts`.
+`/Users/cameronehrlich/.codex/worktrees/stupid-luna-migration/stupid.gifts`.
 The old `stupid-catalog-care` checkout remains frozen for original source
 bindings; it is not the current scheduler's execution source.
 Its runtime includes the reviewed storefront, Howie rehearsal, bounded

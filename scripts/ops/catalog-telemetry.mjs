@@ -49,11 +49,12 @@ export async function loadRecentCatalogRuns(limit = 10, store = defaultTelemetry
 }
 
 export const CATALOG_TELEMETRY_VERSION = 'catalog-telemetry-v2';
-export const OPENAI_PRICING_VERSION = 'openai-public-2026-08-09';
+export const OPENAI_PRICING_VERSION = 'openai-public-2026-11-02';
 
-// Standard API prices per 1M tokens on 2026-08-09. Unknown or overridden
+// Standard short-context API prices per 1M tokens on 2026-11-02. Unknown or overridden
 // models remain visible in usage reports but deliberately receive no estimate.
 const OPENAI_PRICING = {
+  'gpt-6-luna': { input: 0.10, cachedInput: 0.01, cacheWrite: 0.125, output: 0.50 },
   'gpt-4o-mini': { input: 0.15, cachedInput: 0.075, output: 0.60 },
   'gpt-4o-mini-2024-07-18': { input: 0.15, cachedInput: 0.075, output: 0.60 },
   'text-embedding-3-small': { input: 0.02, cachedInput: 0.02, output: 0 },
@@ -182,9 +183,15 @@ function usageNumbers(usage = {}) {
       ?? usage.input_tokens_details?.cached_tokens
       ?? 0
   ) || 0;
+  const cacheWriteInputTokens = Number(
+    usage.prompt_tokens_details?.cache_write_tokens
+      ?? usage.input_tokens_details?.cache_write_tokens
+      ?? 0
+  ) || 0;
   return {
     inputTokens,
     cachedInputTokens: Math.min(inputTokens, cachedInputTokens),
+    cacheWriteInputTokens: Math.min(Math.max(0, inputTokens - cachedInputTokens), Math.max(0, cacheWriteInputTokens)),
     outputTokens,
     totalTokens: Number(usage.total_tokens ?? inputTokens + outputTokens) || 0,
   };
@@ -204,6 +211,7 @@ export function recordOpenAIUsage(ledger, { model, operation, usage }) {
   current.requests += 1;
   current.inputTokens += tokens.inputTokens;
   current.cachedInputTokens += tokens.cachedInputTokens;
+  if (tokens.cacheWriteInputTokens) current.cacheWriteInputTokens = (current.cacheWriteInputTokens || 0) + tokens.cacheWriteInputTokens;
   current.outputTokens += tokens.outputTokens;
   current.totalTokens += tokens.totalTokens;
   const operationKey = operation || 'unspecified';
@@ -214,10 +222,13 @@ export function recordOpenAIUsage(ledger, { model, operation, usage }) {
 function modelCost(model, usage) {
   const pricing = OPENAI_PRICING[model];
   if (!pricing) return null;
-  const uncachedInput = Math.max(0, usage.inputTokens - usage.cachedInputTokens);
+  const cacheWriteInput = usage.cacheWriteInputTokens || 0;
+  if (cacheWriteInput && pricing.cacheWrite === undefined) return null;
+  const uncachedInput = Math.max(0, usage.inputTokens - usage.cachedInputTokens - cacheWriteInput);
   return Number(((
     (uncachedInput * pricing.input)
       + (usage.cachedInputTokens * pricing.cachedInput)
+      + (cacheWriteInput * (pricing.cacheWrite || 0))
       + (usage.outputTokens * pricing.output)
   ) / 1_000_000).toFixed(6));
 }
@@ -256,6 +267,7 @@ export function mergeUsageReports(reports = []) {
       for (const field of ['requests', 'inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens']) {
         current[field] += Number(usage[field] || 0);
       }
+      if (usage.cacheWriteInputTokens) current.cacheWriteInputTokens = (current.cacheWriteInputTokens || 0) + usage.cacheWriteInputTokens;
       for (const [operation, count] of Object.entries(usage.operations || {})) {
         current.operations[operation] = (current.operations[operation] || 0) + Number(count || 0);
       }

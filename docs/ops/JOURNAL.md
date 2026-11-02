@@ -6,6 +6,26 @@ state changes without dirtying its retained execution checkout.
 
 ---
 
+## 2026-11-02 — Owner-selected Luna and replacement API key
+
+Owner explicitly selected GPT-6 Luna and supplied a replacement API key. The
+replacement passed text200 and embedding200/1536 checks, then exact trusted
+Keychain readback; no ACL options or unrelated credentials changed. Cloudflare
+secret-only version3a9a9026/deployment65159c17 keeps script etag, other bindings
+and current daily-2026-11-02-564a2960 catalog identity unchanged. Prior versions,
+receipts, backups and redirects remain; no catalog/native writes or merchant
+calls. Private receipts `luna-key-probe-20261102.json`,
+`luna-keychain-rotation-20261102.json`, `luna-cloudflare-key-20261102.json` and
+`luna-copy-canary-20261102.json` contain only safe metadata, never key values.
+
+Two fictional fixtures passed actual Luna short drafting and review at0.98
+review quality, with zero reasoning tokens on the initial text probe. The
+application default, completion-token compatibility and dated cost estimates
+now target Luna; embedding model and1536-dimensional stored vectors stay put.
+Current source/CI/normal-run acceptance remain distinct. `.4.14.1` is unblocked
+for the next normal real discovery, not closed from a fixture test; today's
+reserved supplier batch must not repeat.
+
 ## 2026-11-02 — Measurement, current-plan capacity and discovery
 
 Owner confirmed Howie's final acceptance and authorized measurement, traffic

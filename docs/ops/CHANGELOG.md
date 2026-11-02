@@ -1,5 +1,18 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — GPT-6 Luna and verified replacement credentials
+
+[owner+codex] Switch catalog drafting/review to `gpt-6-luna`, reasoning off,
+with bounded completion tokens. Keep `text-embedding-3-small` and all existing
+vectors/copy; explicit legacy overrides retain their compatible request shape.
+Include Luna's dated input/output/cache-write rates in cost estimates. The
+owner's replacement key passed real Luna and1536-dimensional embedding checks,
+then replaced only the existing Keychain item and Worker secret. Cloudflare's
+secret-only version preserves the exact script, other bindings and catalog
+identity. Two owned-fixture descriptions passed actual drafting/review; no
+supplier fetch, catalog/native write, replay or new schedule. Funded real new
+admission remains `.4.14.1`, not falsely completed by these small probes.
+
 ## 2026-11-02 — Explicit model-credit failure
 
 - Report definitive model credit/spend limits without retrying each product.
