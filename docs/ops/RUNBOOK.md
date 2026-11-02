@@ -6,12 +6,20 @@ latest protected receipt take precedence over historical journal entries.
 
 ## Current state
 
-November2 correction: the October31 batch is uploaded but not yet accepted;
-the timer remains paused until its recovery is verified. Canonical `.4.17`
-records the exact version/checkpoint. Cameron approved completing it and
-simplifying recovery. Cloudflare's read-only Workers API confirms Standard
-is already enabled; make no subscription changes. Admission uses the actual
-plan, retaining finite run budgets without obsolete Free account ceilings.
+November2: recovery is **COMPLETE** and the existing08:30Pacific task is ACTIVE.
+Actual release `daily-2026-10-31-c08ca891` reuses acknowledged version
+`6ce008e1-742d-46d5-a66b-8bd306ff900e`, deployment
+`d744417d-1f63-4de5-acde-96159509d602`. Genuine D1 receipt SHA
+`82b5d2b8d8b32949d6bbd2f0d9e2e1f1e248c996be4465490986ef60d60d34fa`
+matches the accepted catalog seal. Build resolved, final owner idle31/572 with
+zero external pending, last-success pointer and browser QA independently pass.
+All3383 identities/3352 public/31 exclusions remain;41 optional articles show,
+with the withheld original preserved in history. Canonical `.4.17` is closed.
+Retain4637HTTP/7128SQL/1826893known reads/20373writes/two original unknowns;
+no extra supplier/model calls, upload, native writes or new unknowns occurred.
+Never replay this completed recovery. Cloudflare's read-only Workers API confirms
+the owner's existing Standard upgrade; make no subscription changes. Admission
+uses the actual plan and finite run budgets, not obsolete Free account ceilings.
 Historical unknowns remain recorded but do not categorically block readback.
 Public long articles are optional; never require a fixed article count while
 preserving every listing, image, short description and original history.
@@ -56,7 +64,9 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-catalog-care/stupid.gifts`.
+`/Users/cameronehrlich/.codex/worktrees/stupid-release-simplification/stupid.gifts`.
+The old `stupid-catalog-care` checkout remains frozen for original source
+bindings; it is not the current scheduler's execution source.
 Its runtime includes the reviewed storefront, Howie rehearsal, bounded
 maintenance, source-lineage fixes and zero-native-effect recovery reader.
 Keep it unchanged during a run. Historical execution checkouts are frozen
@@ -71,7 +81,8 @@ it does not increase the normal30k ceiling or tomorrow's supplier allowance.
 
 ## Preservation and scope
 
-- Cloudflare `https://stupid.gifts` is the ONLY release target. Stay on Free.
+- Cloudflare `https://stupid.gifts` is the ONLY release target. Use the existing
+  provider-confirmed plan; never buy an upgrade or change subscriptions.
   Vercel and Neon were retired; preserve backups and Cloudflare redirects.
 - Preserve all3,383 migrated identities, slugs, original licensed imagery,
   descriptions, articles, native vectors and operation history. The baseline is
