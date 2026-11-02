@@ -156,6 +156,30 @@ test('provider usage aggregates exact tokens and dated public price estimates', 
   assert.equal(report.estimateComplete, true);
 });
 
+test('Luna prices cache reads and writes separately without double-charging input', () => {
+  const ledger = createUsageLedger();
+  recordOpenAIUsage(ledger, { model: 'gpt-6-luna', operation: 'editorial_draft', usage: {
+    prompt_tokens: 1_000_000, completion_tokens: 500_000, total_tokens: 1_500_000,
+    prompt_tokens_details: { cached_tokens: 200_000, cache_write_tokens: 100_000 },
+  } });
+  const report = finalizeUsageLedger(ledger);
+  assert.equal(report.models['gpt-6-luna'].estimatedCostUsd, 0.3345);
+  assert.equal(report.models['gpt-6-luna'].cacheWriteInputTokens, 100_000);
+  assert.equal(report.pricingVersion, 'openai-public-2026-11-02');
+  assert.equal(report.estimateComplete, true);
+  const merged = mergeUsageReports([report, report]);
+  assert.equal(merged.models['gpt-6-luna'].cacheWriteInputTokens, 200_000);
+  assert.equal(merged.estimatedCostUsd, 0.669);
+});
+
+test('unpriced cache writes remain an incomplete estimate instead of free usage', () => {
+  const ledger = createUsageLedger();
+  recordOpenAIUsage(ledger, { model: 'gpt-4o-mini', usage: {
+    prompt_tokens: 100, completion_tokens: 10, prompt_tokens_details: { cache_write_tokens: 50 },
+  } });
+  assert.equal(finalizeUsageLedger(ledger).estimateComplete, false);
+});
+
 test('unknown model usage remains visible and is never assigned a fabricated cost', () => {
   const ledger = createUsageLedger();
   recordOpenAIUsage(ledger, {

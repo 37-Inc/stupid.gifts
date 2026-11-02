@@ -44,6 +44,14 @@ if (isDirectRun) {
 }
 
 let defaultStore;
+const DEFAULT_CATALOG_TEXT_MODEL = 'gpt-6-luna';
+
+function completionOptions(model, maxTokens) {
+  return model === 'gpt-6-luna'
+    ? { reasoning_effort: 'none', max_completion_tokens: maxTokens }
+    : { max_tokens: maxTokens };
+}
+
 function defaultMaintenanceStore() {
   return defaultStore ??= createPostgresCatalogMaintenanceStore();
 }
@@ -606,13 +614,13 @@ async function enrichCopyBatch(products, telemetry, operation = 'editorial_draft
     availabilityStatus: product.availabilityStatus,
   }));
 
-  const model = process.env.CATALOG_EDITORIAL_MODEL || process.env.CATALOG_ENRICH_MODEL || 'gpt-4o-mini';
+  const model = process.env.CATALOG_EDITORIAL_MODEL || process.env.CATALOG_ENRICH_MODEL || DEFAULT_CATALOG_TEXT_MODEL;
   const startedAt = Date.now();
   let completion;
   try {
     completion = await openai.chat.completions.create({
       model,
-      max_tokens: shortCopy ? (products.length === 1 ? 500 : 1_600) : products.length === 1 ? 1_400 : 4_000,
+      ...completionOptions(model, shortCopy ? (products.length === 1 ? 500 : 1_600) : products.length === 1 ? 1_400 : 4_000),
       messages: [
         {
           role: 'system',
@@ -706,13 +714,13 @@ async function reviewEditorialBatch(products, telemetry, operation = 'editorial_
   const model = process.env.CATALOG_EDITORIAL_REVIEW_MODEL
       || process.env.CATALOG_EDITORIAL_MODEL
       || process.env.CATALOG_ENRICH_MODEL
-      || 'gpt-4o-mini';
+      || DEFAULT_CATALOG_TEXT_MODEL;
   const startedAt = Date.now();
   let completion;
   try {
     completion = await openai.chat.completions.create({
       model,
-      max_tokens: shortCopy ? (products.length === 1 ? 500 : 1_600) : products.length === 1 ? 1_200 : 4_000,
+      ...completionOptions(model, shortCopy ? (products.length === 1 ? 500 : 1_600) : products.length === 1 ? 1_200 : 4_000),
       messages: [
         {
           role: 'system',
@@ -1007,7 +1015,7 @@ async function enrichProducts(products, options, existingWriteups = [], telemetr
       const model = process.env.CATALOG_EDITORIAL_REVIEW_MODEL
         || process.env.CATALOG_EDITORIAL_MODEL
         || process.env.CATALOG_ENRICH_MODEL
-        || 'gpt-4o-mini';
+        || DEFAULT_CATALOG_TEXT_MODEL;
       const outcome = shortCopy ? resolveShortDescriptionAttempt(batch.find(original => original.id === product.id), {
         draftDescription: product.attemptedEditorialWriteup,
         review,
