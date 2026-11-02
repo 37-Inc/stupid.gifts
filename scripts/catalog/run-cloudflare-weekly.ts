@@ -137,7 +137,7 @@ export function validateCloudflareWeeklyConfig(input:unknown):CloudflareWeeklyCo
     ||!Number.isInteger(c.limits.requests)||c.limits.requests<2||c.limits.requests>10000
     ||!Number.isInteger(c.limits.statements)||c.limits.statements<1||c.limits.statements>25000
     ||rowBudget&&(!Number.isInteger(c.limits.reportedRowsRead)||!Number.isInteger(c.limits.reportedRowsWritten))
-    ||c.limits.reportedRowsRead!==undefined&&(!Number.isInteger(c.limits.reportedRowsRead)||c.limits.reportedRowsRead<1||c.limits.reportedRowsRead>2_000_000)
+    ||c.limits.reportedRowsRead!==undefined&&(!Number.isInteger(c.limits.reportedRowsRead)||c.limits.reportedRowsRead<1||c.limits.reportedRowsRead>3_000_000)
     ||c.limits.reportedRowsWritten!==undefined&&(!Number.isInteger(c.limits.reportedRowsWritten)||c.limits.reportedRowsWritten<1||c.limits.reportedRowsWritten>50_000)
     ||!exact(c.inputs,c.inputs?.originalVectors?'context,originalVectors,previous,rights':'context,previous,rights'))throw new Error('weekly_configuration_invalid');
   if(c.cadence&&(!exact(c.cadence,'day,featuredIds')||!/^\d{4}-\d{2}-\d{2}$/.test(c.cadence.day)

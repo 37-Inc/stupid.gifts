@@ -891,7 +891,8 @@ test('driver rejects an already-accounted publication sender before opening or a
 test('driver accepts explicit finite row ceilings only as a complete immutable configuration, without changing defaults',async t=>{
   const f=await setup(t),limits={requests:3000,statements:12000,reportedRowsRead:2_000_000,reportedRowsWritten:35_000};
   assert.deepEqual(validateCloudflareWeeklyConfig({...f.config,limits}).limits,limits);
-  for(const invalid of [{...limits,reportedRowsRead:2_000_001},{...limits,reportedRowsWritten:50_001},
+  assert.equal(validateCloudflareWeeklyConfig({...f.config,limits:{...limits,reportedRowsRead:3_000_000}}).limits.reportedRowsRead,3_000_000);
+  for(const invalid of [{...limits,reportedRowsRead:3_000_001},{...limits,reportedRowsWritten:50_001},
     {...limits,reportedRowsRead:0},{requests:3000,statements:12000,reportedRowsRead:2_000_000},
     {...limits,reportedRowsWritten:NaN},{...limits,reportedRowsWritten:undefined},{...limits,unbounded:true},null,1,[]])
     assert.throws(()=>validateCloudflareWeeklyConfig({...f.config,limits:invalid}),/weekly_configuration_invalid/);
