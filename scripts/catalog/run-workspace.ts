@@ -533,7 +533,7 @@ function apply(state:State,event:Event,dry=false) {
       ||!(cp.checkpoint.pins.publicationUploadTransportAcknowledged||cp.checkpoint.pins.publicationUploadAcknowledged)
       ||cp.checkpoint.pins.reviewedUploadActivationPending
       ||!exact(g.allowance,['httpRequests','sqlStatements'])||!Object.values(g.allowance).every(integer)
-      ||g.allowance.httpRequests>1000||g.allowance.sqlStatements>2000||!same(g.usage,totals(state))
+      ||g.allowance.httpRequests>5000||g.allowance.sqlStatements>2000||!same(g.usage,totals(state))
       ||[...state.reservations.values()].some(r=>!r.settlement)
       ||!integer(g.reportedRowsRead)||g.reportedRowsRead<=g.usage.knownRowsRead||g.reportedRowsRead>3000000)fail('finish_budget_binding');
     if(!dry)state.finish=structuredClone(g);

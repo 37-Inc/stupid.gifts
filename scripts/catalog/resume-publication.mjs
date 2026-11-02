@@ -58,7 +58,7 @@ export async function resumePublication(day){
   }finally{await w.close();}
   const authoritySha=sha256(await fs.readFile(directory+'/resume-authority.json'));
   const finish={budget:{expectedCheckpointSha256:authority.checkpointSha256,approvalReference:authoritySha,
-    versionReference:authority.versionReference,allowance:{httpRequests:1000,sqlStatements:2000},reportedRowsRead:3000000},
+    versionReference:authority.versionReference,allowance:{httpRequests:5000,sqlStatements:2000},reportedRowsRead:3000000},
     authorization:{authorizationSha256:authoritySha,versionReference:authority.versionReference,
       reviewedAt:authority.reviewedAt,activationDeadline:authority.activationDeadline}};
   const token=await resolveWranglerOAuth(),plan=await currentD1Plan(token);

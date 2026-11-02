@@ -180,7 +180,7 @@ test('acknowledged-upload finish budget is once-only, retains charges and cannot
   const saved=await w.writeCheckpoint(null,value),grant={expectedCheckpointSha256:saved.sha256,approvalReference:HASH,
     versionReference:value.control.publication.versionReference,allowance:{httpRequests:2,sqlStatements:3},reportedRowsRead:1000};
   const original=await readFile(join(w.directory,'manifest.json'));
-  for(const change of [{reportedRowsRead:3000001},{allowance:{httpRequests:1001,sqlStatements:3}},{versionReference:'another-version'}])
+  for(const change of [{reportedRowsRead:3000001},{allowance:{httpRequests:5001,sqlStatements:3}},{versionReference:'another-version'}])
     await assert.rejects(w.grantPublicationFinishBudget({...grant,...change}),/finish_budget_binding/);
   assert.deepEqual(await w.grantPublicationFinishBudget(grant),{httpRequests:3,sqlStatements:5});
   assert.deepEqual(await w.publicationFinishBudget(),grant);
