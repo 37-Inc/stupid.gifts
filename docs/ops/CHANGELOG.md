@@ -10,6 +10,8 @@ day/week configurations retain their historical behavior. Live semantic probes
 returned relevant actual ANN matches for beer openers and cooking gifts; a
 nonsense query returned no products. Keyword fallback also remained usable.
 No search code, query caps, vectors, provider plan or credentials changed.
+Corrected the whole-driver test fixture's stale GPT-4o mini expectation; it now
+asserts the real Luna request shape, so discovery acceptance is exercised.
 
 ## 2026-11-02 — GPT-6 Luna and verified replacement credentials
 

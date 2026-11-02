@@ -266,7 +266,11 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
       calls.modelHttp++;
       if(mode.modelTransientError){delete mode.modelTransientError;return Response.json({error:{message:'Synthetic transient',type:'server_error'}},{status:503});}
       const body=JSON.parse(init.body);assert.equal(init.headers.get?.('authorization')||init.headers.Authorization,'Bearer TEST_ONLY_openai');
-      assert.ok(['gpt-4o-mini','text-embedding-3-small'].includes(body.model));
+      if(url.pathname.endsWith('/embeddings'))assert.equal(body.model,'text-embedding-3-small');
+      else{
+        assert.equal(body.model,'gpt-6-luna');assert.equal(body.reasoning_effort,'none');
+        assert.ok(body.max_completion_tokens>=500);assert.equal('max_tokens' in body,false);
+      }
       if(url.pathname.endsWith('/embeddings')){calls.embedding++;return new Response(`{"model":"text-embedding-3-small","usage":{"prompt_tokens":8,"total_tokens":8},"data":[${body.input.map((_input,index)=>`{"index":${index},"embedding":[${values.map(n=>Object.is(n,-0)?'-0':n).join(',')}]}`).join(',')}]}`,{headers:{'content-type':'application/json'}});}
       calls.chat++;const prompt=body.messages.at(-1).content,items=JSON.parse(prompt.slice(prompt.lastIndexOf('\n[')+1));
       return Response.json({choices:[{message:{content:JSON.stringify({products:items.map(item=>{
