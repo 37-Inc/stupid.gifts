@@ -109,3 +109,13 @@ most 20 admitted products before generation, including held identities in
 deduplication. No volume expansion or creator-research integration. Actual
 scheduled operating cost and new-admission evidence must be recorded separately
 from local tests or a manually triggered deployment.
+
+The November 2 live supplier phase refreshed ten existing products. Six searches
+returned 59 candidates: 37 failed quality checks, 20 were duplicates and two
+entered drafting. Drafting failed; the same existing API key can read the model
+but a minimal completion returns HTTP 429, `credit_balance_exhausted`. The two
+new records remain private/pending, not approved or published discoveries. No
+billing or key change was made. Replenishing the existing OpenAI account is an
+owner action; it is not another Cloudflare upgrade. Until then, preserve old
+copy and let search fall back to keywords. The retry helper reports the precise
+quota code and skips futile per-product retries for this definitive failure.

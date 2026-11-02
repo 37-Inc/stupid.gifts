@@ -806,6 +806,7 @@ async function requestEditorialWithRetries(products, requestBatch, shouldRetry, 
     attempts: [],
     retryCount: 0,
   }]));
+  let quotaBlocked = false;
 
   async function attempt(batch, operation, retry = false) {
     beforeRequest?.();
@@ -829,9 +830,15 @@ async function requestEditorialWithRetries(products, requestBatch, shouldRetry, 
         if (retry) diagnostics.retryCount += 1;
       }
     } catch (error) {
+      // Account funding/limits cannot be fixed by retrying each product.
+      quotaBlocked = error.status === 429 && [
+        'credit_balance_exhausted', 'insufficient_quota',
+        'organization_spend_limit_exceeded', 'project_spend_limit_exceeded',
+        'organization_usage_limit_exceeded',
+      ].includes(error.code);
       telemetry?.warnings.push({
         phase: operation,
-        reasonCode: `${phase}_request_failed`,
+        reasonCode: quotaBlocked ? `model_${error.code}` : `${phase}_request_failed`,
         message: redactTelemetryText(error.message),
       });
       for (const product of batch) {
@@ -850,6 +857,7 @@ async function requestEditorialWithRetries(products, requestBatch, shouldRetry, 
   await attempt(products, `editorial_${phase}`);
   const retryProducts = products.filter((product) => shouldRetry(byId.get(product.id)));
   for (const product of retryProducts) {
+    if (quotaBlocked) break;
     await attempt([product], `editorial_${phase}_retry`, true);
   }
 

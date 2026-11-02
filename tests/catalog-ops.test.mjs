@@ -623,6 +623,32 @@ test('editorial batch omissions and short drafts receive one bounded per-item re
   assert.equal(telemetry.warnings.length, 0);
 });
 
+test('confirmed model credit exhaustion is explicit and does not retry each product', async () => {
+  for (const code of ['credit_balance_exhausted', 'insufficient_quota', 'project_spend_limit_exceeded']) {
+    let calls = 0;
+    const telemetry = { warnings: [] };
+    const result = await requestEditorialWithRetries(
+      [{ id: 'B000000001' }, { id: 'B000000002' }],
+      async () => { calls++; throw Object.assign(new Error('Account unavailable'), { status: 429, code }); },
+      retryableDraft, telemetry, 'draft'
+    );
+    assert.equal(calls, 1);
+    assert.equal(result.byId.size, 0);
+    assert.equal(telemetry.warnings[0].reasonCode, `model_${code}`);
+    assert.equal(result.diagnosticsById.get('B000000001').retryCount, 0);
+  }
+});
+
+test('transient model throttling retains the bounded per-product retry', async () => {
+  let calls = 0;
+  const telemetry = { warnings: [] };
+  await requestEditorialWithRetries([{ id: 'B000000001' }], async () => {
+    calls++; throw Object.assign(new Error('Slow down'), { status: 429, code: 'rate_limit_exceeded' });
+  }, retryableDraft, telemetry, 'draft');
+  assert.equal(calls, 2);
+  assert.equal(telemetry.warnings[0].reasonCode, 'draft_request_failed');
+});
+
 test('product upsert has a database-level approved-copy preservation backstop', () => {
   const source = fs.readFileSync(
     new URL('../scripts/ops/catalog-maintenance-postgres.mjs', import.meta.url),
