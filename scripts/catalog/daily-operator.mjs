@@ -17,8 +17,8 @@ const INITIAL={control:{path:BASE+'/existing-display-20261023-v2/catalog-control
   versionReference:'1924de55-cc4b-46a9-8ca9-e30f21ea5028',manifestSha256:'5d64c77465da9e1eee065232d256172c7906a22505c9d6f2e8ae2c0fe28ef792'};
 const SCOPE={environment:'production',accountId:'7f05a1dcb6e16f9c239564a0293bbe74',databaseId:'77b30f85-c57c-4acb-a0df-53368806c2a6',databaseName:'stupid-gifts-production',workerName:'stupid-gifts-production',indexName:'stupid-gifts-production'};
 const FREE_LIMITS={requests:5000,statements:12000,reportedRowsRead:1500000,reportedRowsWritten:30000};
-/** The accepted full-catalog run measured1.83M reads. Keep a finite working
- * margin on the owner's existing paid plan, not the obsolete1.5M Free guard.
+/** The accepted full-catalog run measured 1.83M reads. Keep a finite working
+ * margin on the owner's existing paid plan, not the obsolete 1.5M Free guard.
  * Merchant counts, model policy and historical run budgets do not change. */
 export function routineLimits(plan){
   if(!['free','standard'].includes(plan))refuse('plan_unavailable');

@@ -31,6 +31,11 @@ Private before/after receipt: `measurement-20261102-receipt.json` under the
 existing protected migration directory. No secret or personal identifier is
 included in this document.
 
+For a link in the episode description, use
+`https://stupid.gifts/?utm_source=howie_mandel_does_stuff&utm_medium=podcast&utm_campaign=launch`.
+Listeners who simply type the domain will usually appear as direct traffic;
+do not relabel all direct visits or rehearsal `/h` tests as podcast acquisition.
+
 ## Traffic and capacity
 
 Read-only provider evidence at 19:40 UTC November 2:
@@ -82,11 +87,11 @@ Cloudflare version and verified receipt, with the normal owner/source checks.
 Keep backups and Goose-domain redirects; do not recreate Vercel or Neon.
 Reassess spending from real traffic rather than pre-purchasing capacity.
 
-The routine publisher's old1.5M read guard was below the accepted full-catalog
-run's measured1.83M reads. The reviewed Standard profile therefore keeps a
-finite6,000HTTP/12,000SQL/3Mread/40kwrite margin. Free's profile and every prior
+The routine publisher's old 1.5M-read guard was below the accepted full-catalog
+run's measured 1.83M reads. The reviewed Standard profile therefore keeps a
+finite 6,000 HTTP / 12,000 SQL / 3M-read / 40k-write margin. Free's profile and every prior
 reserved run stay unchanged. This is not a new purchase or a larger supplier or
-model allowance. Even3Mreads on each of31days is93M, under0.4% of25B included
+model allowance. Even 3M reads on each of 31 days is 93M, under 0.4% of 25B included
 reads before other account usage; publication cost is not the hosting bottleneck.
 
 ## Discovery acceptance

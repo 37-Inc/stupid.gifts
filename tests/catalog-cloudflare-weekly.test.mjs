@@ -242,7 +242,7 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
     assert.equal(process.env.CATALOG_DISCOVERY_THEMES,undefined);if(realTransport)return original.getItems(...args);
     const [ids]=args;return permanent?ids.map(id=>({...observedProduct(Number(id.slice(1))),
       title:'Supplier changed title does not replace permanent clearance',availabilityStatus:'OUT_OF_STOCK'})):[structuredClone(p)];};
-  const discoveryResponses=!reviewedDiscoveryRights?[discoveries]:discovered?[[...discoveries.slice(0,9),{...observedProduct(3000),title:'Funny dormant mariner compass 3000'}],discoveries.slice(9,19),
+  const discoveryResponses=!reviewedDiscoveryRights?[discoveries.slice(0,10),discoveries.slice(10,20)]:discovered?[[...discoveries.slice(0,9),{...observedProduct(3000),title:'Funny dormant mariner compass 3000'}],discoveries.slice(9,19),
     [...discoveries.slice(19,20),{...observedProduct(6000),title:'Funny dormant mariner compass 3000'}]]:[];
   amazonCreators.searchItems=async(...args)=>{calls.search++;if(realTransport)return original.searchItems(...args);
     if(discovered)return structuredClone(discoveryResponses[calls.search-1]||[]);return mode.superseded
