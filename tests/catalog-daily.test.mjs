@@ -30,7 +30,7 @@ test('Pacific calendar handles UTC-Monday, DST transitions and week/year boundar
   assert.deepEqual(pacificCatalogCalendar('2027-01-01T12:00:00Z'), { day: '2027-01-01', week: '2026-12-28', monday: false });
 });
 
-test('reserve before dispatch, failure/unknown outcome consumes full daily allowance without retry', async t => {
+test('legacy day reservations remain immutable after provider failure', async t => {
   for (const message of ['provider_failed', 'unknown_response']) {
     const options = await fixture(t);
     await withCatalogCadence(options, async cadence => {
@@ -44,7 +44,7 @@ test('reserve before dispatch, failure/unknown outcome consumes full daily allow
   }
 });
 
-test('same-day Monday repeats never add 50 refreshes or 25 backfills; each Monday gets one discovery', async t => {
+test('legacy configurations retain their original daily and weekly reservation policy', async t => {
   let time = MONDAY;
   const options = await fixture(t, () => time);
   await withCatalogCadence(options, async cadence => {
@@ -65,6 +65,42 @@ test('same-day Monday repeats never add 50 refreshes or 25 backfills; each Monda
   time = '2026-10-26T18:00:00Z';
   await withCatalogCadence(options, async cadence => assert.equal((await dailyCatalogPhases(cadence)).length, 2));
 });
+test('new run reservations allow multiple same-day batches without repeating a failed run', async t => {
+  const options = await fixture(t, () => MONDAY);
+  await withCatalogCadence(options, async cadence => {
+    await cadence.reserve('daily', 'historical');
+    await cadence.reserve('discovery', 'historical');
+  });
+  for (const runKey of ['first-run', 'second-run']) {
+    const invocation = { ...options, runKey };
+    await withCatalogCadence(invocation, async cadence => {
+      const phases = await dailyCatalogPhases(cadence);
+      assert.equal(phases.length, 2);
+      assert.equal(phases[0].revalidateLimit, 10);
+      assert.equal(phases[1].maxNew, 20);
+      const execute = dailyCatalogExecutor(cadence, async () => { throw new Error('unknown_response'); });
+      await assert.rejects(execute(phases[0], undefined, { runId: runKey }, {}), /unknown_response/);
+      await cadence.reserve('discovery', runKey);
+    });
+    await withCatalogCadence(invocation, async cadence => assert.deepEqual(await dailyCatalogPhases(cadence), []));
+    const receipt = JSON.parse(await readFile(join(options.workspace, `cadence/daily-run-${runKey}.json`), 'utf8'));
+    assert.equal(receipt.key, runKey);
+    assert.equal(receipt.runId, runKey);
+  }
+  const original = JSON.parse(await readFile(join(options.workspace, 'cadence/daily-2026-10-19.json'), 'utf8'));
+  assert.equal(original.runId, 'historical');
+});
+
+test('per-run reservation identity rejects path traversal, wrong IDs and overlapping owners', async t => {
+  const options = await fixture(t, () => MONDAY);
+  for (const runKey of ['', '../escape', 'with/slash', 'a'.repeat(97)])
+    await assert.rejects(withCatalogCadence({ ...options, runKey }, () => {}), /cadence_run_key_invalid/);
+  await withCatalogCadence({ ...options, runKey: 'one' }, async cadence => {
+    await assert.rejects(cadence.reserve('daily', 'two'), /cadence_reservation_invalid/);
+    await assert.rejects(withCatalogCadence({ ...options, runKey: 'two' }, () => {}), /cadence_owner_busy_requires_review/);
+  });
+});
+
 test('only the D1 permanent-listing backend disables legacy missing-age deactivation',async t=>{
   const options=await fixture(t);
   await withCatalogCadence(options,async cadence=>{

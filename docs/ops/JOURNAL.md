@@ -6,6 +6,25 @@ state changes without dirtying its retained execution checkout.
 
 ---
 
+## 2026-11-02 — Owner replaces the daily supplier cap with per-run guidance
+
+Owner explicitly authorized another real discovery batch and removed the
+per-day supplier restriction. The operator now uses named immutable run
+directories/configs and run-bound cadence reservations. Default scheduled
+identity remains stable for duplicate timer delivery; `--run <unique-label>`
+starts a distinct owner-requested batch. Previous reservations and charges are
+not edited or refunded; active ownership and unfinished publication still
+prevent overlapping provider work.
+
+Live search tests on the unchanged production Worker verified six actual
+semantic beer-opener matches in422ms and six cooking-gift matches in1295ms.
+The nonsense negative returned zero in518ms. A separate cooking query returned
+relevant keyword results rather than ANN matches: this is graceful fallback,
+not evidence that semantic serving is globally disabled. Existing focused
+tests cover timeouts, provider errors and stale-input fallback without new
+native writes or a vector rebuild. Real product discovery/publication evidence
+remains separate from these search checks.
+
 ## 2026-11-02 — Owner-selected Luna and replacement API key
 
 Owner explicitly selected GPT-6 Luna and supplied a replacement API key. The

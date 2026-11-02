@@ -266,7 +266,11 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
       calls.modelHttp++;
       if(mode.modelTransientError){delete mode.modelTransientError;return Response.json({error:{message:'Synthetic transient',type:'server_error'}},{status:503});}
       const body=JSON.parse(init.body);assert.equal(init.headers.get?.('authorization')||init.headers.Authorization,'Bearer TEST_ONLY_openai');
-      assert.ok(['gpt-4o-mini','text-embedding-3-small'].includes(body.model));
+      if(url.pathname.endsWith('/embeddings'))assert.equal(body.model,'text-embedding-3-small');
+      else{
+        assert.equal(body.model,'gpt-6-luna');assert.equal(body.reasoning_effort,'none');
+        assert.ok(body.max_completion_tokens>=500);assert.equal('max_tokens' in body,false);
+      }
       if(url.pathname.endsWith('/embeddings')){calls.embedding++;return new Response(`{"model":"text-embedding-3-small","usage":{"prompt_tokens":8,"total_tokens":8},"data":[${body.input.map((_input,index)=>`{"index":${index},"embedding":[${values.map(n=>Object.is(n,-0)?'-0':n).join(',')}]}`).join(',')}]}`,{headers:{'content-type':'application/json'}});}
       calls.chat++;const prompt=body.messages.at(-1).content,items=JSON.parse(prompt.slice(prompt.lastIndexOf('\n[')+1));
       return Response.json({choices:[{message:{content:JSON.stringify({products:items.map(item=>{
@@ -830,6 +834,22 @@ test('null-prior historical activation remains reconcilable after expiry, includ
     assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'activating');
     assert.equal(f.sql.prepare('SELECT count(*) n FROM publication_receipts').get().n,0);
   }
+});
+test('per-run cadence is bound to the exact configured run and ignores historical day reservations',async t=>{
+  const f=await setup(t,{permanent:1});
+  f.config.cadence={day:'2026-10-20',featuredIds:[ID],runKey:f.config.runId};
+  f.config.backfillLimit=0;delete f.config.credentials.openai;
+  assert.doesNotThrow(()=>validateCloudflareWeeklyConfig(f.config));
+  for(const runKey of ['../escape','another-run',null])assert.throws(()=>validateCloudflareWeeklyConfig({
+    ...f.config,cadence:{...f.config.cadence,runKey},
+  }),/weekly_cadence_invalid/);
+  await withCatalogCadence({workspace:f.options.workspace,repository:f.dependencies.repository,now:f.dependencies.now},
+    cadence=>cadence.reserve('daily','historical'));
+  await put(f.options.configPath,f.config);f.options.configSha256=sha256(await fs.readFile(f.options.configPath));
+  const result=await f.run('start');assert.equal(result.state,'pending');assert.equal(f.calls.getItems,1);
+  const calls={...f.calls};assert.equal((await f.run('resume')).state,'pending');
+  for(const name of ['getItems','search','chat','embedding','modelHttp','merchantAuthHttp','merchantApiHttp',
+    'upsert','delete','activate','upload','build','finish'])assert.equal(f.calls[name],calls[name],name);
 });
 test('staging requires an explicit identity-auth reference; production auth optionality is unchanged',async t=>{
   const f=await setup(t);const {stagingAuthSecret,...credentials}=f.config.credentials;assert.ok(stagingAuthSecret);

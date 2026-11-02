@@ -6,6 +6,13 @@ latest protected receipt take precedence over historical journal entries.
 
 ## Current state
 
+November2 owner correction: refresh/discovery sizes are PER-RUN guides, not a
+global daily supplier allowance. New runs have independent immutable identities;
+retry the same run without repeating provider phases. Scheduled care remains
+once daily, with Monday discovery. An explicitly requested additional run uses
+`--run <unique-label>` consistently for prepare/start/review/publish/status.
+Do not reset or delete historical day/week reservations or any charged usage.
+
 Latest November2 acceptance: `daily-2026-11-02-564a2960` serves source564a296,
 snapshot`d0048850c3bf6964c01d2798b13b16afa8ad0d07354fdadce6d322f29641adf0`.
 All3352 public listings/41 articles remain;3385 identities include two new
@@ -24,7 +31,7 @@ and bounded `max_completion_tokens`; embeddings remain `text-embedding-3-small`.
 The replacement canonical Keychain item and Worker `OPENAI_API_KEY` secret have
 real successful API checks. No keys belong in source, docs, command arguments
 or output. Funding is restored; `.4.14.1` remains for a real new admission under
-normal cadence, not another batch today. Do manual preview builds outside the
+normal cadence or an explicitly requested new run. Do manual preview builds outside the
 retained execution checkout, or clear only your verified generated preview
 outputs before using it as an operator.
 
@@ -86,7 +93,7 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-luna-migration/stupid.gifts`.
+`/Users/cameronehrlich/.codex/worktrees/stupid-per-run-discovery/stupid.gifts`.
 The old `stupid-catalog-care` checkout remains frozen for original source
 bindings; it is not the current scheduler's execution source.
 Its runtime includes the reviewed storefront, Howie rehearsal, bounded
@@ -125,11 +132,12 @@ it does not increase the normal30k ceiling or tomorrow's supplier allowance.
 - No social/Pinterest/Slack posts, new timer/hosted Cron, paid service,
   quota-consuming load test, blanket enrichment or Creator Product Research.
 
-## Daily policy and budgets
+## Per-run policy and budgets
 
-At most ten EXISTING products per Pacific day across retries: four oldest
+The normal batch refreshes up to ten EXISTING products per run: four oldest
 featured public gifts and six oldest other public gifts, with deterministic
-sparse-lane backfill. A failed run does not authorize another batch.
+sparse-lane backfill. Retries retain that run's reservations; a new explicitly
+requested run gets its own identity, not a reset or refund of the earlier run.
 
 Monday additionally searches six rotating themes and admits at most twenty
 quality/family/catalog-deduplicated gifts, INCLUDING excluded identities in
@@ -142,9 +150,9 @@ writes and its existing uncertainty/headroom checks. On the owner's existing
 Standard plan, the reviewed routine profile is6,000HTTP/12,000SQL/3Mknown
 reads/40kknown writes. The accepted full-catalog run measured1.83Mreads, so the
 old1.5Mguard could not reliably finish normal work. This finite margin does not
-authorize extra merchant/model calls or rewrite any prior run's budget/charges.
+rewrite any prior run's budget/charges.
 Check fresh account-wide usage and the actual plan before work/publication.
-Never reset counters, erase unknowns, buy another batch after failure, change
+Never reset counters, erase unknowns, silently repeat a failed batch, change
 subscriptions or silently expand a reserved run. Stop on a genuine failure.
 The bounded usage query refuses truncated results and distinguishes provider
 analytics throttling from Free-quota exhaustion. On `headroom_rate_limited`,
@@ -160,10 +168,17 @@ Use Node22, the exact maintained checkout above, and a scrubbed environment:
 env -i HOME="$HOME" PATH="/Users/cameronehrlich/.nvm/versions/node/v22.23.1/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" npm run catalog:care -- prepare
 ```
 
-A healthy `daily_already_reserved` skip means STOP. Otherwise run `start`,
+A healthy `run_already_completed` skip means STOP for that run. Otherwise run `start`,
 then `review`, then `publish <actual-proposal-SHA256>` with the SAME prefix.
 Review the real bounded changes yourself; ordinary maintenance does not
 require Cameron's approval. `status` is diagnostic, not a second provider run.
+
+For an explicitly requested additional batch, append `--run <unique-label>` to
+EVERY command (publish still takes the actual reviewed proposal SHA). The same
+label resumes the same run; choosing another label starts a separate batch only
+after prior publication/ownership checks pass. Scheduled invocations omit it
+and share the stable `scheduled-YYYY-MM-DD` identity, preventing duplicate timer
+delivery from creating another batch. Legacy day/week receipts remain untouched.
 
 A pending publication resumes ONLY its original config/source/owner/checkpoint.
 Never force locks/ownership, reset reservations, change a source checkout
