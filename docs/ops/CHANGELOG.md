@@ -1,5 +1,17 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — Catalog release accepted; daily care resumed
+
+[owner+codex] PR323 is merged. Reused the October31 upload and accepted actual
+release `daily-2026-10-31-c08ca891`, with genuine matching D1 receipt, resolved
+build, idle owner31/572 and daily successor. All3383 identities remain,3352
+public/31 excluded; the optional41-article count is approved. Browser QA passed
+24→48 cards with descriptions, loaded tapestry image/affiliate tag and Random;
+guides, rehearsal/noindex, sitemap3397 and old-domain redirect checks pass.
+The same08:30Pacific task is ACTIVE on the new merged operator. No replacement
+batch, model call, upload, subscription change or new unknown. First actual
+scheduled normal-run cost remains open in `.4.8`; recovery is not that evidence.
+
 ## 2026-11-02 — Recover acknowledged uploads without repeating catalog work
 
 [owner+codex] Separate permanent publication recovery from expiring supplier
