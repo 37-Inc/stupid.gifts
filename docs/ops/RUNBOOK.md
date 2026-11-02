@@ -93,7 +93,7 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-per-run-discovery/stupid.gifts`.
+`/Users/cameronehrlich/.codex/worktrees/stupid-discovery-run-themes/stupid.gifts`.
 The old `stupid-catalog-care` checkout remains frozen for original source
 bindings; it is not the current scheduler's execution source.
 Its runtime includes the reviewed storefront, Howie rehearsal, bounded
@@ -142,6 +142,10 @@ requested run gets its own identity, not a reset or refund of the earlier run.
 Monday additionally searches six rotating themes and admits at most twenty
 quality/family/catalog-deduplicated gifts, INCLUDING excluded identities in
 deduplication. Select and cap admissions BEFORE drafting, review or embedding.
+New run-bound discovery seeds its topic selection with the immutable run ID:
+an additional batch can explore different topics, while retries keep the same
+ones. The topic pool includes concrete absurd objects as well as broad gift
+categories. Six searches remain six searches; no quality/dedup bypass.
 Required factual short descriptions are independent of optional long articles.
 Tuesday–Sunday are model-free. Reuse unchanged approved copy and embeddings.
 

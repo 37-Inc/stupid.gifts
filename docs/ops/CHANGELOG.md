@@ -1,5 +1,14 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — Fresh discovery themes for explicit runs
+
+[owner+codex] The first funded extra batch refreshed ten listings but correctly
+rejected36weak/23duplicate search results. Date-only rotation repeated the same
+six topics. New run-bound discovery now samples six deterministic topics using
+its immutable run ID, including twelve concrete absurd-object searches beyond
+the original broad gift terms. Retries keep the same topics, quality and
+family/catalog dedup gates; no larger batch, recurring frequency or model change.
+
 ## 2026-11-02 — Per-run catalog batches and live semantic verification
 
 [owner+codex] Owner clarified that ten refreshes and twenty admissions are

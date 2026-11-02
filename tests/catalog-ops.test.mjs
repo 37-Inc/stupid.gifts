@@ -49,6 +49,16 @@ test('daily theme selection rotates deterministically across the full pool', () 
   assert.equal(new Set([...first, ...nextDay]).size, 12);
 });
 
+test('explicit run themes are reproducible on retry and vary between same-day batches', () => {
+  const pool = Array.from({ length: 24 }, (_, i) => `theme-${i}`);
+  const first = selectRotatingThemes(pool, 6, new Date('2026-11-02'), 'run-one');
+  assert.equal(first.length, 6);
+  assert.equal(new Set(first).size, 6);
+  assert.deepEqual(first, selectRotatingThemes(pool, 6, new Date('2026-11-03'), 'run-one'));
+  assert.notDeepEqual(first, selectRotatingThemes(pool, 6, new Date('2026-11-02'), 'run-two'));
+  assert.ok(first.every(theme => pool.includes(theme)));
+});
+
 test('Creators API item mapping reads lowerCamelCase offersV2 data', () => {
   const product = amazonCreators.mapItem({
     asin: 'B012345678',
