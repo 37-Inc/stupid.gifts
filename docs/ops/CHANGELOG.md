@@ -1,5 +1,16 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — Per-run catalog batches and live semantic verification
+
+[owner+codex] Owner clarified that ten refreshes and twenty admissions are
+per-run guides, not a daily supplier quota. New explicit run labels permit a
+second batch without clearing the first run's reservations/history. Scheduled
+delivery remains daily; retries keep their exact batch identity. Old sealed
+day/week configurations retain their historical behavior. Live semantic probes
+returned relevant actual ANN matches for beer openers and cooking gifts; a
+nonsense query returned no products. Keyword fallback also remained usable.
+No search code, query caps, vectors, provider plan or credentials changed.
+
 ## 2026-11-02 — GPT-6 Luna and verified replacement credentials
 
 [owner+codex] Switch catalog drafting/review to `gpt-6-luna`, reasoning off,

@@ -831,6 +831,20 @@ test('null-prior historical activation remains reconcilable after expiry, includ
     assert.equal(f.sql.prepare('SELECT count(*) n FROM publication_receipts').get().n,0);
   }
 });
+test('per-run cadence is bound to the exact configured run and ignores historical day reservations',async t=>{
+  const f=await setup(t,{permanent:1});
+  f.config.cadence={day:'2026-10-20',featuredIds:[ID],runKey:f.config.runId};
+  f.config.backfillLimit=0;delete f.config.credentials.openai;
+  assert.doesNotThrow(()=>validateCloudflareWeeklyConfig(f.config));
+  for(const runKey of ['../escape','another-run',null])assert.throws(()=>validateCloudflareWeeklyConfig({
+    ...f.config,cadence:{...f.config.cadence,runKey},
+  }),/weekly_cadence_invalid/);
+  await withCatalogCadence({workspace:f.options.workspace,repository:f.dependencies.repository,now:f.dependencies.now},
+    cadence=>cadence.reserve('daily','historical'));
+  await put(f.options.configPath,f.config);f.options.configSha256=sha256(await fs.readFile(f.options.configPath));
+  const result=await f.run('start');assert.equal(result.state,'pending');assert.equal(f.calls.getItems,1);
+  const calls={...f.calls};assert.equal((await f.run('resume')).state,'pending');assert.deepEqual(f.calls,calls);
+});
 test('staging requires an explicit identity-auth reference; production auth optionality is unchanged',async t=>{
   const f=await setup(t);const {stagingAuthSecret,...credentials}=f.config.credentials;assert.ok(stagingAuthSecret);
   assert.throws(()=>validateCloudflareWeeklyConfig({...f.config,credentials}),/^Error: weekly_configuration_invalid$/);

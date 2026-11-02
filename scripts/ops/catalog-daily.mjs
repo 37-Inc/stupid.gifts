@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-// One existing scheduled owner, not a scheduler. Reservations are deliberately
-// never refunded: a lost response/crash cannot buy another ten-item attempt.
+// One existing scheduled owner, not a scheduler. Each explicit run has its own
+// reservation; retries never refund or repeat that run's provider phases.
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -51,7 +51,12 @@ async function privateDirectory(directory, repository, create) {
   return true;
 }
 
-export async function withCatalogCadence({ workspace, repository, now = clock, dryRun = false }, action) {
+export function validCatalogRunKey(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/.test(value);
+}
+
+export async function withCatalogCadence({ workspace, repository, now = clock, dryRun = false, runKey }, action) {
+  if (runKey !== undefined && !validCatalogRunKey(runKey)) throw new Error('cadence_run_key_invalid');
   const calendar = pacificCatalogCalendar(now());
   if (dryRun) return action({ calendar, plan: async () => ({ daily: true, discovery: calendar.monday }), dryRun: true });
   await privateDirectory(workspace, repository, true);
@@ -62,7 +67,10 @@ export async function withCatalogCadence({ workspace, repository, now = clock, d
     .catch(error => { if (error.code === 'EEXIST') throw new Error('cadence_owner_busy_requires_review'); throw error; });
   const lockIdentity = await lock.stat();
   const assertDay = () => { if (pacificCatalogCalendar(now()).day !== calendar.day) throw new Error('cadence_day_changed'); };
-  const filename = kind => join(directory, `${kind}-${kind === 'daily' ? calendar.day : calendar.week}.json`);
+  // Old sealed configurations retain their original day/week reservations.
+  // New configurations bind reservations to the run, not a global daily quota.
+  const key = kind => runKey ?? (kind === 'daily' ? calendar.day : calendar.week);
+  const filename = kind => join(directory, `${kind}-${runKey ? 'run-' : ''}${key(kind)}.json`);
   async function reserved(kind) {
     let handle;
     try { handle = await open(filename(kind), constants.O_RDONLY | constants.O_NOFOLLOW); }
@@ -71,8 +79,9 @@ export async function withCatalogCadence({ workspace, repository, now = clock, d
       const stat = await handle.stat();
       if (!stat.isFile() || stat.uid !== process.getuid?.() || stat.mode & 0o077 || stat.size > 2048) throw new Error('cadence_reservation_invalid');
       const value = JSON.parse(await handle.readFile('utf8'));
-      if (value.schemaVersion !== 1 || value.kind !== kind || value.key !== (kind === 'daily' ? calendar.day : calendar.week)
-        || !/^[A-Za-z0-9._:/-]{1,200}$/.test(value.runId) || pacificCatalogCalendar(value.reservedAt).day !== (kind === 'daily' ? calendar.day : calendar.week)
+      if (value.schemaVersion !== 1 || value.kind !== kind || value.key !== key(kind)
+        || !/^[A-Za-z0-9._:/-]{1,200}$/.test(value.runId) || runKey && value.runId !== runKey
+        || pacificCatalogCalendar(value.reservedAt).day !== (runKey || kind === 'daily' ? calendar.day : calendar.week)
         || value.maximumExisting !== (kind === 'daily' ? 10 : 0)) throw new Error('cadence_reservation_invalid');
       return true;
     } finally { await handle.close(); }
@@ -82,9 +91,9 @@ export async function withCatalogCadence({ workspace, repository, now = clock, d
   }, async reserve(kind, runId) {
     assertDay();
     if (!['daily', 'discovery'].includes(kind) || kind === 'discovery' && !calendar.monday
-      || !/^[A-Za-z0-9._:/-]{1,200}$/.test(runId)) throw new Error('cadence_reservation_invalid');
+      || !/^[A-Za-z0-9._:/-]{1,200}$/.test(runId) || runKey && runId !== runKey) throw new Error('cadence_reservation_invalid');
     const handle = await open(filename(kind), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    try { await handle.writeFile(`${JSON.stringify({ schemaVersion: 1, kind, key: kind === 'daily' ? calendar.day : calendar.week,
+    try { await handle.writeFile(`${JSON.stringify({ schemaVersion: 1, kind, key: key(kind),
       runId, reservedAt: now(), maximumExisting: kind === 'daily' ? 10 : 0 })}\n`); await handle.sync(); }
     finally { await handle.close(); }
     const parent = await open(directory, constants.O_RDONLY); try { await parent.sync(); } finally { await parent.close(); }

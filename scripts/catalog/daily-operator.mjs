@@ -31,7 +31,7 @@ const {resolveWranglerOAuth}=await load('scripts/catalog/check-cloudflare-runner
 const {createCatalogD1ReadOnlyRest}=await load('scripts/catalog/d1-write-rest.ts');
 const {openRunWorkspace}=await load('scripts/catalog/run-workspace.ts');
 const {mutationAssertion}=await load('lib/catalog/mutation-fence.ts');
-const {pacificCatalogCalendar}=await load('scripts/ops/catalog-daily.mjs');
+const {pacificCatalogCalendar,validCatalogRunKey}=await load('scripts/ops/catalog-daily.mjs');
 const HASH=/^[a-f0-9]{64}$/;
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 const self=digest(await fs.readFile(new URL(import.meta.url)));
@@ -131,8 +131,8 @@ export async function assertNoUnsealedMaintenance(db,seal,scope=SCOPE){
 function options(config,configPath,configSha256){return{config,driver:{configPath,configSha256,workspace:WORKSPACE,cadenceOnly:true},workspace:{directory:WORKSPACE,repository:ROOT,mode:'resume',runId:config.runId,codeSha:SOURCE,configSha256,scope:SCOPE,retention:config.retention,budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements}}};}
 async function prepare(directory,calendar){
   const old=await optional(directory+'/operator.json');
+  if(old&&await optional(directory+'/success.json'))return{state:'skipped',reason:'run_already_completed',runId:old.runId};
   if(old?.source===SOURCE&&old.helperSha256===self)return old;
-  if(await optional(WORKSPACE+'/cadence/daily-'+calendar.day+'.json'))return{state:'skipped',reason:'daily_already_reserved'};
   if(old)refuse('operator_changed');
   if(await optional(directory+'/prepare-intent.json'))refuse('preparation_interrupted');
   const prior=await optional(CARE+'/last-success.json')??INITIAL,seal=await json(prior.control.path,prior.control.sha256);
@@ -154,9 +154,9 @@ async function prepare(directory,calendar){
   const context={envelopeSha256:sha256(seal.envelopeJson+'\n'),snapshotSha256:seal.snapshotSha256,projectionSha256:seal.projectionReceipt.projection_sha256,sourceExportSha256:seal.projectionReceipt.source_export_sha256,vectorSyncWatermark:rows[0].results[0].n,publicationReceiptWatermark:rows[1].results[0].n,cutoff,priorPublication:seal.publication};
   const inputs={previous:{path:prior.control.path,sha256:prior.control.sha256,observedAt:now}};
   for(const [name,value]of Object.entries({context,rights:{rightsById:{}}})){const file=directory+'/'+name+'.json';inputs[name]={path:file,sha256:await put(file,value),observedAt:now};}
-  const key=service=>({service:'goose.gifts.'+service,account:'goose.gifts'}),runId='daily-'+calendar.day+'-'+SOURCE.slice(0,8);
+  const key=service=>({service:'goose.gifts.'+service,account:'goose.gifts'}),runId='daily-'+calendar.day+'-'+SOURCE.slice(0,8)+'-'+digest(path.basename(directory)).slice(0,8);
   const semanticSearch=routineSearchPolicy(await optional(CARE+'/semantic-search.json'));
-  const config=validateCloudflareWeeklyConfig({schemaVersion:1,runId,catalogRevision:runId,codeSha:SOURCE,environment:SCOPE.environment,accountId:SCOPE.accountId,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},vectorIndex:{name:SCOPE.indexName,dimensions:1536,metric:'cosine'},catalog:{associateTag:'goose-gifts-37-20',marketplace:'www.amazon.com'},backfillLimit:0,cadence:{day:calendar.day,featuredIds:homepage.featuredIds},credentials:{cloudflare:{type:'wrangler_oauth'},amazonId:key('AMAZON_CREATORS_CREDENTIAL_ID'),amazonSecret:key('AMAZON_CREATORS_CREDENTIAL_SECRET'),amazonVersion:'3.1',...(calendar.monday?{openai:key('OPENAI_API_KEY')}:{})},limits,retention:{reviewReference:'owner/2026-10-23/existing-daily-catalog',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint'].map(k=>[k,{maxAgeMs:86400000,notAfter}]))},inputs,
+  const config=validateCloudflareWeeklyConfig({schemaVersion:1,runId,catalogRevision:runId,codeSha:SOURCE,environment:SCOPE.environment,accountId:SCOPE.accountId,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},vectorIndex:{name:SCOPE.indexName,dimensions:1536,metric:'cosine'},catalog:{associateTag:'goose-gifts-37-20',marketplace:'www.amazon.com'},backfillLimit:0,cadence:{day:calendar.day,featuredIds:homepage.featuredIds,runKey:runId},credentials:{cloudflare:{type:'wrangler_oauth'},amazonId:key('AMAZON_CREATORS_CREDENTIAL_ID'),amazonSecret:key('AMAZON_CREATORS_CREDENTIAL_SECRET'),amazonVersion:'3.1',...(calendar.monday?{openai:key('OPENAI_API_KEY')}:{})},limits,retention:{reviewReference:'owner/2026-11-02/per-run-catalog-bounds',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint'].map(k=>[k,{maxAgeMs:86400000,notAfter}]))},inputs,
     publication:{schemaVersion:1,environment:SCOPE.environment,accountId:SCOPE.accountId,workerName:SCOPE.workerName,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},indexName:SCOPE.indexName,codeSha:SOURCE,sourceMode:'stupid-production',sourceRoot:ROOT,releaseId:runId,identityOrigin:'https://stupid.gifts',compatibilityDate:'2026-10-19',prior:{directory:null,releaseId:seal.publication.releaseId,manifestSha256:prior.manifestSha256,versionReference:prior.versionReference},servingPrior,semanticSearch,publicAnalytics:{enabled:true,posthogHost:'https://us.i.posthog.com',posthogKey:'phc_ATVKSPwDYTRfX9qDtDVLzZuXQcNdV9d55SjC8bHtuU8w'}}});
   const configPath=directory+'/config.json',configSha256=await put(configPath,config),record={source:SOURCE,helperSha256:self,configPath,configSha256,runId,capacity};await put(directory+'/operator.json',record);return record;
 }
@@ -195,9 +195,18 @@ async function remember(result,entry,config,directory){
   const temporary=directory+'/next-success.json';await put(temporary,next);await fs.rename(temporary,pointer);
   }finally{await w.close();}
 }
+export function operatorInvocation(argv,calendar){
+  const args=[...argv],flag=args.indexOf('--run');
+  let runKey='scheduled-'+calendar.day;
+  if(flag>=0){runKey=args[flag+1];args.splice(flag,2);}
+  const [command,approvalSha]=args;
+  if(!validCatalogRunKey(runKey)
+    ||!['prepare','review','start','publish','status'].includes(command)
+    ||args.length!==(command==='publish'?2:1))refuse('command');
+  return{command,approvalSha,runKey};
+}
 export async function main(){
-source();const [command,approvalSha]=process.argv.slice(2),calendar=pacificCatalogCalendar(),directory=CARE+'/'+calendar.day;
-if(!['prepare','review','start','publish','status'].includes(command))refuse('command');
+source();const calendar=pacificCatalogCalendar(),{command,approvalSha,runKey}=operatorInvocation(process.argv.slice(2),calendar),directory=CARE+'/runs/'+runKey;
 if(command==='prepare'){console.log(JSON.stringify(await prepare(directory,calendar)));}
 else{
   const record=await json(directory+'/operator.json');if(record.helperSha256!==self||record.source!==SOURCE)refuse('operator_changed');

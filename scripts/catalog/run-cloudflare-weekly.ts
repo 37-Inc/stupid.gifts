@@ -32,7 +32,7 @@ import type { ApprovedCohortRequest, ApprovedCohortRevision } from '../../lib/ca
 import type { CatalogD1 } from '../../lib/catalog/storage/d1.ts';
 import { canonicalTime } from '../../lib/catalog/snapshot.ts';
 import amazonCreators from '../../lib/amazon-creators.js';
-import { dailyCatalogPhases, pacificCatalogCalendar, runDailyCatalogWithBackend, withCatalogCadence } from '../ops/catalog-daily.mjs';
+import { dailyCatalogPhases, pacificCatalogCalendar, runDailyCatalogWithBackend, withCatalogCadence, validCatalogRunKey } from '../ops/catalog-daily.mjs';
 import {validateExecutionAdoption,validateExecutionAdoptionConfigs} from './execution-adoption.ts';
 import type {ExecutionAdoption} from './execution-adoption.ts';
 import {encodeReviewedUploadActivationApproval,readReviewedUploadActivation} from '../../lib/catalog/build-requests.ts';
@@ -43,7 +43,7 @@ export interface CloudflareWeeklyConfig {
   schemaVersion:1;runId:string;catalogRevision:string;codeSha:string;environment:'staging'|'production';accountId:string;
   database:{id:string;name:string};vectorIndex:{name:string;dimensions:1536;metric:'cosine'};
   catalog:{associateTag:string;marketplace:'www.amazon.com'};backfillLimit:number;
-  cadence?:{day:string;featuredIds:string[]};
+  cadence?:{day:string;featuredIds:string[];runKey?:string};
   credentials:{cloudflare:CloudflareCredentialReference;amazonId:KeychainRef;amazonSecret:KeychainRef;amazonVersion:string;openai?:KeychainRef;stagingAuthSecret?:KeychainRef};
   limits:{requests:number;statements:number;reportedRowsRead?:number;reportedRowsWritten?:number};retention:RetentionPolicy;
   inputs:{previous:InputRef;context:InputRef;rights:InputRef;originalVectors?:InputRef};publication:PublicationConfig;
@@ -140,7 +140,9 @@ export function validateCloudflareWeeklyConfig(input:unknown):CloudflareWeeklyCo
     ||c.limits.reportedRowsRead!==undefined&&(!Number.isInteger(c.limits.reportedRowsRead)||c.limits.reportedRowsRead<1||c.limits.reportedRowsRead>3_000_000)
     ||c.limits.reportedRowsWritten!==undefined&&(!Number.isInteger(c.limits.reportedRowsWritten)||c.limits.reportedRowsWritten<1||c.limits.reportedRowsWritten>50_000)
     ||!exact(c.inputs,c.inputs?.originalVectors?'context,originalVectors,previous,rights':'context,previous,rights'))throw new Error('weekly_configuration_invalid');
-  if(c.cadence&&(!exact(c.cadence,'day,featuredIds')||!/^\d{4}-\d{2}-\d{2}$/.test(c.cadence.day)
+  if(c.cadence&&(!exact(c.cadence,c.cadence.runKey===undefined?'day,featuredIds':'day,featuredIds,runKey')
+    ||c.cadence.runKey!==undefined&&(!validCatalogRunKey(c.cadence.runKey)||c.cadence.runKey!==c.runId)
+    ||!/^\d{4}-\d{2}-\d{2}$/.test(c.cadence.day)
     ||pacificCatalogCalendar(`${c.cadence.day}T12:00:00Z`).day!==c.cadence.day||c.backfillLimit!==0
     ||!Array.isArray(c.cadence.featuredIds)||c.cadence.featuredIds.length>100||new Set(c.cadence.featuredIds).size!==c.cadence.featuredIds.length
     ||c.cadence.featuredIds.some(id=>!/^[A-Z0-9]{10}$/.test(id))))throw new Error('weekly_cadence_invalid');
@@ -325,7 +327,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
   }
   if(options.cadenceOnly&&!config.cadence)throw new Error('weekly_daily_cadence_required');
   if(config.cadence&&['start','resume'].includes(options.command)&&!dependencies.cadence)
-    return withCatalogCadence({workspace:options.workspace,repository:repo,now},(cadence:Dependencies['cadence'])=>runCloudflareWeekly(options,{...dependencies,cadence}));
+    return withCatalogCadence({workspace:options.workspace,repository:repo,now,runKey:config.cadence.runKey},(cadence:Dependencies['cadence'])=>runCloudflareWeekly(options,{...dependencies,cadence}));
   if(options.approval&&options.command!=='resume')throw new Error('weekly_approval_requires_phase_resume');
   if(options.reviewedUploadRetry&&options.command!=='resume')throw new Error('weekly_upload_retry_requires_resume');
   const reviewedUploadRetry=options.reviewedUploadRetry

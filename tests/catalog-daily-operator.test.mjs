@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { headroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance } from '../scripts/catalog/daily-operator.mjs';
+import { headroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation } from '../scripts/catalog/daily-operator.mjs';
+
+test('scheduled identity prevents duplicate invocations while named runs can repeat on the same day',()=>{
+  const calendar={day:'2026-11-02'};
+  assert.deepEqual(operatorInvocation(['prepare'],calendar),{command:'prepare',approvalSha:undefined,runKey:'scheduled-2026-11-02'});
+  assert.equal(operatorInvocation(['prepare','--run','fresh-discovery'],calendar).runKey,'fresh-discovery');
+  assert.equal(operatorInvocation(['--run','fresh-discovery','publish','a'.repeat(64)],calendar).approvalSha,'a'.repeat(64));
+  for(const args of [['prepare','--run'],['prepare','--run','../escape'],['start','extra'],
+    ['prepare','--run','one','--run','two'],['publish'],['unknown']])assert.throws(()=>operatorInvocation(args,calendar),/routine_command/);
+});
 
 const usage = (rowsRead, rowsWritten) => async url => {
   assert.equal(url, 'https://api.cloudflare.com/client/v4/graphql');
