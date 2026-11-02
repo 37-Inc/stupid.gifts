@@ -6,6 +6,26 @@ latest protected receipt take precedence over historical journal entries.
 
 ## Current state
 
+November2 correction: the October31 batch is uploaded but not yet accepted;
+the timer remains paused until its recovery is verified. Canonical `.4.17`
+records the exact version/checkpoint. Cameron approved completing it and
+simplifying recovery. Cloudflare's read-only Workers API confirms Standard
+is already enabled; make no subscription changes. Admission uses the actual
+plan, retaining finite run budgets without obsolete Free account ceilings.
+Historical unknowns remain recorded but do not categorically block readback.
+Public long articles are optional; never require a fixed article count while
+preserving every listing, image, short description and original history.
+
+To finish an acknowledged permanent upload from an earlier day, use Node22
+and the scrubbed environment below with:
+`node --import tsx scripts/catalog/resume-publication.mjs YYYY-MM-DD`.
+This uses the original retained runtime/config and the same uploaded version;
+it cannot fetch merchants, invoke models, rebuild or upload. A once-only
+checkpoint-bound continuation retains original deadlines and counters. Only
+cleared permanent controls and numeric summaries survive supplier-body expiry.
+Finite supplier fields cannot use this path. Verify actual release, D1 receipt,
+resolved build, idle owner and successor before restarting daily care.
+
 October30 Pacific / October31 00:39UTC: recovery is **COMPLETE**. Actual release
 `catalog-corrected-20261030-36a54e6` serves runtime36a54e6, version
 `99409f6b-ce64-4cb2-bb00-9730bcd81aaa`, deployment

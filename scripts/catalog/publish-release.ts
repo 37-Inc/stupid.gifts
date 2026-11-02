@@ -401,7 +401,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     ||(execution?.effective.sourceRoot??workspace.repository)!==await fs.realpath(config.sourceRoot)
     ||execution&&execution.effective.publicationConfigSha256!==sha256(canonicalJson(config)))throw new Error('publication_workspace_mismatch');
   const observationSend=options.dependencies?.observationFetch??options.dependencies?.fetch??fetch;
-  const api=provider(config,options.credentials.cloudflareToken,options.dependencies?.fetch??fetch,options.credentials.identityAuthorization,observationSend,reviewed?10_000:2500);
+  const api=provider(config,options.credentials.cloudflareToken,options.dependencies?.fetch??fetch,options.credentials.identityAuthorization,observationSend,10_000);
   const command=options.dependencies?.command??commandDefault;const configSha256=sha256(canonicalJson(config));
   let checkpoint=await workspace.readCheckpoint({controlOnly:true});let control=checkpoint?.checkpoint.control?.publication;
   const requestBudget=await workspace.publicationRequestBudget?.();
@@ -435,7 +435,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // Read normal state only before activation; control-only settlement must not
     // turn expired merchant artifacts back into usable content.
     const view=await workspace.readCheckpoint({controlOnly:true});if(!view)throw new Error('publication_checkpoint_missing');
-    if(view.checkpoint.control?.publication?.permit||control.permit&&view.checkpoint.control?.publication?.stage==='activating'){
+    if(options.finishAuthorization&&!reviewed||view.checkpoint.control?.publication?.permit||control.permit&&view.checkpoint.control?.publication?.stage==='activating'){
       if(appendPins)throw new Error('publication_upload_review_required');
       await workspace.writeControlCheckpoint(view.sha256,{phase:'attention',owner,control:{publication:control}});
     }else{
@@ -1006,7 +1006,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       }else{
         if(continuation)await permanentProof();
         permit=await beginBuildActivation(db,control.build,sealed.snapshot,control.publication!,control.versionReference!,
-          signal=>(observation=readPrior(signal)),now(),owner,config.servingPrior,continuation);
+          signal=>(observation=readPrior(signal)),now(),owner,config.servingPrior,continuation,{observationTimeoutMs:30_000});
       }
     }
     finally{if(observation){
@@ -1024,7 +1024,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // exact durable control/package and has no second activation path.
     return executePublication({...options,owner,dependencies:options.dependencies});
   }catch(error){
-    const code=error instanceof Error&&/^(?:publication_[a-z_]+|catalog_d1_budget_exhausted)$/.test(error.message)?error.message:'publication_pending';
+    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_)[a-z_]+$/.test(error.message)?error.message:'publication_pending';
     return{state:'pending',owner,errorCode:code};
   }
 }

@@ -1,5 +1,16 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — Recover acknowledged uploads without repeating catalog work
+
+[owner+codex] Separate permanent publication recovery from expiring supplier
+workspaces. A reusable `resume-publication.mjs YYYY-MM-DD` finishes only an
+acknowledged, unchanged permanent upload, retaining the original owner, source,
+history and all charged/unknown usage. It cannot fetch, build or upload again.
+Readback windows now allow bounded local ledger overhead instead of generating
+false uncertainty after 2.5 seconds. Account admission reads the actual Workers
+plan; it never buys an upgrade. Optional article count is not a release gate.
+Deployment acceptance remains separately verified, not inferred from this merge.
+
 ## 2026-10-30 — Catalog recovery is live and finalized
 
 [owner+codex] Reused the original immutable upload and published

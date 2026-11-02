@@ -61,10 +61,16 @@ export function routineSearchPolicy(value){
     ||value.derivedCatalog.path.split('/').includes('..'))refuse('semantic_policy');
   return structuredClone(value);
 }
-export async function headroom(token,spent={knownRowsRead:0,knownRowsWritten:0},anchor=null,send=fetch){
+export async function currentD1Plan(token,send=fetch){
+  const r=await send(`https://api.cloudflare.com/client/v4/accounts/${SCOPE.accountId}/workers/standard`,{redirect:'error',
+    headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)}),j=await r.json();
+  if(!r.ok||j.success!==true||typeof j.result?.standard!=='boolean')refuse('plan_unavailable');
+  return j.result.standard?'standard':'free';
+}
+export async function headroom(token,spent={knownRowsRead:0,knownRowsWritten:0},anchor=null,send=fetch,plan='free'){
   if(!Number.isSafeInteger(spent.knownRowsRead)||spent.knownRowsRead<0||spent.knownRowsRead>LIMITS.reportedRowsRead
     ||!Number.isSafeInteger(spent.knownRowsWritten)||spent.knownRowsWritten<0||spent.knownRowsWritten>LIMITS.reportedRowsWritten
-    ||(spent.unconfirmedRequests??0)>1)refuse('run_budget_exceeded');
+    ||!Number.isSafeInteger(spent.unconfirmedRequests??0)||(spent.unconfirmedRequests??0)<0)refuse('run_budget_exceeded');
   const at=new Date(),day=at.toISOString().slice(0,10);
   const r=await send('https://api.cloudflare.com/client/v4/graphql',{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},
     body:JSON.stringify({query:'query($a:string!,$d:Date!){viewer{accounts(filter:{accountTag:$a}){d1AnalyticsAdaptiveGroups(limit:1000,filter:{date_geq:$d,date_leq:$d}){sum{rowsRead rowsWritten}}}}}',variables:{a:SCOPE.accountId,d:day}})});
@@ -79,8 +85,9 @@ export async function headroom(token,spent={knownRowsRead:0,knownRowsWritten:0},
   // and untouched shared capacity. This is NOT a prepaid per-query promise.
   const chargedRead=Math.max(rowsRead,(anchor?.rowsRead??rowsRead)+spent.knownRowsRead);
   const chargedWrite=Math.max(rowsWritten,(anchor?.rowsWritten??rowsWritten)+spent.knownRowsWritten);
-  if(chargedRead+Math.max(0,LIMITS.reportedRowsRead-spent.knownRowsRead)+20000+500000+300000>5000000
-    ||chargedWrite+Math.max(0,LIMITS.reportedRowsWritten-spent.knownRowsWritten)+5000+10000>100000)refuse('free_headroom');
+  if(!['free','standard'].includes(plan))refuse('plan_unavailable');
+  if(plan==='free'&&(chargedRead+Math.max(0,LIMITS.reportedRowsRead-spent.knownRowsRead)+20000+500000+300000>5000000
+    ||chargedWrite+Math.max(0,LIMITS.reportedRowsWritten-spent.knownRowsWritten)+5000+10000>100000))refuse('free_headroom');
   return{observedAt:new Date().toISOString(),utcDay:day,rowsRead,rowsWritten,unknownReadReserve:500000,unknownWriteReserve:5000,untouchedReads:300000,untouchedWrites:10000};
 }
 export async function routineServingPrior(token,seal,send=fetch){
@@ -123,7 +130,7 @@ async function prepare(directory,calendar){
   if(await optional(directory+'/prepare-intent.json'))refuse('preparation_interrupted');
   const prior=await optional(CARE+'/last-success.json')??INITIAL,seal=await json(prior.control.path,prior.control.sha256);
   if(!['permanent-catalog-seal','approved-catalog-seal'].includes(seal.kind))refuse('prior_kind');
-  const token=await resolveWranglerOAuth(),capacity=await headroom(token);
+  const token=await resolveWranglerOAuth(),capacity=await headroom(token,undefined,null,fetch,await currentD1Plan(token));
   const db=await createCatalogD1ReadOnlyRest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,limits:{requests:10,statements:12,reportedRowsRead:20000,reportedRowsWritten:1}});
   const rows=await db.batch([
     db.prepare('SELECT coalesce(max(sequence),0) n FROM vector_sync_outbox WHERE source_revision=?').bind(seal.projectionReceipt.catalog_revision),
@@ -191,10 +198,10 @@ else{
   if(command==='review')await review(entry,config,directory);
   else if(['start','publish','status'].includes(command)){
     if(command==='publish'&&!HASH.test(approvalSha??''))refuse('explicit_review_digest');
-    if(command==='start')await headroom(await resolveWranglerOAuth(),undefined,record.capacity);
+    if(command==='start'){const token=await resolveWranglerOAuth();await headroom(token,undefined,record.capacity,fetch,await currentD1Plan(token));}
     if(command==='publish'){
       const w=await openRunWorkspace(entry.workspace);let spent;try{spent=await w.budget();}finally{await w.close();}
-      await headroom(await resolveWranglerOAuth(),spent,record.capacity);
+      const token=await resolveWranglerOAuth();await headroom(token,spent,record.capacity,fetch,await currentD1Plan(token));
     }
     const result=await runCloudflareWeekly({...entry.driver,command:command==='publish'?'resume':command,...(command==='publish'?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})});
     await remember(result,entry,config,directory);console.log(JSON.stringify(weeklyCommandSummary(result)));
