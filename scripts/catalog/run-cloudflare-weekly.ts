@@ -249,7 +249,8 @@ export async function settleActivatedPermanentWeekly(input:{db:CatalogD1 & {prov
   finish:NonNullable<Dependencies['finishRecovery']>}){
   const {db,ws,config}=input;
   let saved=await ws.readCheckpoint({controlOnly:true});
-  if(!saved?.checkpoint.control?.publication?.permit)throw Error('weekly_permanent_settlement_invalid');
+  if(!saved?.checkpoint.control?.publication)throw Error('weekly_permanent_settlement_invalid');
+  if(!saved.checkpoint.control.publication.permit&&!(await ws.publicationFinishBudget()))throw Error('weekly_permanent_settlement_invalid');
   const releaseId=saved.checkpoint.control.publication.intent?.releaseId;
   if(!releaseId||releaseId!==config.publication.releaseId)throw Error('weekly_permanent_settlement_invalid');
   const control=await ws.readPermanentFinalization('revision') as unknown as ReturnType<typeof approvedRevisionControl>;
@@ -371,8 +372,11 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       throw new Error('weekly_execution_adoption_required');
     const finish=dependencies.finishRecovery;
     if(finish){
-      if(options.command!=='resume'||!adoption||!reviewedUploadRetry||finish.budget.approvalReference!==finish.authorization.authorizationSha256
-        ||finish.budget.versionReference!==finish.authorization.versionReference||finish.authorization.activationDeadline>original.retention.rules.publication.notAfter)
+      const normal=await ws.readCheckpoint({controlOnly:true});
+      const acknowledged=normal?.checkpoint.pins.publicationUploadAcknowledged&&!normal.checkpoint.pins.publicationUploadReview;
+      if(options.command!=='resume'||(!adoption||!reviewedUploadRetry)&&!acknowledged||finish.budget.approvalReference!==finish.authorization.authorizationSha256
+        ||finish.budget.versionReference!==finish.authorization.versionReference
+        ||!acknowledged&&finish.authorization.activationDeadline>original.retention.rules.publication.notAfter)
         throw new Error('weekly_finish_recovery_invalid');
     }
     if(adoption){
@@ -393,11 +397,11 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       command:accountedPublicationUploadCommand({workspace:ws,scope:networkScope,
         send:dependencies.publication?.fetch??dependencies.fetch,command:dependencies.publication?.command}),
       observationFetch:accountedPublicationReadFetch(ws,observationSend,networkScope)};
-    const permanentFinalization=Boolean(finish&&await ws.budgetRowsReadCeiling()!==null);
+    const permanentFinalization=Boolean(finish&&(await ws.budgetRowsReadCeiling()!==null||!adoption));
     if(finish?.terminalReceiptOnly&&!permanentFinalization)throw Error('weekly_terminal_scope_required');
     if(!permanentFinalization)await ws.purgeExpired();
     let saved=await ws.readCheckpoint({controlOnly:true});
-    if(saved&&['phases_running','phase_failed','attention','finalized'].includes(saved.checkpoint.phase)
+    if(!permanentFinalization&&saved&&['phases_running','phase_failed','attention','finalized'].includes(saved.checkpoint.phase)
       &&!(saved.checkpoint.phase==='attention'&&(resolving(saved.checkpoint)||reviewedUploadResume(saved,reviewedUploadRetry))))
       return{state:saved.checkpoint.phase==='finalized'?'finalized':'attention',phase:saved.checkpoint.phase,
         ...(saved.checkpoint.phase==='finalized'?{catalogSeal:await ws.catalogSuccessor()??undefined}:{}),budget:await ws.budget()};

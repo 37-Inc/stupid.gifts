@@ -529,11 +529,12 @@ function apply(state:State,event:Event,dry=false) {
     const g=event.grant,cp=state.checkpoint,p=cp?.checkpoint.control?.publication;
     if(!exact(event,['type','grant'])||!exact(g,['expectedCheckpointSha256','approvalReference','versionReference','allowance','reportedRowsRead','usage'])
       ||state.finish||state.recovery||!cp||cp.sha256!==g.expectedCheckpointSha256||!hash(g.approvalReference)
-      ||!p||p.stage!=='uploaded'||p.permit||p.versionReference!==g.versionReference||cp.checkpoint.owner?.phase!=='freezing'
+      ||!p||!['uploaded','activating'].includes(p.stage)||p.permit||p.versionReference!==g.versionReference||cp.checkpoint.owner?.phase!=='freezing'
       ||!(cp.checkpoint.pins.publicationUploadTransportAcknowledged||cp.checkpoint.pins.publicationUploadAcknowledged)
       ||cp.checkpoint.pins.reviewedUploadActivationPending
       ||!exact(g.allowance,['httpRequests','sqlStatements'])||!Object.values(g.allowance).every(integer)
-      ||g.allowance.httpRequests>1000||g.allowance.sqlStatements>2000||!same(g.usage,totals(state))||g.usage.unconfirmedRequests!==0
+      ||g.allowance.httpRequests>1000||g.allowance.sqlStatements>2000||!same(g.usage,totals(state))
+      ||[...state.reservations.values()].some(r=>!r.settlement)
       ||!integer(g.reportedRowsRead)||g.reportedRowsRead<=g.usage.knownRowsRead||g.reportedRowsRead>3000000)fail('finish_budget_binding');
     if(!dry)state.finish=structuredClone(g);
   }else if(event.type==='catalog-successor-part'){
@@ -568,9 +569,9 @@ function validateControlTransition(old:CheckpointControl,next:CheckpointControl,
   if(!same(old.pins,next.pins)||!same(old.phaseComplete,next.phaseComplete)
     ||!old.control?.publication||!next.control?.publication)fail('control_reconciliation');
   const prior=old.control.publication,current=next.control.publication;
-  if(state.recovery?.scope==='approved-permanent-finalization'&&prior.stage==='published'
+  if((state.recovery?.scope==='approved-permanent-finalization'||state.finish)&&prior.stage==='published'
     &&same(prior,current)&&hash(prior.receiptSha256)&&['published','finalized'].includes(next.phase)){
-    recoveryPermit({...state,checkpoint:{sha256:state.checkpoint!.sha256,checkpoint:next}},true);
+    recoveryPermit({...state,checkpoint:{sha256:state.checkpoint!.sha256,checkpoint:next}},true,true);
     const a=prior.permit!.mutationOwner!,before=old.owner,after=next.owner;
     if(next.phase==='finalized'){
       if(after!==null||!(old.phase==='finalized'&&before===null||old.phase==='published'&&before?.phase==='writing'
@@ -1018,14 +1019,17 @@ export async function openRunWorkspace(input:RunWorkspaceOptions):Promise<RunWor
         await append({type:'control',previous:expected,sha256:digest,control:view});return structuredClone(state.checkpoint!);
       }),
       readPermanentFinalization:(label:'revision'|'summary')=>serial(async()=>{
-        if(state.recovery?.scope!=='approved-permanent-finalization'||!['revision','summary'].includes(label))fail('permanent_control');
-        recoveryPermit(state,true);const cp=state.checkpoint!.checkpoint,p=cp.control!.publication!;
+        if((state.recovery?.scope!=='approved-permanent-finalization'&&!state.finish)||!['revision','summary'].includes(label))fail('permanent_control');
+        const cp=state.checkpoint!.checkpoint,p=cp.control!.publication!;
+        if(p.permit)recoveryPermit(state,true,true);
+        else if(!state.finish||!cp.pins.publicationUploadAcknowledged||cp.pins.publicationUploadReview
+          ||cp.owner?.phase!=='freezing'||p.stage!=='activating'||p.versionReference!==state.finish.versionReference)fail('permanent_control');
         const ref=label==='revision'?cp.pins.revision:cp.phaseComplete;if(!ref)fail('permanent_control');
         const body=await registered(ref);if(body.kind!=='publication')fail('permanent_control');
         const value=typeof body.value==='string'?JSON.parse(body.value)
           :body.value&&typeof body.value==='object'&&!Array.isArray(body.value)&&body.value.type==='run-workspace-blob'
             ?JSON.parse((await loadBlob(ref,registered)).toString('utf8')):body.value;
-        return structuredClone(label==='revision'?activatedPermanentRevisionControl(value,p):activatedPermanentSummary(value)) as unknown as Json;
+        return structuredClone(label==='revision'?activatedPermanentRevisionControl(value,p,p.permit?.mutationOwner??cp.owner??undefined):activatedPermanentSummary(value)) as unknown as Json;
       }),
       reserveBudget:(value:BudgetReservation)=>serial(async()=>{reservation(value);const old=state.reservations.get(value.id);
         if(old){if(!same(old.reservation,value))fail('budget_replay');return;}budgetReservation(state,value);

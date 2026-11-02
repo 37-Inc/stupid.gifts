@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { headroom, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance } from '../scripts/catalog/daily-operator.mjs';
+import { headroom, currentD1Plan, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance } from '../scripts/catalog/daily-operator.mjs';
 
 const usage = (rowsRead, rowsWritten) => async url => {
   assert.equal(url, 'https://api.cloudflare.com/client/v4/graphql');
@@ -87,6 +87,17 @@ test('missing, malformed, exceeded or uncertain usage cannot authorize provider 
   for(const [read,write]of [[null,0],[0,null],[-1,0],[0,-1],[Number.MAX_SAFE_INTEGER+1,0]])
     await assert.rejects(headroom('synthetic',undefined,null,usage(read,write)),/headroom_invalid/);
   for(const spent of [{knownRowsRead:-1,knownRowsWritten:0},{knownRowsRead:1_500_001,knownRowsWritten:0},
-    {knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:2}])
+    {knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:-1}])
     await assert.rejects(headroom('synthetic',spent,null,usage(0,0)),/run_budget_exceeded/);
+});
+test('historical unknowns remain charged but do not categorically prohibit current readback',async()=>{
+  await headroom('synthetic',{knownRowsRead:100,knownRowsWritten:20,unconfirmedRequests:2},null,usage(100,20));
+});
+test('provider-confirmed Standard skips obsolete Free account ceilings without changing run limits',async()=>{
+  assert.equal(await currentD1Plan('synthetic',async()=>Response.json({success:true,result:{standard:true}})),'standard');
+  assert.equal(await currentD1Plan('synthetic',async()=>Response.json({success:true,result:{standard:false}})),'free');
+  await assert.rejects(currentD1Plan('synthetic',async()=>Response.json({success:true,result:{}})),/plan_unavailable/);
+  await headroom('synthetic',undefined,null,usage(6_000_000,200_000),'standard');
+  await assert.rejects(headroom('synthetic',undefined,null,usage(6_000_000,200_000),'free'),/free_headroom/);
+  await assert.rejects(headroom('synthetic',{knownRowsRead:1_500_001,knownRowsWritten:0},null,usage(0,0),'standard'),/run_budget_exceeded/);
 });

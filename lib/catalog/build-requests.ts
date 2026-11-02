@@ -269,7 +269,7 @@ export async function beginBuildActivation(db: CatalogD1, claim: CatalogBuildCla
   // Receipts are append-only in this protocol; reject publication completed during readback.
   const receiptEpoch = (await db.prepare('SELECT coalesce(max(rowid),0) epoch FROM publication_receipts')
     .all<{ epoch: number }>()).results[0].epoch;
-  const observed = await observe(readDeployment);
+  const observed = await observe(readDeployment,30_000);
   if (observed.environment !== request.environment || observed.settled !== true || !(await priorMatches(db, request, observed.active, servingPrior))) throw new Error('build_prior_deployment_changed');
   const earliest = earliestDisplayExpiry(snapshot.products);
   if (intent.codeSha !== request.codeSha || intent.priorReleaseId !== request.priorReleaseId || snapshot.catalogRevision !== intent.catalogRevision

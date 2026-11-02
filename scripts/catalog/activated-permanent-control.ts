@@ -5,6 +5,7 @@ import {catalogSuccessorBytes} from './approved-catalog-seal.ts';
 import {validatePermanentCatalogSeal} from './permanent-catalog-seal.ts';
 import type {PermanentCatalogSeal} from './permanent-catalog-seal.ts';
 import type {PublicationControl} from './run-workspace.ts';
+import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
 import type {approvedRevisionControl} from './approved-catalog-seal.ts';
 
 const hash=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
@@ -33,14 +34,14 @@ function nativeHistory(value:unknown){
 /** Classify the existing registered control, not a supplier body or permission
  * to extend one. Full request/source hashes are independently rechecked when
  * current D1 rows reconstruct the original revision under the exact owner. */
-export function activatedPermanentRevisionControl(value:unknown,p:PublicationControl){
+export function activatedPermanentRevisionControl(value:unknown,p:PublicationControl,owner:MutationOwner|undefined=p.permit?.mutationOwner){
   const v=value as ReturnType<typeof approvedRevisionControl>,r=v?.revision,q=v?.request;
   if(!exact(v,['schemaVersion','kind','revision','request','sourceIds','sourceRowsSha256','revisionSha256'])
     ||v.schemaVersion!==1||v.kind!=='approved-revision-control'||!hash(v.sourceRowsSha256)||!hash(v.revisionSha256)
     ||!r||!exact(r,['snapshot','packet','priorRow','sourceDigest','globalVectorWatermark','vectorSyncWatermark','operationKey',
       'persistent',...(r.additionalAbsentIds===undefined?[]:['additionalAbsentIds']),...(r.nativeHistory===undefined?[]:['nativeHistory'])])
     ||!r.persistent||!exact(r.persistent,['generation','inventory','nativeHistory'])
-    ||r.persistent.generation!==p.permit?.mutationOwner?.generation||r.operationKey!==p.permit?.mutationOwner?.operationKey
+    ||r.persistent.generation!==owner?.generation||r.operationKey!==owner?.operationKey
     ||!Array.isArray(v.sourceIds)||v.sourceIds.length>10000||new Set(v.sourceIds).size!==v.sourceIds.length
     ||!v.sourceIds.every(uuid)
     ||!q||!exact(q,['schemaVersion','kind','request','previous','requestSha256'])

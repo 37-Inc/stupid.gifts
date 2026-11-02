@@ -11,6 +11,7 @@ import {encodePublicationIntent} from '../lib/catalog/publication.ts';
 import { createCatalogProviderEvidence } from '../scripts/catalog/provider-evidence.ts';
 import {createProjectionPacket} from '../lib/catalog/d1.ts';
 import {putOrdered} from '../scripts/catalog/run-cloudflare-weekly.ts';
+import {activatedPermanentRevisionControl} from '../scripts/catalog/activated-permanent-control.ts';
 import { encodePgvectorSendBase64, decodePgvectorSendBase64 } from '../scripts/catalog/pgvector-binary.ts';
 
 // Isolated local fixtures only. No providers, credentials, real merchant content,
@@ -205,6 +206,22 @@ test('ordinary acknowledged upload admits explicit Free-quota finish without cha
   assert.deepEqual(await reopened.publicationFinishBudget(),bound);
 });
 
+test('an acknowledged preactivation finish preserves multiple settled unknowns and rejects an in-flight request',async t=>{
+  const f=await fixture(t),w=await f.open(),value=recoveryCheckpoint();
+  value.phase='publishing';value.owner.phase='freezing';value.control.publication.stage='activating';value.control.publication.permit=null;
+  value.pins.publicationUploadAcknowledged=await w.putArtifact({fixture:'ack'},{kind:'publication',observedAt:NOW});
+  const saved=await w.writeCheckpoint(null,value);
+  const grant={expectedCheckpointSha256:saved.sha256,approvalReference:HASH,versionReference:value.control.publication.versionReference,
+    allowance:{httpRequests:1000,sqlStatements:2000},reportedRowsRead:3000000};
+  for(const id of ['read-timeout','identity-timeout']){
+    await w.reserveBudget(reservation(id,0));
+    await assert.rejects(w.grantPublicationFinishBudget(grant),/finish_budget_binding/);
+    await w.settleBudget(id,{status:'unknown',usage:null});
+  }
+  const before=await w.budget();await w.grantPublicationFinishBudget(grant);
+  assert.deepEqual(await w.budget(),before);assert.equal(before.unconfirmedRequests,2);
+});
+
 async function finalizationFixture(t,{finite=false,skipFinish=false,noDeployment=false}={}){
   const f=await fixture(t);f.input.repository=join(f.parent,'operator');
   await mkdir(f.input.repository,{mode:0o700});
@@ -275,6 +292,14 @@ test('only exact permanent technical controls survive both retention and activat
     await w.close();const resumed=await f.open({mode:'resume'});
     assert.deepEqual(await resumed.readPermanentFinalization('revision'),value);assert.equal((await resumed.budget()).unconfirmedRequests,1);
   });
+});
+
+test('permanent preactivation control is tied to the unchanged freezing owner, not a fabricated activation permit',async t=>{
+  const {value,current}=await permanentControlFixture(t),p=structuredClone(current.checkpoint.control.publication);
+  const owner={...p.permit.mutationOwner,phase:'freezing'};p.permit=null;
+  assert.deepEqual(activatedPermanentRevisionControl(value,p,owner),value);
+  assert.throws(()=>activatedPermanentRevisionControl(value,p),/permanent_control/);
+  assert.throws(()=>activatedPermanentRevisionControl(value,p,{...owner,generation:owner.generation+1}),/permanent_control/);
 });
 
 test('post-expiry purpose reader rejects finite overlays, raw supplier fields, snapshot drift and summary relabeling',async t=>{
