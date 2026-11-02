@@ -78,6 +78,7 @@ test('new run reservations allow multiple same-day batches without repeating a f
       assert.equal(phases.length, 2);
       assert.equal(phases[0].revalidateLimit, 10);
       assert.equal(phases[1].maxNew, 20);
+      assert.equal(phases[1].discoveryRunKey, runKey);
       const execute = dailyCatalogExecutor(cadence, async () => { throw new Error('unknown_response'); });
       await assert.rejects(execute(phases[0], undefined, { runId: runKey }, {}), /unknown_response/);
       await cadence.reserve('discovery', runKey);

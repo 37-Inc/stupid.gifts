@@ -58,7 +58,7 @@ export function validCatalogRunKey(value) {
 export async function withCatalogCadence({ workspace, repository, now = clock, dryRun = false, runKey }, action) {
   if (runKey !== undefined && !validCatalogRunKey(runKey)) throw new Error('cadence_run_key_invalid');
   const calendar = pacificCatalogCalendar(now());
-  if (dryRun) return action({ calendar, plan: async () => ({ daily: true, discovery: calendar.monday }), dryRun: true });
+  if (dryRun) return action({ calendar, runKey, plan: async () => ({ daily: true, discovery: calendar.monday }), dryRun: true });
   await privateDirectory(workspace, repository, true);
   const directory = join(workspace, 'cadence');
   await privateDirectory(directory, repository, true);
@@ -86,7 +86,7 @@ export async function withCatalogCadence({ workspace, repository, now = clock, d
       return true;
     } finally { await handle.close(); }
   }
-  const cadence = { calendar, assertDay, async plan() {
+  const cadence = { calendar, runKey, assertDay, async plan() {
     assertDay(); return { daily: !await reserved('daily'), discovery: calendar.monday && !await reserved('discovery') };
   }, async reserve(kind, runId) {
     assertDay();
@@ -115,7 +115,7 @@ export async function dailyCatalogPhases(cadence, featuredIds = []) {
     dailyRefresh: true, enrichSelectedExisting: cadence.calendar.monday,
     discoveryNewOnly: false, featuredIds, assertRefreshDay: cadence.assertDay });
   if (plan.discovery) phases.push({ ...parseArgs(['--theme-limit', '6', '--per-theme', '10', '--max-new', '20', '--min-quality-score', '0.65', '--backfill-limit', '0']),
-    discoveryNewOnly: true, enrichSelectedExisting: false });
+    discoveryNewOnly: true, enrichSelectedExisting: false, discoveryRunKey: cadence.runKey });
   return phases;
 }
 

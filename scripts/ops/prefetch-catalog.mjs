@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import dotenv from 'dotenv';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -69,6 +69,18 @@ const DEFAULT_THEMES = [
   'oddball stocking stuffers',
   'funny birthday gifts',
   'gag gifts under 25 dollars',
+  'funny motion activated possum night light',
+  'novelty banana bluetooth phone',
+  'shrimp neck pillow funny gift',
+  'mini inflatable tube man desk toy',
+  'animal butt tissue dispenser',
+  'funny screaming possum toy',
+  'chicken nugget hand puppet',
+  'bread slippers novelty',
+  'lobster claw oven mitts',
+  'tiny hands finger puppets',
+  'fish shaped slippers',
+  'novelty ceramic pigeon lamp',
 ];
 
 const HUMOR_TAG_RULES = [
@@ -247,10 +259,14 @@ function utcDayNumber(date = new Date()) {
   return Math.floor(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / 86_400_000);
 }
 
-function selectRotatingThemes(themePool, limit, date = new Date()) {
+function selectRotatingThemes(themePool, limit, date = new Date(), runKey) {
   if (themePool.length === 0 || limit <= 0) return [];
 
   const count = Math.min(limit, themePool.length);
+  if (runKey) return themePool.map(theme => ({ theme,
+    order: createHash('sha256').update(`${runKey}\0${theme}`).digest('hex') }))
+    .sort((a, b) => a.order.localeCompare(b.order) || a.theme.localeCompare(b.theme))
+    .slice(0, count).map(item => item.theme);
   const start = (utcDayNumber(date) * count) % themePool.length;
   return Array.from({ length: count }, (_, index) => themePool[(start + index) % themePool.length]);
 }
@@ -1790,7 +1806,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   const themePool = options.themes || envThemes || DEFAULT_THEMES;
   const themes = options.themes
     ? themePool.slice(0, options.themeLimit)
-    : selectRotatingThemes(themePool, options.themeLimit);
+    : selectRotatingThemes(themePool, options.themeLimit, new Date(), options.discoveryRunKey);
   const seen = new Map();
   const candidates = [];
   let backfilled = 0;
