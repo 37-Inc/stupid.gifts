@@ -847,7 +847,9 @@ test('per-run cadence is bound to the exact configured run and ignores historica
     cadence=>cadence.reserve('daily','historical'));
   await put(f.options.configPath,f.config);f.options.configSha256=sha256(await fs.readFile(f.options.configPath));
   const result=await f.run('start');assert.equal(result.state,'pending');assert.equal(f.calls.getItems,1);
-  const calls={...f.calls};assert.equal((await f.run('resume')).state,'pending');assert.deepEqual(f.calls,calls);
+  const calls={...f.calls};assert.equal((await f.run('resume')).state,'pending');
+  for(const name of ['getItems','search','chat','embedding','modelHttp','merchantAuthHttp','merchantApiHttp',
+    'upsert','delete','activate','upload','build','finish'])assert.equal(f.calls[name],calls[name],name);
 });
 test('staging requires an explicit identity-auth reference; production auth optionality is unchanged',async t=>{
   const f=await setup(t);const {stagingAuthSecret,...credentials}=f.config.credentials;assert.ok(stagingAuthSecret);
