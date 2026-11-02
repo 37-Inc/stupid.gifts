@@ -1,5 +1,25 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — Launch measurement and current-plan readiness
+
+[owner+codex] Recorded Howie's final acceptance. Registered six safe GA4 event
+dimensions and disabled competing automatic outbound/search/form/history
+capture on the existing property. A real labelled click sent one explicit
+GA4 event (204), no automatic retailer-URL event, and reached the correct tagged
+Amazon product; PostHog transport passed. Delayed processed-report verification
+is `.8.4.1`. Read-only Cloudflare Standard/usage/error/storage assessment shows
+no additional upgrade needed for gradual podcast traffic. See
+`LAUNCH_READINESS_2026-11-02.md`; discovery publication review is in progress.
+
+[owner+codex] Fixed two missing discovery connections: new reviewed short copy
+now has a persistent factual listing under the existing photo-overlay contract;
+the native outbox reader now shares short-copy approval checks with published
+revisions instead of requiring a long-article status. Authentic predecessor to
+publication/successor test passes without pre-seeded discovery grants. The
+Standard-only routine profile now includes measured full-catalog working margin;
+Free, supplier/model allowances and all historical runs remain unchanged.
+Actual normal-run acceptance is separate from these local proofs.
+
 ## 2026-11-02 — Catalog release accepted; daily care resumed
 
 [owner+codex] PR323 is merged. Reused the October31 upload and accepted actual

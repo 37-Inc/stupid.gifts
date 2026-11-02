@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { headroom, currentD1Plan, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance } from '../scripts/catalog/daily-operator.mjs';
+import { headroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance } from '../scripts/catalog/daily-operator.mjs';
 
 const usage = (rowsRead, rowsWritten) => async url => {
   assert.equal(url, 'https://api.cloudflare.com/client/v4/graphql');
@@ -93,11 +93,18 @@ test('missing, malformed, exceeded or uncertain usage cannot authorize provider 
 test('historical unknowns remain charged but do not categorically prohibit current readback',async()=>{
   await headroom('synthetic',{knownRowsRead:100,knownRowsWritten:20,unconfirmedRequests:2},null,usage(100,20));
 });
-test('provider-confirmed Standard skips obsolete Free account ceilings without changing run limits',async()=>{
+test('verified Standard uses measured finite full-catalog margin without relaxing Free or merchant limits',async()=>{
+  assert.deepEqual(routineLimits('free'),{requests:5000,statements:12000,reportedRowsRead:1500000,reportedRowsWritten:30000});
+  assert.deepEqual(routineLimits('standard'),{requests:6000,statements:12000,reportedRowsRead:3000000,reportedRowsWritten:40000});
+  await headroom('synthetic',{knownRowsRead:1_830_000,knownRowsWritten:20_373},null,usage(30_000_000,200_000),'standard');
+  await assert.rejects(headroom('synthetic',{knownRowsRead:3_000_001,knownRowsWritten:0},null,usage(0,0),'standard'),/run_budget_exceeded/);
+  assert.throws(()=>routineLimits('unknown'),/plan_unavailable/);
+});
+test('provider-confirmed Standard skips obsolete Free account ceilings but keeps its finite run limit',async()=>{
   assert.equal(await currentD1Plan('synthetic',async()=>Response.json({success:true,result:{standard:true}})),'standard');
   assert.equal(await currentD1Plan('synthetic',async()=>Response.json({success:true,result:{standard:false}})),'free');
   await assert.rejects(currentD1Plan('synthetic',async()=>Response.json({success:true,result:{}})),/plan_unavailable/);
   await headroom('synthetic',undefined,null,usage(6_000_000,200_000),'standard');
   await assert.rejects(headroom('synthetic',undefined,null,usage(6_000_000,200_000),'free'),/free_headroom/);
-  await assert.rejects(headroom('synthetic',{knownRowsRead:1_500_001,knownRowsWritten:0},null,usage(0,0),'standard'),/run_budget_exceeded/);
+  await assert.rejects(headroom('synthetic',{knownRowsRead:3_000_001,knownRowsWritten:0},null,usage(0,0),'standard'),/run_budget_exceeded/);
 });

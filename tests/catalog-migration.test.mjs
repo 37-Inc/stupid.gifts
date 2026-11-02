@@ -201,6 +201,7 @@ test('replay uses one bounded indexed read and compares only each row original e
 
 test('search is FTS/index-backed, bounded and fails closed on held, expired, duplicate or corrupt public fields', async () => {
   const db = database(); const row = converted(); await importBatch(db, batch([row]));
+  db.sqlite.exec(readFileSync(new URL('../migrations/d1/0010_catalog_maintenance.sql', import.meta.url), 'utf8'));
   assert.equal((await keywordSearch(db, 'funny crab', 240, now))[0].publicId, source().public_id);
   assert.equal((await getProductsByPublicIds(db, [source().public_id], now)).length, 1);
   assert.equal((await getProductsByPublicIds(db, [source().public_id], now, 'wrong-revision')).length, 0);

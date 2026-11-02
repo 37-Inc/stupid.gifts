@@ -115,11 +115,15 @@ deduplication. Select and cap admissions BEFORE drafting, review or embedding.
 Required factual short descriptions are independent of optional long articles.
 Tuesday–Sunday are model-free. Reuse unchanged approved copy and embeddings.
 
-Normal limits remain5,000HTTP/12,000SQL/1.5Mknown reads/30kknown writes, with
-separate uncertainty reserves and untouched shared-account headroom. The
-operator checks fresh ACCOUNT-WIDE Free usage before work and publication.
-Never raise caps, reset counters, erase unknowns, buy another batch after
-failure or upgrade to finish. Stop on a genuine capacity gate.
+Provider-confirmed Free retains5,000HTTP/12,000SQL/1.5Mknown reads/30kknown
+writes and its existing uncertainty/headroom checks. On the owner's existing
+Standard plan, the reviewed routine profile is6,000HTTP/12,000SQL/3Mknown
+reads/40kknown writes. The accepted full-catalog run measured1.83Mreads, so the
+old1.5Mguard could not reliably finish normal work. This finite margin does not
+authorize extra merchant/model calls or rewrite any prior run's budget/charges.
+Check fresh account-wide usage and the actual plan before work/publication.
+Never reset counters, erase unknowns, buy another batch after failure, change
+subscriptions or silently expand a reserved run. Stop on a genuine failure.
 The bounded usage query refuses truncated results and distinguishes provider
 analytics throttling from Free-quota exhaustion. On `headroom_rate_limited`,
 respect the provider's retry delay, then retry only the same read-only preflight

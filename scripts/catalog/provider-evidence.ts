@@ -47,7 +47,7 @@ export function createCatalogProviderEvidence(options: {
   reviewedRightsById?:Record<string,ProductRights>;
   reviewedDeleteReference?:string;
   associateTag?:string;
-  saveReviewedShort?(input:Readonly<{id:string;sourceFactsHash:string;description:string;observationReference:string;reviewedAt:string;quality:number}>):Promise<{reference:string}>;
+  saveReviewedShort?(input:Readonly<{id:string;sourceFactsHash:string;title:string;description:string;observationReference:string;reviewedAt:string;quality:number}>):Promise<{reference:string}>;
   now?:()=>string;
 }) {
   if (typeof options.saveReceipt!=='function' || options.reviewedDeleteReference!==undefined
@@ -131,13 +131,20 @@ export function createCatalogProviderEvidence(options: {
         ||affiliate.searchParams.getAll('tag').length!==1||affiliate.hash)return false;
       const reviewedAt=clock(),observedAt=new Date(observation.observedAt).toISOString(),expiresAt=new Date(Date.parse(observation.observedAt)+86400000).toISOString();
       if(Date.parse(reviewedAt)>=Date.parse(expiresAt))return false;
-      const saved=await options.saveReviewedShort({id:p.id,sourceFactsHash,description:p.wittyDescription,
+      const saved=await options.saveReviewedShort({id:p.id,sourceFactsHash,title:p.title,description:p.wittyDescription,
         observationReference:observation.reference,reviewedAt,quality:Number(review.qualityScore)});
       if(!saved||typeof saved.reference!=='string'||!REF.test(saved.reference))throw new Error('provider_evidence_storage_unconfirmed');
       const merchant=(value:string)=>({basis:'merchant' as const,reference:observation.reference,value,observedAt,expiresAt});
       const authored=(value:string)=>({basis:'owned' as const,reference:saved.reference,value});
       shortRights.set(p.id,{title:merchant(p.title),imageUrl:merchant(p.imageUrl),affiliateUrl:authored(p.affiliateUrl),
-        description:authored(p.wittyDescription),wittyDescription:authored(p.wittyDescription)});
+        description:authored(p.wittyDescription),wittyDescription:authored(p.wittyDescription),
+        // A reviewed factual name, original short copy and canonical link keep
+        // the new identity usable after its supplier photo expires. The existing
+        // photo overlay renders that photo only until its original deadline.
+        // This never relabels supplier imagery as permanently licensed, nor
+        // replaces an existing independently cleared product base.
+        persistent:{title:authored(p.title),description:authored(p.wittyDescription),affiliateUrl:authored(p.affiliateUrl),
+          imageUrl:{basis:'owned',reference:'site/images/gift-placeholder.svg',value:'/images/gift-placeholder.svg'}}});
       return true;
     },
     async embeddings(input:{products:Product[];model:string;inputs:string[];response:unknown}) {

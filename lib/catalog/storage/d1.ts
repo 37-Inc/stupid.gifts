@@ -1,5 +1,6 @@
 import { validatePublicCatalogProduct } from '../snapshot.ts';
 import type { PublicCatalogProduct } from '../types.ts';
+import { currentShortCopySql } from '../d1.ts';
 
 /** Optional cancellation is for observation SELECTs only, never mutation IO. */
 export interface D1ReadOptions { signal?: AbortSignal }
@@ -18,9 +19,10 @@ const READY = `p.is_active=1 AND p.duplicate_of_product_id IS NULL
   AND COALESCE(p.availability_checked_at,p.last_verified_at) IS NOT NULL
   AND p.quality_score>=0.55
   AND upper(p.availability_status) IN ('IN_STOCK','IN_STOCK_SCARCE','INSTOCKSCARCE','AVAILABLE_DATE','LEADTIME','PREORDER')
-  AND p.editorial_status IN ('generated_ready','manual_locked')
+  AND p.editorial_status IN ('generated_ready','manual_locked','short_ready')
   AND p.source_facts_hash IS NOT NULL AND p.source_facts_hash=p.editorial_source_hash
-  AND p.public_display_json IS NOT NULL AND p.eligible_until>?`;
+  AND p.public_display_json IS NOT NULL AND p.eligible_until>?
+  AND ${currentShortCopySql('p.public_display_json')}`;
 function publicRows(rows: Array<{ public_display_json: string }>, now: Date): PublicCatalogProduct[] {
   return rows.flatMap((row) => {
     // One corrupt/expired product must not expose private fields or blank all search results.
@@ -40,6 +42,7 @@ export async function getProductsByPublicIds(db: CatalogD1, ids: string[], now =
     const result = await db.prepare(`WITH requested(public_id) AS (VALUES ${batch.map(() => '(?)').join(',')})
       SELECT p.public_display_json FROM requested
       CROSS JOIN products p ON p.public_id=requested.public_id
+      LEFT JOIN catalog_maintenance_products m ON m.product_id=p.id
       WHERE ${READY}${revision ? ' AND p.catalog_revision=?' : ''}`)
       .bind(...batch, now.toISOString(), ...(revision ? [revision] : [])).all<{ public_display_json: string }>();
     for (const product of publicRows(result.results, now)) found.set(product.publicId, product);
@@ -57,6 +60,7 @@ export async function keywordSearch(db: CatalogD1, query: string, limit = 60, no
   const match = words.map((word) => `"${word}"`).join(' OR ');
   const result = await db.prepare(`SELECT p.public_display_json FROM products_fts
     CROSS JOIN products p ON p.rowid=products_fts.rowid
+    LEFT JOIN catalog_maintenance_products m ON m.product_id=p.id
     WHERE products_fts MATCH ? AND ${READY}${revision ? ' AND p.catalog_revision=?' : ''}
     ORDER BY bm25(products_fts),p.public_id LIMIT ?`)
     .bind(match, now.toISOString(), ...(revision ? [revision] : []), limit).all<{ public_display_json: string }>();

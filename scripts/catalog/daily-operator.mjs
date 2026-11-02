@@ -16,7 +16,14 @@ const WORKSPACE=BASE+'/weekly-runs',CARE=BASE+'/daily-catalog-care';
 const INITIAL={control:{path:BASE+'/existing-display-20261023-v2/catalog-control.json',sha256:'434c960466f42f71acce83b037a8a23cefef18e7f02d0a2f111c2a99e3a311e1'},
   versionReference:'1924de55-cc4b-46a9-8ca9-e30f21ea5028',manifestSha256:'5d64c77465da9e1eee065232d256172c7906a22505c9d6f2e8ae2c0fe28ef792'};
 const SCOPE={environment:'production',accountId:'7f05a1dcb6e16f9c239564a0293bbe74',databaseId:'77b30f85-c57c-4acb-a0df-53368806c2a6',databaseName:'stupid-gifts-production',workerName:'stupid-gifts-production',indexName:'stupid-gifts-production'};
-const LIMITS={requests:5000,statements:12000,reportedRowsRead:1500000,reportedRowsWritten:30000};
+const FREE_LIMITS={requests:5000,statements:12000,reportedRowsRead:1500000,reportedRowsWritten:30000};
+/** The accepted full-catalog run measured 1.83M reads. Keep a finite working
+ * margin on the owner's existing paid plan, not the obsolete 1.5M Free guard.
+ * Merchant counts, model policy and historical run budgets do not change. */
+export function routineLimits(plan){
+  if(!['free','standard'].includes(plan))refuse('plan_unavailable');
+  return plan==='standard'?{requests:6000,statements:12000,reportedRowsRead:3000000,reportedRowsWritten:40000}:{...FREE_LIMITS};
+}
 const load=name=>import(pathToFileURL(ROOT+'/'+name).href);
 const {canonicalJson,sha256}=await load('scripts/catalog/migration.ts');
 const {runCloudflareWeekly,weeklyCommandSummary,validateCloudflareWeeklyConfig}=await load('scripts/catalog/run-cloudflare-weekly.ts');
@@ -68,8 +75,9 @@ export async function currentD1Plan(token,send=fetch){
   return j.result.standard?'standard':'free';
 }
 export async function headroom(token,spent={knownRowsRead:0,knownRowsWritten:0},anchor=null,send=fetch,plan='free'){
-  if(!Number.isSafeInteger(spent.knownRowsRead)||spent.knownRowsRead<0||spent.knownRowsRead>LIMITS.reportedRowsRead
-    ||!Number.isSafeInteger(spent.knownRowsWritten)||spent.knownRowsWritten<0||spent.knownRowsWritten>LIMITS.reportedRowsWritten
+  const limits=routineLimits(plan);
+  if(!Number.isSafeInteger(spent.knownRowsRead)||spent.knownRowsRead<0||spent.knownRowsRead>limits.reportedRowsRead
+    ||!Number.isSafeInteger(spent.knownRowsWritten)||spent.knownRowsWritten<0||spent.knownRowsWritten>limits.reportedRowsWritten
     ||!Number.isSafeInteger(spent.unconfirmedRequests??0)||(spent.unconfirmedRequests??0)<0)refuse('run_budget_exceeded');
   const at=new Date(),day=at.toISOString().slice(0,10);
   const r=await send('https://api.cloudflare.com/client/v4/graphql',{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},
@@ -85,9 +93,8 @@ export async function headroom(token,spent={knownRowsRead:0,knownRowsWritten:0},
   // and untouched shared capacity. This is NOT a prepaid per-query promise.
   const chargedRead=Math.max(rowsRead,(anchor?.rowsRead??rowsRead)+spent.knownRowsRead);
   const chargedWrite=Math.max(rowsWritten,(anchor?.rowsWritten??rowsWritten)+spent.knownRowsWritten);
-  if(!['free','standard'].includes(plan))refuse('plan_unavailable');
-  if(plan==='free'&&(chargedRead+Math.max(0,LIMITS.reportedRowsRead-spent.knownRowsRead)+20000+500000+300000>5000000
-    ||chargedWrite+Math.max(0,LIMITS.reportedRowsWritten-spent.knownRowsWritten)+5000+10000>100000))refuse('free_headroom');
+  if(plan==='free'&&(chargedRead+Math.max(0,limits.reportedRowsRead-spent.knownRowsRead)+20000+500000+300000>5000000
+    ||chargedWrite+Math.max(0,limits.reportedRowsWritten-spent.knownRowsWritten)+5000+10000>100000))refuse('free_headroom');
   return{observedAt:new Date().toISOString(),utcDay:day,rowsRead,rowsWritten,unknownReadReserve:500000,unknownWriteReserve:5000,untouchedReads:300000,untouchedWrites:10000};
 }
 export async function routineServingPrior(token,seal,send=fetch){
@@ -130,7 +137,7 @@ async function prepare(directory,calendar){
   if(await optional(directory+'/prepare-intent.json'))refuse('preparation_interrupted');
   const prior=await optional(CARE+'/last-success.json')??INITIAL,seal=await json(prior.control.path,prior.control.sha256);
   if(!['permanent-catalog-seal','approved-catalog-seal'].includes(seal.kind))refuse('prior_kind');
-  const token=await resolveWranglerOAuth(),capacity=await headroom(token,undefined,null,fetch,await currentD1Plan(token));
+  const token=await resolveWranglerOAuth(),plan=await currentD1Plan(token),limits=routineLimits(plan),capacity=await headroom(token,undefined,null,fetch,plan);
   const db=await createCatalogD1ReadOnlyRest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,limits:{requests:10,statements:12,reportedRowsRead:20000,reportedRowsWritten:1}});
   const rows=await db.batch([
     db.prepare('SELECT coalesce(max(sequence),0) n FROM vector_sync_outbox WHERE source_revision=?').bind(seal.projectionReceipt.catalog_revision),
@@ -149,7 +156,7 @@ async function prepare(directory,calendar){
   for(const [name,value]of Object.entries({context,rights:{rightsById:{}}})){const file=directory+'/'+name+'.json';inputs[name]={path:file,sha256:await put(file,value),observedAt:now};}
   const key=service=>({service:'goose.gifts.'+service,account:'goose.gifts'}),runId='daily-'+calendar.day+'-'+SOURCE.slice(0,8);
   const semanticSearch=routineSearchPolicy(await optional(CARE+'/semantic-search.json'));
-  const config=validateCloudflareWeeklyConfig({schemaVersion:1,runId,catalogRevision:runId,codeSha:SOURCE,environment:SCOPE.environment,accountId:SCOPE.accountId,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},vectorIndex:{name:SCOPE.indexName,dimensions:1536,metric:'cosine'},catalog:{associateTag:'goose-gifts-37-20',marketplace:'www.amazon.com'},backfillLimit:0,cadence:{day:calendar.day,featuredIds:homepage.featuredIds},credentials:{cloudflare:{type:'wrangler_oauth'},amazonId:key('AMAZON_CREATORS_CREDENTIAL_ID'),amazonSecret:key('AMAZON_CREATORS_CREDENTIAL_SECRET'),amazonVersion:'3.1',...(calendar.monday?{openai:key('OPENAI_API_KEY')}:{})},limits:LIMITS,retention:{reviewReference:'owner/2026-10-23/existing-daily-catalog',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint'].map(k=>[k,{maxAgeMs:86400000,notAfter}]))},inputs,
+  const config=validateCloudflareWeeklyConfig({schemaVersion:1,runId,catalogRevision:runId,codeSha:SOURCE,environment:SCOPE.environment,accountId:SCOPE.accountId,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},vectorIndex:{name:SCOPE.indexName,dimensions:1536,metric:'cosine'},catalog:{associateTag:'goose-gifts-37-20',marketplace:'www.amazon.com'},backfillLimit:0,cadence:{day:calendar.day,featuredIds:homepage.featuredIds},credentials:{cloudflare:{type:'wrangler_oauth'},amazonId:key('AMAZON_CREATORS_CREDENTIAL_ID'),amazonSecret:key('AMAZON_CREATORS_CREDENTIAL_SECRET'),amazonVersion:'3.1',...(calendar.monday?{openai:key('OPENAI_API_KEY')}:{})},limits,retention:{reviewReference:'owner/2026-10-23/existing-daily-catalog',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint'].map(k=>[k,{maxAgeMs:86400000,notAfter}]))},inputs,
     publication:{schemaVersion:1,environment:SCOPE.environment,accountId:SCOPE.accountId,workerName:SCOPE.workerName,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},indexName:SCOPE.indexName,codeSha:SOURCE,sourceMode:'stupid-production',sourceRoot:ROOT,releaseId:runId,identityOrigin:'https://stupid.gifts',compatibilityDate:'2026-10-19',prior:{directory:null,releaseId:seal.publication.releaseId,manifestSha256:prior.manifestSha256,versionReference:prior.versionReference},servingPrior,semanticSearch,publicAnalytics:{enabled:true,posthogHost:'https://us.i.posthog.com',posthogKey:'phc_ATVKSPwDYTRfX9qDtDVLzZuXQcNdV9d55SjC8bHtuU8w'}}});
   const configPath=directory+'/config.json',configSha256=await put(configPath,config),record={source:SOURCE,helperSha256:self,configPath,configSha256,runId,capacity};await put(directory+'/operator.json',record);return record;
 }

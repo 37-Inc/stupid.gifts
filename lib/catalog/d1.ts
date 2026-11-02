@@ -47,9 +47,11 @@ const currentShort=currentCopy('wittyDescription','witty_description');
 const shortText=`trim(${currentShort},${TRIM})`;
 const shortWords=[9,10,11,12,13,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279]
   .reduce((text,code)=>`replace(${text},char(${code}),' ')`,shortText);
-const CURRENT_SHORT=`(p.editorial_status!='short_ready' OR ${allOf([
-  `json_type(v.public_display_json,'$.editorialWriteup') IS NULL`,
-  `typeof(${currentShort})='text'`, `${currentShort}=json_extract(v.public_display_json,'$.description')`,
+/** Same current-copy evidence for source outbox reads and published revisions. */
+export function currentShortCopySql(displayColumn:'p.public_display_json'|'v.public_display_json'):string {
+  return `(p.editorial_status!='short_ready' OR ${allOf([
+  `json_type(${displayColumn},'$.editorialWriteup') IS NULL`,
+  `typeof(${currentShort})='text'`, `${currentShort}=json_extract(${displayColumn},'$.description')`,
   `${reviewedQuality} BETWEEN 0.8 AND 1`, `length(${shortText})<=220`,
   `instr(${shortText},char(10))=0`, `instr(${shortText},char(13))=0`,
   `(SELECT count(*) FROM json_each('['||replace(json_quote(${shortWords}),' ','","')||']') WHERE length(value)>0) BETWEEN 6 AND 35`,
@@ -58,6 +60,8 @@ const CURRENT_SHORT=`(p.editorial_status!='short_ready' OR ${allOf([
   `${currentCopy('sourceFactsHash','source_facts_hash')}=p.source_facts_hash`,
   `${currentCopy('editorialSourceHash','editorial_source_hash')}=p.editorial_source_hash`,
 ])})`;
+}
+const CURRENT_SHORT=currentShortCopySql('v.public_display_json');
 const CURRENT_PERMISSIONS = `coalesce(json_type(p.public_display_json)='object' AND json_type(p.rights_json)='object'
   AND ${CURRENT_SHORT}
   AND v.eligible_until=json_extract(v.public_display_json,'$.eligibleUntil')

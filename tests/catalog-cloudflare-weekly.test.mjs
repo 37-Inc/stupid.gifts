@@ -97,7 +97,7 @@ function sealedFixture(snapshot,context,prior=null){
     'release-context.json':`${JSON.stringify(context)}\n`,'release-identity.json':JSON.stringify(createReleaseIdentity(manifestBytes)),
     'site-identity.json':siteIdentityBytes('preview'),'feed-plan.json':JSON.stringify(createStaticFeedPlan(snapshot,sha256(`${JSON.stringify(snapshot)}\n`)))}};
 }
-async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,realTransport=false,realUpload=false,authenticPrior=false}={}){
+async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,realTransport=false,realUpload=false,authenticPrior=false,reviewedDiscoveryRights=true}={}){
   const NOW=at;
   const directory=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'goose-weekly-')));t.after(()=>fs.rm(directory,{recursive:true,force:true}));
   const repo=path.join(directory,'source');await fs.mkdir(repo,{mode:0o700});await put(path.join(repo,'.gitignore'),'build/\nstatic-site/out/\nstatic-site/.next/\n*.tsbuildinfo\nnode_modules/\n.wrangler/\n');
@@ -214,7 +214,7 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
     publicationReceiptWatermark:sql.prepare('SELECT coalesce(max(rowid),0) n FROM publication_receipts').get().n,
     priorPublication:noPrior?null:{releaseId:priorReceipt.release_id,receiptSha256:sha256(canonicalJson(priorReceipt))},cutoff:new Date(Date.parse(NOW)+3600000).toISOString()};
   const inputs={};for(const [name,value]of Object.entries({previous:previousInput,context,rights:{rightsById:permanent
-    ?Object.fromEntries([...Array.from({length:10},(_,i)=>observedProduct(i+(authentic?11:1))),...discoveries].map(product=>[product.id,{...grants(product),
+    ?Object.fromEntries([...Array.from({length:10},(_,i)=>observedProduct(i+(authentic?11:1))),...(reviewedDiscoveryRights?discoveries:[])].map(product=>[product.id,{...grants(product),
       ...(discoveries.some(p=>p.id===product.id)?{persistent:Object.fromEntries(Object.entries({title:product.title,description:product.wittyDescription,
         imageUrl:'/images/gift-placeholder.svg',affiliateUrl:product.affiliateUrl}).map(([field,value])=>[field,{basis:'owned',reference:'test-only independently cleared discovery base',value}]))}:{})}])):{[ID]:rights},reviewedDeleteReference:'test-only/delete'}})){
     const file=path.join(directory,`${name}.json`);await put(file,value);inputs[name]={path:file,sha256:sha256(await fs.readFile(file)),observedAt:NOW};}
@@ -242,8 +242,8 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
     assert.equal(process.env.CATALOG_DISCOVERY_THEMES,undefined);if(realTransport)return original.getItems(...args);
     const [ids]=args;return permanent?ids.map(id=>({...observedProduct(Number(id.slice(1))),
       title:'Supplier changed title does not replace permanent clearance',availabilityStatus:'OUT_OF_STOCK'})):[structuredClone(p)];};
-  const discoveryResponses=discovered?[[...discoveries.slice(0,9),{...observedProduct(3000),title:'Funny dormant mariner compass 3000'}],discoveries.slice(9,19),
-    [discoveries[19],{...observedProduct(6000),title:'Funny dormant mariner compass 3000'}]]:[];
+  const discoveryResponses=!reviewedDiscoveryRights?[discoveries.slice(0,10),discoveries.slice(10,20)]:discovered?[[...discoveries.slice(0,9),{...observedProduct(3000),title:'Funny dormant mariner compass 3000'}],discoveries.slice(9,19),
+    [...discoveries.slice(19,20),{...observedProduct(6000),title:'Funny dormant mariner compass 3000'}]]:[];
   amazonCreators.searchItems=async(...args)=>{calls.search++;if(realTransport)return original.searchItems(...args);
     if(discovered)return structuredClone(discoveryResponses[calls.search-1]||[]);return mode.superseded
     ?[structuredClone(calls.search>1?{...p,title:'Changed contradictory listing',sourceFacts:{material:'plastic'}}:p)]:[];};
@@ -442,10 +442,40 @@ test('AUTHENTIC small whole runner consumes genuine permanent native predecessor
   const ws=await openRunWorkspace(f.workspaceOptions);try{assert.deepEqual(await ws.catalogSuccessor(),result.catalogSeal);}finally{await ws.close();}
 });
 
+test('Monday discovery publishes through a real permanent predecessor without pre-seeded discovery grants',async t=>{
+  const f=await setup(t,{permanent:22,held:2,discovered:1,authenticPrior:true,realTransport:true,
+    reviewedDiscoveryRights:false,at:'2026-10-19T18:00:00.000Z'});
+  f.config.cadence={day:'2026-10-19',featuredIds:Array.from({length:10},(_,i)=>`B${String(11+i).padStart(9,'0')}`)};
+  f.config.backfillLimit=0;
+  f.config.limits={requests:5000,statements:12000,reportedRowsRead:1500000,reportedRowsWritten:30000};
+  await f.configure();
+  const originalIds=f.previous.products.map(p=>p.publicId),native=new Map([...f.index].map(([id,v])=>[id,structuredClone(v)]));
+  const started=await f.run('start');
+  assert.equal(started.reason,'awaiting_reviewed_approval',JSON.stringify(weeklyCommandSummary(started)));
+  const row=f.sql.prepare("SELECT * FROM products WHERE id='B000005000'").get();
+  assert.equal(row.editorial_status,'short_ready');
+  const display=JSON.parse(row.public_display_json),rights=JSON.parse(row.rights_json);
+  assert.ok(display.persistent);assert.equal(display.persistent.eligibleUntil,null);
+  assert.equal(display.description,display.persistent.description);
+  assert.equal(display.persistent.imageUrl,'/images/gift-placeholder.svg');
+  assert.equal(rights.imageUrl.basis,'merchant');
+  assert.match(rights.persistent.description.reference,/^[a-zA-Z0-9._:/-]+$/);
+  const result=await f.run('resume',await f.approve());
+  assert.equal(result.state,'finalized',JSON.stringify(weeklyCommandSummary(result)));
+  const envelope=JSON.parse(result.catalogSeal.envelopeJson);
+  assert.equal(envelope.products.length,23);assert.equal(envelope.heldProducts.length,2);
+  for(const id of originalIds)assert.ok(envelope.products.includes(id));
+  assert.ok(envelope.products.includes(row.public_id));
+  assert.equal(f.calls.delete,0);
+  for(const [id,vector]of native)assert.deepEqual(f.index.get(id),vector);
+  const ws=await openRunWorkspace(f.workspaceOptions);
+  try{assert.deepEqual(await ws.catalogSuccessor(),result.catalogSeal);}finally{await ws.close();}
+});
+
 async function authenticCycle(t,{full=false,realUpload=true}={}){
-  const limits={requests:5000,statements:12000,reportedRowsRead:2000000,reportedRowsWritten:50000};
-  const f=await setup(t,{permanent:full?2359:22,held:full?1024:2,discovered:full?20:0,authenticPrior:true,
-    realTransport:true,realUpload,at:'2026-10-19T18:00:00.000Z'});
+  const limits={requests:6000,statements:12000,reportedRowsRead:3000000,reportedRowsWritten:40000};
+  const f=await setup(t,{permanent:full?3352:22,held:full?31:2,discovered:full?20:0,authenticPrior:true,
+    reviewedDiscoveryRights:false,realTransport:true,realUpload,at:'2026-10-19T18:00:00.000Z'});
   f.config.cadence={day:'2026-10-19',featuredIds:Array.from({length:10},(_,i)=>`B${String(11+i).padStart(9,'0')}`)};
   f.config.backfillLimit=0;f.config.limits={...limits};await f.configure();
   const held=canonicalJson(f.sql.prepare('SELECT * FROM products WHERE is_active=0 ORDER BY public_id').all());
@@ -483,7 +513,7 @@ async function authenticCycle(t,{full=false,realUpload=true}={}){
     assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM products WHERE is_active=0 ORDER BY public_id').all()),held);
     assert.equal(result.catalogSeal.persistent.inventory.length,(full?3383:24)+(full?20:0));
     const publicIds=f.sql.prepare('SELECT public_id FROM catalog_public_products WHERE catalog_revision=?').all(f.config.catalogRevision).map(p=>p.public_id);
-    assert.equal(publicIds.length,(full?2359:22)+(full?20:0));for(const id of ids)assert.ok(publicIds.includes(id));
+    assert.equal(publicIds.length,(full?3352:22)+(full?20:0));for(const id of ids)assert.ok(publicIds.includes(id));
     for(const [id,v]of native){assert.deepEqual(f.index.get(id),v);assert.ok(Object.is(f.index.get(id).values[0],-0));}
     for(const vector of f.index.values()){assert.ok(Object.is(vector.values[0],-0));assert.equal(nativeHash(vector.values),vector.metadata.vectorBytesSha256);}
     const paid=structuredClone(f.calls),again=await f.run('resume');assert.equal(again.state,'finalized');assert.deepEqual(again.catalogSeal,result.catalogSeal);assert.deepEqual(f.calls,paid);
@@ -861,7 +891,8 @@ test('driver rejects an already-accounted publication sender before opening or a
 test('driver accepts explicit finite row ceilings only as a complete immutable configuration, without changing defaults',async t=>{
   const f=await setup(t),limits={requests:3000,statements:12000,reportedRowsRead:2_000_000,reportedRowsWritten:35_000};
   assert.deepEqual(validateCloudflareWeeklyConfig({...f.config,limits}).limits,limits);
-  for(const invalid of [{...limits,reportedRowsRead:2_000_001},{...limits,reportedRowsWritten:50_001},
+  assert.equal(validateCloudflareWeeklyConfig({...f.config,limits:{...limits,reportedRowsRead:3_000_000}}).limits.reportedRowsRead,3_000_000);
+  for(const invalid of [{...limits,reportedRowsRead:3_000_001},{...limits,reportedRowsWritten:50_001},
     {...limits,reportedRowsRead:0},{requests:3000,statements:12000,reportedRowsRead:2_000_000},
     {...limits,reportedRowsWritten:NaN},{...limits,reportedRowsWritten:undefined},{...limits,unbounded:true},null,1,[]])
     assert.throws(()=>validateCloudflareWeeklyConfig({...f.config,limits:invalid}),/weekly_configuration_invalid/);
