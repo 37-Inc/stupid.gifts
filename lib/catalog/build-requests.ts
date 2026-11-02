@@ -258,7 +258,7 @@ async function priorMatches(db: CatalogD1, request: CatalogBuildRequest, active:
  */
 export async function beginBuildActivation(db: CatalogD1, claim: CatalogBuildClaim, snapshot: CatalogSnapshot,
   publication: PublicationClaim, versionReference: string, readDeployment: (signal: AbortSignal) => Promise<DeploymentObservation>, now = new Date(), mutationOwner?: MutationOwner,
-  servingPrior?: DeploymentIdentity,continuation?:PermanentPublicationAuthority): Promise<ActivationPermit> {
+  servingPrior?: DeploymentIdentity,continuation?:PermanentPublicationAuthority,options?:{observationTimeoutMs:number}): Promise<ActivationPermit> {
   if (typeof versionReference !== 'string' || !REFERENCE.test(versionReference)) throw new Error('invalid_build_reference');
   const stored = await row(db, claim.requestId);
   if (!stored || stored.state !== 'building' || stored.lease_token !== claim.token
@@ -269,7 +269,9 @@ export async function beginBuildActivation(db: CatalogD1, claim: CatalogBuildCla
   // Receipts are append-only in this protocol; reject publication completed during readback.
   const receiptEpoch = (await db.prepare('SELECT coalesce(max(rowid),0) epoch FROM publication_receipts')
     .all<{ epoch: number }>()).results[0].epoch;
-  const observed = await observe(readDeployment,30_000);
+  const timeout=options?.observationTimeoutMs??3000;
+  if(!Number.isInteger(timeout)||timeout<1||timeout>30_000)throw Error('deployment_observation_timeout_invalid');
+  const observed = await observe(readDeployment,timeout);
   if (observed.environment !== request.environment || observed.settled !== true || !(await priorMatches(db, request, observed.active, servingPrior))) throw new Error('build_prior_deployment_changed');
   const earliest = earliestDisplayExpiry(snapshot.products);
   if (intent.codeSha !== request.codeSha || intent.priorReleaseId !== request.priorReleaseId || snapshot.catalogRevision !== intent.catalogRevision

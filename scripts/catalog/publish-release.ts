@@ -1006,7 +1006,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       }else{
         if(continuation)await permanentProof();
         permit=await beginBuildActivation(db,control.build,sealed.snapshot,control.publication!,control.versionReference!,
-          signal=>(observation=readPrior(signal)),now(),owner,config.servingPrior,continuation);
+          signal=>(observation=readPrior(signal)),now(),owner,config.servingPrior,continuation,{observationTimeoutMs:30_000});
       }
     }
     finally{if(observation){
