@@ -222,7 +222,7 @@ test('an acknowledged preactivation finish preserves multiple settled unknowns a
   assert.deepEqual(await w.budget(),before);assert.equal(before.unconfirmedRequests,2);
 });
 
-async function finalizationFixture(t,{finite=false,skipFinish=false,noDeployment=false}={}){
+async function finalizationFixture(t,{finite=false,skipFinish=false,noDeployment=false,preactivation=false}={}){
   const f=await fixture(t);f.input.repository=join(f.parent,'operator');
   await mkdir(f.input.repository,{mode:0o700});
   const w=await f.open(),value=recoveryCheckpoint(),p=value.control.publication;
@@ -239,7 +239,7 @@ async function finalizationFixture(t,{finite=false,skipFinish=false,noDeployment
   const directory=join(w.directory,'packages',p.intent.releaseId);await mkdir(directory,{mode:0o700});
   await writeFile(join(directory,'catalog.snapshot.json'),bytes,{mode:0o600});
   const ack=await w.putArtifact({fixture:'genuine original transport ack'},{kind:'publication',observedAt:NOW});
-  value.pins.publicationUploadTransportAcknowledged=ack;
+  value.pins[preactivation?'publicationUploadAcknowledged':'publicationUploadTransportAcknowledged']=ack;
   await w.reserveBudget(reservation('original-charge',2));await w.settleBudget('original-charge',{status:'known',usage:{rowsRead:1841389,rowsWritten:14444}});
   let saved=await w.writeCheckpoint(null,value);
   const finish={expectedCheckpointSha256:saved.sha256,approvalReference:HASH,versionReference:p.versionReference,
@@ -248,13 +248,15 @@ async function finalizationFixture(t,{finite=false,skipFinish=false,noDeployment
   await w.reserveBudget(reservation('retained-unknown',0));await w.settleBudget('retained-unknown',{status:'unknown',usage:null});
   const activated=structuredClone(value);activated.phase='attention';activated.owner.phase='activating';
   Object.assign(activated.control.publication,{stage:'activating',permit,deploymentId:noDeployment?null:'actual-original-deployment'});
+  if(preactivation){activated.phase='publishing';activated.owner.phase='freezing';activated.control.publication.permit=null;activated.control.publication.deploymentId=null;}
   saved=await w.writeCheckpoint(saved.sha256,activated);
   const grant={...recoveryGrant(saved,{httpRequests:1000,sqlStatements:8000}),scope:'approved-permanent-finalization',reportedRowsRead:2341389};
   return{f,w,saved,grant,finish,directory,snapshot};
 }
 
-async function permanentControlFixture(t,{blob=false,mutate,summaryMutate}={}){
-  const input=await finalizationFixture(t),{w,snapshot,saved}=input,p=saved.checkpoint.control.publication;
+async function permanentControlFixture(t,{blob=false,mutate,summaryMutate,preactivation=false}={}){
+  const input=await finalizationFixture(t,{preactivation}),{w,snapshot,saved}=input,p=saved.checkpoint.control.publication;
+  const owner=p.permit?.mutationOwner??saved.checkpoint.owner;
   const packet=await createProjectionPacket(snapshot,{[snapshot.products[0].publicId]:HASH},HASH,new Date(NOW));
   const previous={...snapshot,catalogRevision:'prior-fixture',products:[snapshot.products[0].publicId]};
   const approval={schemaVersion:1,runId:'fixture-maintenance',catalogRevision:snapshot.catalogRevision,changes:[]};
@@ -266,8 +268,8 @@ async function permanentControlFixture(t,{blob=false,mutate,summaryMutate}={}){
       previous:{envelopeJson:JSON.stringify(previous),snapshotSha256:HASH,projectionReceipt:packet.receipt},requestSha256:HASH},
     revision:{snapshot,packet,priorRow:{release_id:'prior-fixture',catalog_revision:'prior-fixture',code_sha:CODE,completed_at:NOW,
       manifest_json:encodePublicationIntent({...p.intent,releaseId:'prior-fixture',catalogRevision:'prior-fixture',catalogSnapshotSha256:HASH})},
-      sourceDigest:HASH,globalVectorWatermark:0,vectorSyncWatermark:0,operationKey:p.permit.mutationOwner.operationKey,
-      persistent:{generation:p.permit.mutationOwner.generation,inventory:[{publicId:previous.products[0],sourceRowSha256:HASH,
+      sourceDigest:HASH,globalVectorWatermark:0,vectorSyncWatermark:0,operationKey:owner.operationKey,
+      persistent:{generation:owner.generation,inventory:[{publicId:previous.products[0],sourceRowSha256:HASH,
         productSha256:HASH,privateStateSha256:HASH}],nativeHistory:[]},nativeHistory:[]}};
   mutate?.(value);
   const revision=blob?await w.putBlob(Buffer.from(JSON.stringify(value)),{kind:'publication',observedAt:NOW}):await putOrdered(w,value,NOW);
@@ -275,7 +277,7 @@ async function permanentControlFixture(t,{blob=false,mutate,summaryMutate}={}){
   const complete=await w.putArtifact(summary,{kind:'publication',observedAt:NOW});
   const current=await w.writeCheckpoint(saved.sha256,{...saved.checkpoint,pins:{...saved.checkpoint.pins,revision},phaseComplete:complete});
   input.f.setNow('2026-10-22T14:00:00.000Z');
-  await w.grantActivationRecoveryBudget({...input.grant,expectedCheckpointSha256:current.sha256});
+  if(!preactivation)await w.grantActivationRecoveryBudget({...input.grant,expectedCheckpointSha256:current.sha256});
   return{...input,value,summary,current,revision,complete};
 }
 
@@ -300,6 +302,15 @@ test('permanent preactivation control is tied to the unchanged freezing owner, n
   assert.deepEqual(activatedPermanentRevisionControl(value,p,owner),value);
   assert.throws(()=>activatedPermanentRevisionControl(value,p),/permanent_control/);
   assert.throws(()=>activatedPermanentRevisionControl(value,p,{...owner,generation:owner.generation+1}),/permanent_control/);
+});
+
+test('the ordinary acknowledged-upload continuation reads only permanent controls after supplier retention expires',async t=>{
+  const {w,value,summary}=await permanentControlFixture(t,{preactivation:true,blob:true});
+  const before=await w.budget();
+  assert.deepEqual(await w.readPermanentFinalization('revision'),value);
+  assert.deepEqual(await w.readPermanentFinalization('summary'),summary);
+  await assert.rejects(w.readCheckpoint(),/expired/);
+  assert.deepEqual(await w.budget(),before);
 });
 
 test('post-expiry purpose reader rejects finite overlays, raw supplier fields, snapshot drift and summary relabeling',async t=>{

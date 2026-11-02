@@ -435,7 +435,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // Read normal state only before activation; control-only settlement must not
     // turn expired merchant artifacts back into usable content.
     const view=await workspace.readCheckpoint({controlOnly:true});if(!view)throw new Error('publication_checkpoint_missing');
-    if(options.finishAuthorization||view.checkpoint.control?.publication?.permit||control.permit&&view.checkpoint.control?.publication?.stage==='activating'){
+    if(options.finishAuthorization&&!reviewed||view.checkpoint.control?.publication?.permit||control.permit&&view.checkpoint.control?.publication?.stage==='activating'){
       if(appendPins)throw new Error('publication_upload_review_required');
       await workspace.writeControlCheckpoint(view.sha256,{phase:'attention',owner,control:{publication:control}});
     }else{
