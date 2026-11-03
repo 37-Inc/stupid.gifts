@@ -1,6 +1,6 @@
 import type { CatalogD1 } from '../../lib/catalog/storage/d1.ts';
 import type { MutationOwner } from '../../lib/catalog/mutation-fence.ts';
-import { mutationAssertion, mutationFenceQuery, readMutationOwner } from '../../lib/catalog/mutation-fence.ts';
+import { mutationAssertion, mutationFenceQuery, readMutationOwner,pendingVectorReadFence } from '../../lib/catalog/mutation-fence.ts';
 import { canonicalJson, sha256 } from './migration.ts';
 import { D1_RECOVERY_TABLES } from './d1-logical-tables.ts';
 import type { FrozenD1RecoveryInput } from './recovery-delta.ts';
@@ -204,11 +204,15 @@ export function normalizeOwnedImportSequences(plan:OwnedOperationalImportPlan,pl
 
 /** Exact logical read bounded by SQLite's own serialized row sizes. Caller owns
  * the barrier; before/after assertions cannot replace gating every writer. */
-export async function readOwnedLogicalRows(db:CatalogD1,owner:MutationOwner,options:{phase?:'freezing'|'activating';signal?:AbortSignal;tables?:typeof D1_RECOVERY_TABLES[number][]}={}){
+export async function readOwnedLogicalRows(db:CatalogD1,owner:MutationOwner,options:{phase?:'freezing'|'activating';signal?:AbortSignal;
+  tables?:typeof D1_RECOVERY_TABLES[number][];pendingVector?:true}={}){
   const phase=options.phase??'writing';if(owner.phase!==phase)refuse('owner');
+  if(options.pendingVector&&phase!=='freezing')refuse('owner');
+  const fence=options.pendingVector?pendingVectorReadFence(owner):mutationFenceQuery(owner,[phase]);
+  const assert=()=>db.prepare(`SELECT json(CASE WHEN ${fence.sql} THEN 'true' ELSE 'mutation_fenced' END)`).bind(...fence.params);
   const tables=options.tables??D1_RECOVERY_TABLES;
   if(!tables.length||new Set(tables).size!==tables.length||tables.some(t=>!D1_RECOVERY_TABLES.includes(t)))refuse('schema');
-  options.signal?.throwIfAborted();await mutationAssertion(db,owner,[phase]).all({signal:options.signal});
+  options.signal?.throwIfAborted();await assert().all({signal:options.signal});
   const schemas=await db.batch(tables.map(t=>db.prepare(options.signal?`SELECT name FROM pragma_table_info('${t}')`:`PRAGMA table_info(${t})`)),{signal:options.signal}) as Array<{results:Array<{name:string}>}>;
   if(!Array.isArray(schemas)||schemas.length!==tables.length)refuse('schema');
   const result:Record<string,Row[]>={};
@@ -232,7 +236,7 @@ export async function readOwnedLogicalRows(db:CatalogD1,owner:MutationOwner,opti
     }
     result[table]=rows;
   }
-  await mutationAssertion(db,owner,[phase]).all({signal:options.signal});return result;
+  await assert().all({signal:options.signal});return result;
 }
 
 async function inspect(db:CatalogD1,plan:OwnedOperationalImportPlan,planSha256:string,cursor:MutationOwner){

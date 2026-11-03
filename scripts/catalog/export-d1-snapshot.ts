@@ -7,7 +7,7 @@ import { isPurchasableAvailability, hasReviewedGiftShortCopy } from '../../lib/g
 import { catalogDisplayDeadline, persistentPublicProduct } from '../../lib/catalog/display.ts';
 import { suppressNearDuplicateProducts } from '../../lib/db/product-scoring.ts';
 import { canonicalJson, canonicalTimestamp, sha256 } from './migration.ts';
-import { mutationFenceQuery } from '../../lib/catalog/mutation-fence.ts';
+import { mutationFenceQuery,pendingVectorReadFence as approvedRevisionReadFence } from '../../lib/catalog/mutation-fence.ts';
 import type { MutationOwner, MutationQuery } from '../../lib/catalog/mutation-fence.ts';
 import { pruningCurrentQueries, PRUNING_CURRENT_LIMITS, CATALOG_IDENTITY_LIMITS, PRUNING_CURRENT_COLUMNS as CURRENT, PRUNING_ARCHIVE_TIMES as ARCHIVE_TIMES } from '../../lib/catalog/pruning-current.ts';
 import { originalEditorialEquivalentRow } from '../../lib/catalog/editorial-equivalence.ts';
@@ -316,15 +316,6 @@ export async function readOwnerBaseOperationReceipts(db:CatalogD1,owner:Mutation
 }
 /** Read-only hydration of an EXISTING seal, including a genuinely journaled
  * pending vector intent. This grants no claim, re-seal, mutation or replay. */
-function approvedRevisionReadFence(owner:MutationOwner):MutationQuery{
-  const base=mutationFenceQuery(owner,[owner.phase]);
-  const pending={...base,params:[...base.params.slice(0,-1),1]};
-  return{sql:`(${base.sql} OR (${pending.sql} AND (SELECT count(*) FROM catalog_vector_deliveries
-    WHERE environment=? AND index_name=? AND generation=? AND prior_epoch=? AND owner_json=?
-      AND status='pending' AND dispatch_token IS NOT NULL AND json_extract(request_json,'$.kind') IN('prune','outbox'))=1))`,
-    params:[...base.params,...pending.params,owner.environment,owner.indexName,owner.generation,owner.epoch-1,
-      canonicalJson({...owner,epoch:owner.epoch-1})]};
-}
 export async function readApprovedRevisionSource(db:CatalogD1,owner:MutationOwner,ids:string[],
   changes:Array<{publicId:string;operationId:string}>,ownerBaseReview?:OwnerBaseCatalogReview,
   approvalContext?:Pick<import('../../lib/catalog/freeze-approved-cohort.ts').ApprovedCohortRequest,'approval'|'previous'>){

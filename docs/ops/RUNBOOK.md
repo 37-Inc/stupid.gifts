@@ -110,7 +110,7 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-discovery-native-proof/stupid.gifts`.
+`/Users/cameronehrlich/.codex/worktrees/stupid-pending-native-readback/stupid.gifts`.
 The old `stupid-catalog-care` checkout remains frozen for original source
 bindings; it is not the current scheduler's execution source.
 Its runtime includes the reviewed storefront, Howie rehearsal, bounded

@@ -1,5 +1,6 @@
 import type { CatalogD1, D1Statement } from './storage/d1.ts';
 import { canonicalTime } from './snapshot.ts';
+import {canonicalJson} from './canonical-json.ts';
 
 export interface MutationScope { environment: 'staging' | 'production'; indexName: string }
 export interface MutationOwner extends MutationScope {
@@ -67,6 +68,17 @@ export function mutationFenceQuery(value: MutationOwner, phases: MutationOwner['
       AND generation=? AND mutation_epoch=? AND phase=? AND owner_reference=? AND operation_key=? AND external_pending=?)`,
     params: [value.environment, value.indexName, value.token, value.generation, value.epoch, value.phase, value.ownerReference, value.operationKey,
       value.phase === 'activating' ? 1 : 0] };
+}
+/** Read-only hydration may observe its ONE genuinely journaled pending vector.
+ * Never use this predicate for writes, a new claim or publication acceptance. */
+export function pendingVectorReadFence(value:MutationOwner):MutationQuery{
+  const base=mutationFenceQuery(value,[value.phase]);
+  const pending={...base,params:[...base.params.slice(0,-1),1]};
+  return{sql:`(${base.sql} OR (${pending.sql} AND (SELECT count(*) FROM catalog_vector_deliveries
+    WHERE environment=? AND index_name=? AND generation=? AND prior_epoch=? AND owner_json=?
+      AND status='pending' AND dispatch_token IS NOT NULL AND json_extract(request_json,'$.kind') IN('prune','outbox'))=1))`,
+    params:[...base.params,...pending.params,value.environment,value.indexName,value.generation,value.epoch-1,
+      canonicalJson({...value,epoch:value.epoch-1})]};
 }
 /** JSON's strict parse is a SQLite/D1 batch assertion: false aborts the entire
  * transaction, including earlier writes. The caller reports only a safe code.
