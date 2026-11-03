@@ -1,5 +1,15 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — Request counts are telemetry for routine catalog care
+
+[owner+codex] Remove the routine6,000-request hard stop at both the durable
+ledger and accounted D1 client. Request counts, settled/unknown charges and
+original manifests remain intact; SQL/read/write budgets, ownership, deadlines,
+timeouts and bounded provider operations still apply. Other diagnostic/migration
+clients retain their explicit limits. A separately reviewed operator can finish
+the already-live release without another supplier batch, upload or activation.
+Success receipts distinguish original runtime from the completing operator.
+
 ## 2026-11-02 — Hydrate a full catalog while its own vector is pending
 
 [owner+codex] Reuse the existing exact pending-vector READ fence for permanent

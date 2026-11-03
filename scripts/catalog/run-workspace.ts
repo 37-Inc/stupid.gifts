@@ -76,6 +76,9 @@ export interface RunWorkspaceOptions {
    * roots/hosts do NOT share filesystem locks. No implicit default. */
   directory:string; repository:string; mode:'create'|'resume'; runId:string; configSha256:string; codeSha:string;
   scope:WorkspaceScope; retention:RetentionPolicy; budgetCaps:{httpRequests:number;sqlStatements:number};
+  /** Routine catalog care records request counts but budgets actual SQL/rows.
+   * Historical manifest estimates and every charge remain unchanged. */
+  requestLimit?:'enforce'|'observe';
   expectedManifestSha256?:string; now?:()=>string;
 }
 export interface WorkspaceManifest {
@@ -111,13 +114,14 @@ type Event = {type:'artifact';ref:ArtifactRef} | {type:'checkpoint';ref:Artifact
   | {type:'catalog-successor-part';sha256:string;index:number;count:number;data:string}
   | {type:'reserve';reservation:BudgetReservation} | {type:'settle';id:string;settlement:BudgetSettlement};
 type RecordFile = {schemaVersion:1;sequence:number;parent:string|null;event:Event};
-type State = {manifest:WorkspaceManifest;execution:ExecutionAdoption|null;recovery:RecoveryGrant|null;finish:FinishGrant|null;requestGrant:RequestGrant|null;success:PublicationSuccess|null;head:string|null;count:number;bytes:number;checkpoint:CheckpointView|null;body:ArtifactRef|null;previous:string|null;totals:BudgetTotals;
+type State = {manifest:WorkspaceManifest;requestLimit:'enforce'|'observe';execution:ExecutionAdoption|null;recovery:RecoveryGrant|null;finish:FinishGrant|null;requestGrant:RequestGrant|null;success:PublicationSuccess|null;head:string|null;count:number;bytes:number;checkpoint:CheckpointView|null;body:ArtifactRef|null;previous:string|null;totals:BudgetTotals;
   successor:{sha256:string;count:number;parts:string[]}|null;
   refs:Map<string,ArtifactRef>;purged:Map<string,PurgedArtifact>;
   publications:Map<string,{retention:PublicationDirectories;buildCleaned:boolean;purged:boolean}>;
   reservations:Map<string,{reservation:BudgetReservation;settlement?:BudgetSettlement}>};
 export interface WorkspaceStatus {
   directory:string;manifest:WorkspaceManifest;manifestSha256:string;checkpoint:CheckpointView|null;budget:BudgetTotals;budgetCeiling:BudgetCeiling;
+  requestLimit:'enforce'|'observe';
   expired:{reference:string;kind:Kind;expiresAt:string}[];
   successfulPublication:PublicationSuccess|null;
   execution:ExecutionAdoption|null;
@@ -197,7 +201,8 @@ function scope(value:WorkspaceScope) {
 }
 function options(value:RunWorkspaceOptions) {
   if(!value||!key(value.runId)||!hash(value.configSha256)||typeof value.codeSha!=='string'||!/^[a-f0-9]{40}$/.test(value.codeSha)
-    ||!['create','resume'].includes(value.mode)||value.expectedManifestSha256!==undefined&&!hash(value.expectedManifestSha256))fail('configuration');
+    ||!['create','resume'].includes(value.mode)||value.expectedManifestSha256!==undefined&&!hash(value.expectedManifestSha256)
+    ||value.requestLimit!==undefined&&!['enforce','observe'].includes(value.requestLimit))fail('configuration');
   scope(value.scope);
   if(!exact(value.retention,['reviewReference','rules'])||!refString(value.retention.reviewReference)
     ||!exact(value.retention.rules,KINDS))fail('retention_policy');
@@ -326,7 +331,8 @@ function budgetReservation(state:State,value:BudgetReservation) {
   if(state.recovery?.scope==='approved-permanent-finalization'
     &&([...state.reservations.values()].filter(r=>r.settlement?.status==='unknown').length!==state.recovery.usage.unconfirmedRequests
       ||value.units.sqlStatements&&current.knownRowsRead>=state.recovery.reportedRowsRead!))fail('recovery_read_budget');
-  if(current.httpRequests+value.units.httpRequests>limit.httpRequests||current.sqlStatements+value.units.sqlStatements>limit.sqlStatements)fail('budget_exceeded');
+  if(state.requestLimit==='enforce'&&current.httpRequests+value.units.httpRequests>limit.httpRequests
+    ||current.sqlStatements+value.units.sqlStatements>limit.sqlStatements)fail('budget_exceeded');
 }
 async function pathWithoutLinks(path:string) {
   if(!isAbsolute(path)||normalize(path)!==path||path.endsWith(sep)||path.includes('\0'))fail('path');
@@ -392,7 +398,7 @@ async function loadStored(directory:string,ref:ArtifactRef,manifest:WorkspaceMan
   return value;
 }
 function fresh(value:Stored,now:string) {if(Date.parse(value.observedAt)>Date.parse(now)||Date.parse(value.expiresAt)<=Date.parse(now))fail('expired');}
-const empty=(manifest:WorkspaceManifest):State=>({manifest,execution:null,recovery:null,finish:null,requestGrant:null,success:null,successor:null,head:null,count:0,bytes:0,checkpoint:null,body:null,previous:null,
+const empty=(manifest:WorkspaceManifest,requestLimit:'enforce'|'observe'):State=>({manifest,requestLimit,execution:null,recovery:null,finish:null,requestGrant:null,success:null,successor:null,head:null,count:0,bytes:0,checkpoint:null,body:null,previous:null,
   totals:{httpRequests:0,sqlStatements:0,knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:0},refs:new Map(),purged:new Map(),publications:new Map(),reservations:new Map()});
 function publicationSuccess(state:State,p:PublicationSuccess) {
   const cp=state.checkpoint,c=cp?.checkpoint.control?.publication,o=c?.permit?.mutationOwner;
@@ -640,11 +646,11 @@ function bindCheckpoint(value:CheckpointControl,manifest:WorkspaceManifest,execu
     ||p.intent&&p.intent.codeSha!==(execution?.effective.codeSha??manifest.codeSha)
     ||execution&&p.configSha256!==execution.effective.publicationConfigSha256))fail('control_scope');
 }
-async function loadState(directory:string,manifest:WorkspaceManifest,repairHead=false):Promise<State> {
+async function loadState(directory:string,manifest:WorkspaceManifest,repairHead=false,requestLimit:'enforce'|'observe'='enforce'):Promise<State> {
   const entries=await readdir(join(directory,'events'));if(entries.length>MAX_EVENTS+32)fail('entries');
   if((await readdir(join(directory,'objects'))).length>MAX_EVENTS)fail('entries');
   const files=entries.filter(name=>!name.startsWith('.pending-')).sort();
-  if(files.length>MAX_EVENTS)fail('entries');const state=empty(manifest),checkpoints:Extract<Event,{type:'checkpoint'}>[]=[];
+  if(files.length>MAX_EVENTS)fail('entries');const state=empty(manifest,requestLimit),checkpoints:Extract<Event,{type:'checkpoint'}>[]=[];
   let previousHead={sequence:0,sha256:null as string|null};
   for(const filename of files){
     if(!/^\d{6}\.[a-f0-9]{64}\.json$/.test(filename))fail('journal_name');
@@ -677,7 +683,7 @@ async function loadState(directory:string,manifest:WorkspaceManifest,repairHead=
     if(!state.count||!same(head,previousHead))fail('journal_head');
     if(repairHead)await replaceHead(directory,previousHead,next);
   }
-  const usage=totals(state),limit=ceiling(state);if(usage.httpRequests>limit.httpRequests||usage.sqlStatements>limit.sqlStatements)fail('budget_exceeded');
+  const usage=totals(state),limit=ceiling(state);if(requestLimit==='enforce'&&usage.httpRequests>limit.httpRequests||usage.sqlStatements>limit.sqlStatements)fail('budget_exceeded');
   return state;
 }
 function receipt(value:ProviderReceipt) {
@@ -724,12 +730,12 @@ async function expired(directory:string,state:State,manifest:WorkspaceManifest,n
 export async function readRunWorkspace(input:RunWorkspaceOptions):Promise<WorkspaceStatus> {
   input={...input,scope:structuredClone(input.scope),retention:structuredClone(input.retention),budgetCaps:structuredClone(input.budgetCaps)};
   const directory=await location({...input,mode:'resume'},false);const info=await readManifest(directory,input);
-  const before=(await readdir(join(directory,'events'))).sort();const state=await loadState(directory,info.manifest);
+  const before=(await readdir(join(directory,'events'))).sort();const state=await loadState(directory,info.manifest,false,input.requestLimit);
   await verifyExecutionMetadata(directory,state,await realpath(input.repository));
   await verifySuccessMetadata(directory,state);
   const expiredRefs=await expired(directory,state,info.manifest,time((input.now||(()=>new Date().toISOString()))()));
   if(!same(before,(await readdir(join(directory,'events'))).sort()))fail('concurrent_read');
-  return{directory,...info,checkpoint:state.checkpoint,budget:totals(state),budgetCeiling:ceiling(state),expired:expiredRefs,
+  return{directory,...info,requestLimit:state.requestLimit,checkpoint:state.checkpoint,budget:totals(state),budgetCeiling:ceiling(state),expired:expiredRefs,
     successfulPublication:structuredClone(state.success),execution:structuredClone(state.execution)};
 }
 /** Host-local resource locks (D1 + Worker + build checkout), sorted to avoid lock-order
@@ -773,7 +779,7 @@ export async function openRunWorkspace(input:RunWorkspaceOptions):Promise<RunWor
     const info=await readManifest(directory,input);const manifest=JSON.parse(canonicalJson(info.manifest)) as WorkspaceManifest;
     // Runtime freeze prevents accidental caller scope/policy mutation.
     const freeze=(v:unknown):void=>{if(v&&typeof v==='object'){Object.values(v).forEach(freeze);Object.freeze(v);}};freeze(manifest);
-    const state=await loadState(directory,manifest,true);let closed=false,poisoned=false;let queue:Promise<unknown>=Promise.resolve();
+    const state=await loadState(directory,manifest,true,input.requestLimit);let closed=false,poisoned=false;let queue:Promise<unknown>=Promise.resolve();
     await verifyExecutionMetadata(directory,state,repository);
     if(state.execution)await acquireExecutionRoot(state.execution);
     await verifySuccessMetadata(directory,state);
