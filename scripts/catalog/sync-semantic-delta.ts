@@ -21,7 +21,7 @@ function refuse():never{throw Error('semantic_delta_source_mismatch');}
 /** Reuse VERIFIED native bytes, not another embedding/model call. The complete
  * private sidecar and products row must belong to the approved inventory. */
 export async function deriveMaintenanceSearchVector(product:PublicCatalogProduct,row:Row,state:Row,
-  inventory:{sourceRowSha256?:string;productSha256:string;privateStateSha256:string}) {
+  inventory:{productSha256:string;privateStateSha256:string}) {
   if(product.id!==row.id||product.publicId!==row.public_id||row.is_active!==1||row.duplicate_of_product_id!==null
     ||hash(row)!==inventory.productSha256||hash(state)!==inventory.privateStateSha256
     ||state.product_id!==row.id||state.embedding_present!==1||typeof state.embedding_native_base64!=='string')refuse();

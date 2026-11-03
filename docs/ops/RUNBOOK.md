@@ -111,7 +111,10 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-pending-native-readback/stupid.gifts`.
+`/Users/cameronehrlich/.codex/worktrees/stupid-semantic-delta/stupid.gifts`
+after its source/release acceptance is recorded in `.4.18`. Until then use
+the latest accepted operator recorded in the existing task, never an unmerged
+branch or a checkout with an active build/run.
 The old `stupid-catalog-care` checkout remains frozen for original source
 bindings; it is not the current scheduler's execution source.
 Its runtime includes the reviewed storefront, Howie rehearsal, bounded
