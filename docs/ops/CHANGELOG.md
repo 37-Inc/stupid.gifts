@@ -1,5 +1,16 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — Repair unpublished discovery URLs without repeating paid work
+
+[owner+codex] Trim truncated slugs after their length limit. One captured new
+gift had a trailing hyphen and no display, blocking the whole snapshot. The
+same-owner repair preserves its original archive, unused URL history, copy,
+rights, observation and native bytes, appending one exact operation instead of
+replaying suppliers/models or rewriting the original review. Existing public
+permalinks cannot use this recovery. The schema's slug trigger is restored in
+the same atomic transaction. Original runtime/config and charges stay pinned;
+a separately reviewed operator can finish that pending run.
+
 ## 2026-11-02 — Fresh discovery themes for explicit runs
 
 [owner+codex] The first funded extra batch refreshed ten listings but correctly

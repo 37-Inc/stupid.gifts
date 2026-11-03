@@ -97,11 +97,11 @@ export function maintenanceState(row: Row, override?: { product: SemanticProduct
   return p;
 }
 
-/** Byte-compatible with assign_product_public_identity(), NOT the newer UI
- * slugifier: do not expand ampersands or transliterate accents. */
+/** Keep the original identity rules, but trim again after truncation so a new
+ * URL cannot end in a separator. Existing product slugs never regenerate. */
 export function maintenanceSlugs(product: SemanticProduct, publicId: string): string[] {
   const base = (String(product.punnyTitle || product.title).toLowerCase().replace(/[^a-z0-9]+/g,'-')
-    .replace(/^-+|-+$/g,'').slice(0,120)) || 'ridiculous-gift';
+    .replace(/^-+|-+$/g,'').slice(0,120).replace(/-+$/g,'')) || 'ridiculous-gift';
   const hex = publicId.replaceAll('-','');
   return [base, ...[8,12,16,20,24,28,32].map(length => `${base.slice(0,159-length)}-${hex.slice(0,length)}`)];
 }

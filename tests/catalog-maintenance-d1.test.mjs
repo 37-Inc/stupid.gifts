@@ -543,7 +543,9 @@ test('new identity allocation matches PG fallback order and atomically respects 
     await f.store.upsertProduct({...p,punnyTitle:'A different candidate title'},editorialSourceHash(p));assert.equal(f.row(2).slug,result.slug);
     assert.deepEqual(maintenanceSlugs({title:'É & Café',punnyTitle:null},uuid(1)).slice(0,2),['caf','caf-00000000']);
     assert.equal(maintenanceSlugs({title:'🦀',punnyTitle:null},uuid(1))[0],'ridiculous-gift');
-    assert.equal(maintenanceSlugs({title:'a'.repeat(119)+' b'},uuid(1))[0],'a'.repeat(119)+'-'); // Actual trigger truncates AFTER trimming.
+    assert.equal(maintenanceSlugs({title:'a'.repeat(119)+' b'},uuid(1))[0],'a'.repeat(119));
+    for(let boundary=110;boundary<130;boundary++)for(const candidate of maintenanceSlugs({title:'a'.repeat(boundary)+' b'},uuid(1)))
+      assert.match(candidate,/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     const before=f.epoch();let once=true;
     f.hookBefore(() => {if(once){once=false;f.sqlite.prepare(`INSERT INTO product_slug_history(slug,product_id,created_at,source_record_json) VALUES(?,?,?,'{}')`)
       .run('new-race-title',id(1),NOW);}});

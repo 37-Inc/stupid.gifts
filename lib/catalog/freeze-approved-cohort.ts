@@ -16,6 +16,7 @@ import type { ApprovedCatalogSeal } from '../../scripts/catalog/approved-catalog
 import type { permanentSourceInventory } from './freeze-permanent-catalog.ts';
 import { approvedBaseChangeLimit, exactOwnerBaseTitle, ownerBasePublicDuplicate } from './owner-base-review.ts';
 import type { OwnerBaseCatalogReview } from './owner-base-review.ts';
+import {effectiveSlugApproval} from '../../scripts/catalog/new-product-slug-repair.ts';
 
 type Row = Record<string, unknown>;
 const HASH = /^[a-f0-9]{64}$/;
@@ -103,10 +104,12 @@ async function prepare(db: CatalogD1, owner: MutationOwner, input: ApprovedCohor
   // seal repeatedly; one bounded read avoids an N+1 provider request per change.
   const operationIds = [...new Set(request.approval.changes.map(value => value.operationId))];
   const receipts = new Map((request.ownerBaseReview ? await readOwnerBaseOperationReceipts(db,owner,operationIds) : operationIds.length ? (await db.prepare(`SELECT * FROM catalog_maintenance_operations
-    WHERE operation_id IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(operationIds)).all()).results : [])
+    WHERE operation_id IN (SELECT value FROM json_each(?)) OR (run_id=? AND json_extract(result_json,'$.kind')='new-product-slug-repair-v1')`)
+    .bind(JSON.stringify(operationIds),request.approval.runId).all()).results : [])
     .map(row => [String(row.operation_id), row]));
-  for (const change of request.approval.changes) {
-    const row = full.get(change.publicId)!;
+  for (const original of request.approval.changes) {
+    const row = full.get(original.publicId)!;
+    const change=effectiveSlugApproval(original,[...receipts.values()],row,owner,request);
     const receipt = receipts.get(change.operationId);
     if (row.catalog_revision !== request.approval.catalogRevision || sha256(canonicalJson(row)) !== change.productSha256
       || row.public_display_json !== null && typeof row.public_display_json !== 'string'
