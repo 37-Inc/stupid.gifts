@@ -1,5 +1,14 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — Hydrate a full catalog while its own vector is pending
+
+[owner+codex] Reuse the existing exact pending-vector READ fence for permanent
+inventory hydration too. Previously the narrow row reader accepted its own
+journaled delivery but the following full-inventory read incorrectly demanded
+no pending delivery. Scope/token/epoch/journal and full private hashes still
+verify; mutation fences and publication acceptance remain unchanged. No
+ownership reset, new delivery, supplier call or model generation.
+
 ## 2026-11-02 — Reuse the repaired candidate's captured native embedding (PR332)
 
 [owner+codex] The URL-repaired new gift had a verified saved embedding but no

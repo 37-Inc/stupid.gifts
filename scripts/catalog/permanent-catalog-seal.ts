@@ -1,6 +1,6 @@
 import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
-import {mutationAssertion} from '../../lib/catalog/mutation-fence.ts';
+import {mutationAssertion,pendingVectorReadFence} from '../../lib/catalog/mutation-fence.ts';
 import {encodeBuildRequest} from '../../lib/catalog/build-requests.ts';
 import {encodePublicationIntent} from '../../lib/catalog/publication.ts';
 import {validateCatalogSnapshot,canonicalTime} from '../../lib/catalog/snapshot.ts';
@@ -199,7 +199,8 @@ export async function assertApprovedCatalogInventory(db:CatalogD1,owner:Mutation
     ||!same(revision.nativeHistory,revision.persistent.nativeHistory)
     ||!['freezing','activating'].includes(owner.phase))fail();
   const actual=await readOwnedLogicalRows(db,owner,{phase:owner.phase as 'freezing'|'activating',signal,
-    tables:['products','catalog_maintenance_products','catalog_maintenance_operations']});
+    tables:['products','catalog_maintenance_products','catalog_maintenance_operations'],...(owner.phase==='freezing'?{pendingVector:true as const}:{})});
   if(!same(permanentSourceInventory(permanentSourceRows(actual)),revision.persistent.inventory))fail();
-  await mutationAssertion(db,owner,[owner.phase]).all({signal});
+  const fence=pendingVectorReadFence(owner);
+  await db.prepare(`SELECT json(CASE WHEN ${fence.sql} THEN 'true' ELSE 'mutation_fenced' END)`).bind(...fence.params).all({signal});
 }

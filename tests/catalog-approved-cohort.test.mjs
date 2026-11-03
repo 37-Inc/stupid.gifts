@@ -5,7 +5,8 @@ import { readFile, readdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvedCohortOperationKey, approvedCohortVectorPlan, prepareApprovedCohort, settleApprovedCohort } from '../lib/catalog/freeze-approved-cohort.ts';
-import { claimMutationOwnership, readMutationOwner, releaseMutationOwnership } from '../lib/catalog/mutation-fence.ts';
+import { claimMutationOwnership, readMutationOwner, releaseMutationOwnership,mutationAssertion } from '../lib/catalog/mutation-fence.ts';
+import {permanentSourceRows,permanentSourceInventory} from '../lib/catalog/freeze-permanent-catalog.ts';
 import { createProjectionPacket, projectionQueries, getRevisionProductsByPublicIds } from '../lib/catalog/d1.ts';
 import { validateCatalogSnapshot } from '../lib/catalog/snapshot.ts';
 import { createSealedSnapshotEnvelope, reconstructD1Snapshot } from '../scripts/catalog/export-d1-snapshot.ts';
@@ -57,8 +58,8 @@ async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListi
       // approved display order may accidentally depend on provider row order.
       return{results:query.startsWith('SELECT p.* FROM json_each(?) ids')?results.reverse():results};},
     async run(){return sql.prepare(query).run(...params);},execute(){before?.(query);return sql.prepare(query).all(...params);}};},
-    async batch(statements){sql.exec('BEGIN');try{for(const s of statements)s.execute();sql.exec('COMMIT');}catch(error){sql.exec('ROLLBACK');throw error;}
-      after?.(statements);if(lost?.(statements)){lost=null;throw new Error('PRIVATE lost response');}}};
+    async batch(statements){const results=[];sql.exec('BEGIN');try{for(const s of statements)results.push({results:s.execute().map(r=>({...r}))});sql.exec('COMMIT');}catch(error){sql.exec('ROLLBACK');throw error;}
+      after?.(statements);if(lost?.(statements)){lost=null;throw new Error('PRIVATE lost response');}return results;}};
   sql.prepare('INSERT INTO catalog_mutation_scopes(environment,index_name) VALUES(?,?)').run(scope.environment,scope.indexName);
   const index=new Map();let calls=0;let unknown=false;const sent=[];
   const adapters={...scope,providerIdentity:'test:owned-index',async dispatch(input){calls++;sent.push(structuredClone(input));
@@ -301,6 +302,22 @@ test('body-free full revision hydrates exact pending vector journal only; wrong 
     publicId:uuid(2),original:f.originals.get(uuid(2)),adapters:f.adapters});
   assert.equal(first.state,'pending');const sent=f.calls();
   assert.deepEqual(await hydrateApprovedRevision(f.db,first.owner,JSON.parse(JSON.stringify(control))),prepared.revision);
+  const rows=Object.fromEntries(['products','catalog_maintenance_products','catalog_maintenance_operations'].map(table=>[table,
+    f.sql.prepare(`SELECT * FROM ${table}`).all().map(r=>({...r}))]));
+  const persistent={...prepared.revision,nativeHistory:[],persistent:{generation:first.owner.generation,
+    inventory:permanentSourceInventory(permanentSourceRows(rows)),nativeHistory:[]}};
+  const persistentControl=approvedRevisionControl(persistent);
+  assert.deepEqual(await hydrateApprovedRevision(f.db,first.owner,persistentControl),persistent);
+  // Only readback gains the existing pending-journal fence, never writes.
+  await assert.rejects(mutationAssertion(f.db,first.owner,['freezing']).all());
+  const privateState=f.sql.prepare('SELECT semantic_json FROM catalog_maintenance_products WHERE product_id=?').get(id(3));
+  f.sql.prepare("UPDATE catalog_maintenance_products SET semantic_json='{}' WHERE product_id=?").run(id(3));
+  await assert.rejects(hydrateApprovedRevision(f.db,first.owner,persistentControl));
+  f.sql.prepare('UPDATE catalog_maintenance_products SET semantic_json=? WHERE product_id=?').run(privateState.semantic_json,id(3));
+  const journal=f.sql.prepare("SELECT delivery_id,dispatch_token FROM catalog_vector_deliveries WHERE status='pending' AND dispatch_token IS NOT NULL").get();
+  f.sql.prepare('UPDATE catalog_vector_deliveries SET dispatch_token=NULL WHERE delivery_id=?').run(journal.delivery_id);
+  await assert.rejects(hydrateApprovedRevision(f.db,first.owner,persistentControl));
+  f.sql.prepare('UPDATE catalog_vector_deliveries SET dispatch_token=? WHERE delivery_id=?').run(journal.dispatch_token,journal.delivery_id);
   await assert.rejects(hydrateApprovedRevision(f.db,{...first.owner,token:'foreign-token'},control));
   await assert.rejects(hydrateApprovedRevision(f.db,first.owner,{...control,sourceRowsSha256:'0'.repeat(64)}));
   f.sql.prepare("UPDATE products SET rights_json='{}' WHERE public_id=?").run(uuid(3));
