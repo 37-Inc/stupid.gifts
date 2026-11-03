@@ -53,9 +53,10 @@ export function createStaticRoutes(
   showInputs?: unknown[],
   identity: OgIdentity = siteIdentity,
   releaseGeneratedAt = sealedSnapshot.generatedAt,
+  homepageEdition?: unknown,
 ): Record<string, CatalogAssetRoute & { indexable: boolean }> {
   const snapshot = catalogDisplayView(sealedSnapshot), photos = createPhotoRelease(sealedSnapshot);
-  const browse = createBrowseRelease(snapshot, releaseGeneratedAt);
+  const browse = createBrowseRelease(snapshot, releaseGeneratedAt, homepageEdition);
   const nextExpiry = earliest(
     snapshot.products.map((product) => product.eligibleUntil),
   );

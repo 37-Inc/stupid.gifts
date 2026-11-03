@@ -1,5 +1,17 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-03 — Editorial homepage editions in existing daily care
+
+[owner+codex] Replace the69-product title/category allowlist and fixed24-favorite
+rotation with an ID-only editorial edition. The existing Codex task reviews
+actual photos/copy from accepted new arrivals, previous highlights and a fair
+whole-catalog sweep; it chooses six weekly highlights and eighteen discoveries.
+Normal preparation pins that choice into publication/build/manifest inputs.
+Missing or invalid optional curation reuses the last good edition without
+blocking a valid catalog update. No new schedule, supplier batch, model API,
+per-visitor database work, catalog deletion or provider-plan change. Existing
+related-gift and refresh selection behavior is preserved.
+
 ## 2026-11-03 — Automatic semantic projection for new gifts
 
 [owner+codex] Keep the authoritative1536-dimensional native index and its

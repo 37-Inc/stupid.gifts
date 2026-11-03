@@ -1,3 +1,4 @@
+import type { HomepageEdition } from './homepage-edition.ts';
 import type { Product } from '../types.ts';
 import type { SemanticCatalog } from './semantic-profile.ts';
 
@@ -59,6 +60,7 @@ export interface CatalogAssetRoute {
   retainedUntil?: string;
 }
 export interface SiteAssetManifest extends CatalogReleaseManifest {
+  homepage?: HomepageEdition;
   /** Optional compiled proof, hash-bound by this release manifest; not supplier expiry. */
   semanticCatalog?: SemanticCatalog;
   dataKind: CatalogSnapshot['dataKind'];

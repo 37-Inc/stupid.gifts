@@ -44,7 +44,7 @@ function assets(input) {
   files.set("/safe/asset.txt", encode("Reload to use the current release."));
   for (const suffix of [".txt", "/__next._full.txt", "/__next._tree.txt", "/__next.safe.product.__PAGE__.txt"])
     files.set(`/safe/product${suffix}`, encode("owned safe RSC"));
-  for (const shard of createBrowseRelease(input).shards) files.set(shard.path, encode(shard.payload));
+  for (const shard of createBrowseRelease(input, at).shards) files.set(shard.path, encode(shard.payload));
   for (const ogPath of createOgRelease(input, siteIdentityFor("preview")).byPath.keys()) files.set(ogPath, encode("owned PNG proof"));
   files.set(`/_next/static/chunks/${input.catalogRevision}.js`, encode('console.log("owned UI")'));
   files.set(`/_next/static/chunks/app/[slug]/${input.catalogRevision}.js`, encode('console.log("owned dynamic UI")'));
@@ -228,7 +228,7 @@ test("sealed current inventory recomputes exact two-release files/policy and can
   verifyRetainedAssets(second, next.assets, next.manifest, ctx, prior);
   assert.equal(next.manifest.retention.priorManifestSha256, prior.manifestSha256);
   assert.deepEqual(next.manifest.retention.currentAssetPaths, [...assets(second).keys()].sort());
-  const oldPath = createBrowseRelease(snapshot("first")).random.poolPath;
+  const oldPath = createBrowseRelease(snapshot("first"), at).random.poolPath;
   assert.deepEqual(next.assets.get(oldPath), prior.assets.get(oldPath));
   for (const change of [
     (m) => { m.retention = null; },
@@ -268,7 +268,7 @@ test("old clients can navigate shards/owned chunks, but Worker expiry/cache/noin
     return new Response(bytes, { status: bytes ? 200 : 404, headers: { "Cache-Control": "public, max-age=31536000, immutable" } });
   } } };
   const request = (p) => worker.fetch(new Request(`https://example.test${p}`), env);
-  let cursor = createBrowseRelease(first).feed.next, count = 0;
+  let cursor = createBrowseRelease(first, at).feed.next, count = 0;
   while (cursor) {
     const response = await request(cursor), body = await response.json();
     assert.equal(response.status, 200);
@@ -277,8 +277,8 @@ test("old clients can navigate shards/owned chunks, but Worker expiry/cache/noin
     assert.equal(body.catalogRevision, first.catalogRevision);
     count += body.products.length; cursor = body.next;
   }
-  assert.equal(count, first.products.length - createBrowseRelease(first).opening.length - createBrowseRelease(first).feed.initial.length);
-  const oldPath = createBrowseRelease(first).random.poolPath;
+  assert.equal(count, first.products.length - createBrowseRelease(first, at).opening.length - createBrowseRelease(first, at).feed.initial.length);
+  const oldPath = createBrowseRelease(first, at).random.poolPath;
   clock += 15 * 60000 - 1000;
   assert.match((await request(oldPath)).headers.get("Cache-Control"), /max-age=1,/);
   clock += 1000;
@@ -354,12 +354,12 @@ test("actual two-release builder/verifier retains guarded bytes and rejects rese
     const marker = "/_next/static/stale-not-in-prior.js";
     await fs.writeFile(path.join(root, "static-site/out", marker), "stale build marker");
     const secondSnapshot = snapshot("actual-second");
-    const heldCard = createBrowseRelease(firstSnapshot).shards[0].payload.products[0];
+    const heldCard = createBrowseRelease(firstSnapshot, first.ctx.generatedAt).shards[0].payload.products[0];
     secondSnapshot.products = secondSnapshot.products.filter((p) => p.id !== heldCard.id);
     const next = await build(secondSnapshot, { ...first, directory });
     assert.equal(next.manifest.retention.currentAssetPaths.includes(marker), false);
     await assert.rejects(fs.access(path.join(root, "static-site/out", marker)));
-    const oldShards = createBrowseRelease(firstSnapshot).shards;
+    const oldShards = createBrowseRelease(firstSnapshot, first.ctx.generatedAt).shards;
     const ready = oldShards.find((s) => next.manifest.routes[s.path].state === "ready");
     const held = oldShards.find((s) => next.manifest.routes[s.path].state === "held");
     assert.ok(ready); assert.ok(held);
