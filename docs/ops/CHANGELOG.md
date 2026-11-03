@@ -1,5 +1,13 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — Reuse the repaired candidate's captured native embedding
+
+[owner+codex] The URL-repaired new gift had a verified saved embedding but no
+earlier public upsert, correctly. The sealed same-owner repair now supplies
+those exact native bytes through the normal owned delivery journal, bound to
+the repaired row and full captured private-state hash. No invented outbox
+completion, regenerated vector, supplier call or bypass for ordinary changes.
+
 ## 2026-11-02 — Preserve the real observation/save distinction in URL repair
 
 [owner+codex] Correct a recovery-only check that wrongly required the earlier

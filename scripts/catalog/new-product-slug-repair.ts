@@ -1,10 +1,12 @@
 import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
 import {mutationAssertion,mutationAdvance} from '../../lib/catalog/mutation-fence.ts';
-import type {ApprovedChange,ApprovedCohortRequest} from '../../lib/catalog/freeze-approved-cohort.ts';
+import type {ApprovedChange,ApprovedCohortRequest,ApprovedCohortRevision} from '../../lib/catalog/freeze-approved-cohort.ts';
 import {maintenanceEmbeddingText,maintenanceProjection,maintenanceState,explicitMaintenanceTime,MAINTENANCE_SLUG_TRIGGER as SLUG_TRIGGER} from './maintenance-state.ts';
 import {canonicalJson,sha256} from './migration.ts';
 import {createHash} from 'node:crypto';
+import {decodePgvectorSendBase64} from './pgvector-binary.ts';
+import type {OriginalVector} from './owned-vector-delivery.ts';
 
 type Row=Record<string,unknown>;
 const KIND='new-product-slug-repair-v1';
@@ -12,6 +14,15 @@ const hash=(value:unknown)=>sha256(canonicalJson(value));
 const same=(a:unknown,b:unknown)=>canonicalJson(a)===canonicalJson(b);
 const slug=(v:unknown)=>typeof v==='string'&&/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v);
 function fail():never{throw Error('new_product_slug_repair_refused');}
+function verifiedNative(row:Row,state:Row){
+  if(state.product_id!==row.id||state.embedding_present!==1||typeof state.embedding_native_base64!=='string')fail();
+  const product=maintenanceState({...row,maintenance_semantic:state.semantic_json});
+  const proof=JSON.parse(String(state.embedding_provenance_json)),text=maintenanceEmbeddingText(product);
+  if(proof.input!=='verified'||proof.model!=='text-embedding-3-small'||proof.text!==text||proof.embeddingTextHash!==sha256(text)
+    ||row.embedding_text_hash!==proof.embeddingTextHash||proof.sourceFactsHash!==row.source_facts_hash
+    ||proof.vectorBytesSha256!==createHash('sha256').update(Buffer.from(state.embedding_native_base64,'base64')).digest('hex'))fail();
+  return{product,proof,values:decodePgvectorSendBase64(state.embedding_native_base64)};
+}
 /** Only the truncation defect in a newly admitted, never-published identity.
  * Reuse its exact reviewed copy, grants, observation and native input. */
 export function planNewProductSlugRepair(input:{row:Row;state:Row;operation:Row;change:ApprovedChange;
@@ -26,11 +37,7 @@ export function planNewProductSlugRepair(input:{row:Row;state:Row;operation:Row;
     ||operation.environment!==owner.environment||operation.index_name!==owner.indexName||Number(operation.generation)>=owner.generation
     ||!JSON.parse(String(operation.changes_json)).some((c:Row)=>c.productId===row.id&&c.afterSha256===change.productSha256)
     ||state.product_id!==row.id||state.embedding_present!==1||typeof state.embedding_native_base64!=='string')fail();
-  const product=maintenanceState({...row,maintenance_semantic:state.semantic_json});
-  const proof=JSON.parse(String(state.embedding_provenance_json)),text=maintenanceEmbeddingText(product);
-  if(proof.input!=='verified'||proof.model!=='text-embedding-3-small'||proof.text!==text||proof.embeddingTextHash!==sha256(text)
-    ||row.embedding_text_hash!==proof.embeddingTextHash||proof.sourceFactsHash!==row.source_facts_hash
-    ||proof.vectorBytesSha256!==createHash('sha256').update(Buffer.from(state.embedding_native_base64,'base64')).digest('hex'))fail();
+  const {product}=verifiedNative(row,state);
   const provenance=JSON.parse(String(row.timestamp_provenance_json));
   const evidence=provenance.fields?.availability_checked_at;
   if(evidence?.state!=='evidenced'||evidence.basis!=='maintenance_operation'||evidence.sourceFactsHash!==row.source_facts_hash
@@ -122,4 +129,20 @@ export async function repairApprovedNewSlugs(db:CatalogD1,owner:MutationOwner,re
     owner=await applyNewProductSlugRepair(db,planNewProductSlugRepair({row,state:states[0],operation:ops[0],change,request,owner,now}));
   }
   return owner;
+}
+/** This candidate had no upsert while its URL was invalid. Its existing native
+ * bytes may enter ONLY through the exact repaired row and sealed private state;
+ * never synthesize an old outbox success or generate another embedding. */
+export async function repairedSlugOriginalVector(db:CatalogD1,owner:MutationOwner,revision:ApprovedCohortRevision,
+  change:ApprovedChange,row:Row):Promise<OriginalVector>{
+  const operations=(await db.prepare(`SELECT * FROM catalog_maintenance_operations WHERE run_id=?
+    AND json_extract(result_json,'$.kind')='new-product-slug-repair-v1'`).bind(revision.request.approval.runId).all()).results;
+  const effective=effectiveSlugApproval(change,operations,row,owner,revision.request);
+  if(effective.operationId===change.operationId)fail();
+  const states=(await db.prepare('SELECT * FROM catalog_maintenance_products WHERE product_id=?').bind(row.id).all()).results;
+  const captured=revision.persistent?.inventory.find(p=>p.publicId===change.publicId),state=states[0];
+  if(states.length!==1||hash(state)!==captured?.privateStateSha256)fail();
+  const {proof,values}=verifiedNative(row,state);
+  return{publicId:change.publicId,catalogRevision:revision.snapshot.catalogRevision,sourceFactsHash:String(row.source_facts_hash),
+    embeddingTextHash:proof.embeddingTextHash,vectorBytesSha256:proof.vectorBytesSha256,values};
 }
