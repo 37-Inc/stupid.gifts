@@ -2,7 +2,7 @@ import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
 import {mutationAssertion,mutationAdvance} from '../../lib/catalog/mutation-fence.ts';
 import type {ApprovedChange,ApprovedCohortRequest} from '../../lib/catalog/freeze-approved-cohort.ts';
-import {maintenanceEmbeddingText,maintenanceProjection,maintenanceState,MAINTENANCE_SLUG_TRIGGER as SLUG_TRIGGER} from './maintenance-state.ts';
+import {maintenanceEmbeddingText,maintenanceProjection,maintenanceState,explicitMaintenanceTime,MAINTENANCE_SLUG_TRIGGER as SLUG_TRIGGER} from './maintenance-state.ts';
 import {canonicalJson,sha256} from './migration.ts';
 import {createHash} from 'node:crypto';
 
@@ -34,7 +34,7 @@ export function planNewProductSlugRepair(input:{row:Row;state:Row;operation:Row;
   const provenance=JSON.parse(String(row.timestamp_provenance_json));
   const evidence=provenance.fields?.availability_checked_at;
   if(evidence?.state!=='evidenced'||evidence.basis!=='maintenance_operation'||evidence.sourceFactsHash!==row.source_facts_hash
-    ||evidence.observedAt!==row.availability_checked_at)fail();
+    ||Date.parse(explicitMaintenanceTime(evidence.observedAt))>Date.parse(explicitMaintenanceTime(row.availability_checked_at)))fail();
   const fixed={...product,slug:nextSlug},projection=maintenanceProjection(fixed,JSON.parse(String(row.rights_json)),
     String(row.catalog_revision),input.now,true,String(evidence.observedAt),undefined,true);
   if(!projection.row.public_display_json||!projection.persistentBase||projection.row.rights_json!==row.rights_json)fail();

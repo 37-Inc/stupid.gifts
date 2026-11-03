@@ -1,5 +1,12 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-02 — Preserve the real observation/save distinction in URL repair
+
+[owner+codex] Correct a recovery-only check that wrongly required the earlier
+supplier observation to equal the later database save. Accept evidenced UTC
+observations at or before that save, including original microseconds, and reuse
+their exact original time/deadline. No new observation or provider batch.
+
 ## 2026-11-02 — Repair unpublished discovery URLs without repeating paid work
 
 [owner+codex] Trim truncated slugs after their length limit. One captured new
