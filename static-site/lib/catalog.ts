@@ -25,5 +25,5 @@ const releaseContext = process.env.CATALOG_RELEASE_CONTEXT_PATH
   ? JSON.parse(fs.readFileSync(path.resolve(process.env.CATALOG_RELEASE_CONTEXT_PATH), "utf8"))
   : null;
 export const releaseGeneratedAt: string = releaseContext?.generatedAt ?? catalog.generatedAt;
-export const browse = createBrowseRelease(catalog, releaseGeneratedAt);
+export const browse = createBrowseRelease(catalog, releaseGeneratedAt, releaseContext?.homepage);
 export const relatedGifts = createRelatedGiftSelector(rankedBrowseProducts(catalog));

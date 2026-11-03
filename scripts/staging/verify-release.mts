@@ -1,3 +1,4 @@
+import { readHomepageEdition } from '../../lib/catalog/homepage-edition.ts';
 import { createHash } from 'node:crypto';
 import { verifySemanticCatalogIdentities } from '../../lib/catalog/semantic-profile.ts';
 import { execFileSync } from 'node:child_process';
@@ -25,7 +26,8 @@ export function verifyFeedPlan(snapshot: CatalogSnapshot, digest: string, plan: 
 export function verifyReleaseContext(value: unknown, manifest: SiteAssetManifest, snapshot: CatalogSnapshot, codeSha: string, now = new Date()) {
   const context = validateBuildContext(value, snapshot, codeSha, manifest.catalogSnapshotSha256, now);
   if (Object.entries(context).some(([key, field]) => key === 'retainedManifestSha256'
-    ? (manifest.retention?.priorManifestSha256 ?? null) !== field : manifest[key as keyof SiteAssetManifest] !== field))
+    ? (manifest.retention?.priorManifestSha256 ?? null) !== field : key === 'homepage' ? JSON.stringify(readHomepageEdition(manifest.homepage)) !== JSON.stringify(field)
+      : manifest[key as keyof SiteAssetManifest] !== field))
     throw new Error('Release context changed after the release was built');
   return context;
 }

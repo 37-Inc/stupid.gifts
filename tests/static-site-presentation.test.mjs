@@ -57,7 +57,7 @@ test("the curated opening is an explicit diverse batch, without dropping any sou
     assert.ok(homepage.cardTitles[id]?.length < 76);
     assert.ok(homepage.descriptions[id]);
   }
-  assert.ok(Object.keys(homepage.cardNotes).length < homepage.featuredIds.length);
+  for (const note of Object.values(homepage.cardNotes)) assert.ok(note.trim());
   assert.equal(JSON.stringify(snapshot), before);
 });
 

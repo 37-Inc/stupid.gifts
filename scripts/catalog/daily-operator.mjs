@@ -4,6 +4,8 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 import {homedir} from 'node:os';
+import {readHomepageEdition} from '../../lib/catalog/homepage-edition.ts';
+import defaultEdition from '../../content/homepage-edition.json' with {type:'json'};
 import homepage from '../../content/homepage.json' with {type:'json'};
 import path from 'node:path';
 
@@ -155,9 +157,10 @@ async function prepare(directory,calendar){
   const inputs={previous:{path:prior.control.path,sha256:prior.control.sha256,observedAt:now}};
   for(const [name,value]of Object.entries({context,rights:{rightsById:{}}})){const file=directory+'/'+name+'.json';inputs[name]={path:file,sha256:await put(file,value),observedAt:now};}
   const key=service=>({service:'goose.gifts.'+service,account:'goose.gifts'}),runId='daily-'+calendar.day+'-'+SOURCE.slice(0,8)+'-'+digest(path.basename(directory)).slice(0,8);
+  const homepageEdition=await routineHomepageEdition(calendar.day,prior.control.path);
   const semanticSearch=routineSearchPolicy(await optional(CARE+'/semantic-search.json'));
   const config=validateCloudflareWeeklyConfig({schemaVersion:1,runId,catalogRevision:runId,codeSha:SOURCE,environment:SCOPE.environment,accountId:SCOPE.accountId,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},vectorIndex:{name:SCOPE.indexName,dimensions:1536,metric:'cosine'},catalog:{associateTag:'goose-gifts-37-20',marketplace:'www.amazon.com'},backfillLimit:0,cadence:{day:calendar.day,featuredIds:homepage.featuredIds,runKey:runId},credentials:{cloudflare:{type:'wrangler_oauth'},amazonId:key('AMAZON_CREATORS_CREDENTIAL_ID'),amazonSecret:key('AMAZON_CREATORS_CREDENTIAL_SECRET'),amazonVersion:'3.1',...(calendar.monday?{openai:key('OPENAI_API_KEY')}:{})},limits,retention:{reviewReference:'owner/2026-11-02/per-run-catalog-bounds',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint'].map(k=>[k,{maxAgeMs:86400000,notAfter}]))},inputs,
-    publication:{schemaVersion:1,environment:SCOPE.environment,accountId:SCOPE.accountId,workerName:SCOPE.workerName,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},indexName:SCOPE.indexName,codeSha:SOURCE,sourceMode:'stupid-production',sourceRoot:ROOT,releaseId:runId,identityOrigin:'https://stupid.gifts',compatibilityDate:'2026-10-19',prior:{directory:null,releaseId:seal.publication.releaseId,manifestSha256:prior.manifestSha256,versionReference:prior.versionReference},servingPrior,semanticSearch,publicAnalytics:{enabled:true,posthogHost:'https://us.i.posthog.com',posthogKey:'phc_ATVKSPwDYTRfX9qDtDVLzZuXQcNdV9d55SjC8bHtuU8w'}}});
+    publication:{schemaVersion:1,environment:SCOPE.environment,accountId:SCOPE.accountId,workerName:SCOPE.workerName,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},indexName:SCOPE.indexName,codeSha:SOURCE,sourceMode:'stupid-production',sourceRoot:ROOT,releaseId:runId,identityOrigin:'https://stupid.gifts',compatibilityDate:'2026-10-19',prior:{directory:null,releaseId:seal.publication.releaseId,manifestSha256:prior.manifestSha256,versionReference:prior.versionReference},servingPrior,semanticSearch,homepage:homepageEdition,publicAnalytics:{enabled:true,posthogHost:'https://us.i.posthog.com',posthogKey:'phc_ATVKSPwDYTRfX9qDtDVLzZuXQcNdV9d55SjC8bHtuU8w'}}});
   const configPath=directory+'/config.json',configSha256=await put(configPath,config),record={source:SOURCE,helperSha256:self,configPath,configSha256,runId,capacity};await put(directory+'/operator.json',record);return record;
 }
 async function review(entry,config,directory){
@@ -182,12 +185,21 @@ async function review(entry,config,directory){
     console.log(JSON.stringify({state:'requires_agent_review',proposalPath,proposalSha256,summary,budget:await w.budget()}));
   }finally{await w.close();}
 }
+export async function routineHomepageEdition(day,priorControl,read=optional){
+  for(const file of [CARE+'/homepage/'+day+'.json',path.dirname(priorControl)+'/homepage-edition.json']){
+    try{const edition=readHomepageEdition(await read(file));
+      if(edition&&(!file.endsWith('/'+day+'.json')||edition.day===day))return edition;
+    }catch{/* Optional editorial input must not strand maintenance. */}
+  }
+  return readHomepageEdition(defaultEdition);
+}
 export async function remember(result,entry,config,directory){
   if(result.state!=='finalized'||!result.catalogSeal)return;
   const w=await openRunWorkspace(entry.workspace);
   try{const cp=await w.readCheckpoint({controlOnly:true});if(cp?.checkpoint.phase!=='finalized'||cp.checkpoint.owner!==null)refuse('final_state');const control=cp.checkpoint.control.publication;
   if(control.stage!=='published'||!control.intent||control.intent.releaseId!==config.publication.releaseId||!control.versionReference)refuse('final_identity');
   const file=directory+'/catalog-control.json',hash=await put(file,result.catalogSeal),next={control:{path:file,sha256:hash},versionReference:control.versionReference,manifestSha256:control.intent.manifestSha256};
+  if(config.publication.homepage)await put(directory+'/homepage-edition.json',config.publication.homepage);
   await put(directory+'/success.json',{next,result:weeklyCommandSummary(result),source:config.codeSha,operatorSource:SOURCE,helperSha256:self});
   const pointer=CARE+'/last-success.json',old=await optional(pointer);
   if(old&&old.control.sha256!==config.inputs.previous.sha256&&old.control.sha256!==hash)refuse('successor_pointer_changed');

@@ -9,7 +9,13 @@ latest protected receipt take precedence over historical journal entries.
 Read the actual public release identity AND protected
 `daily-catalog-care/last-success.json` for the current accepted catalog. The
 dated receipts below are historical evidence, not an instruction to overwrite
-a newer release. The November2 fresh-topic discovery is COMPLETE: release
+a newer release. November3's scheduled normal run is accepted as
+`daily-2026-11-03-785c60d6-b8b76815`: 3388 identities,3355 public/33 excluded,
+40 optional articles, genuine D1 receipt8898b4ba and idle43/698. Its cost/storage
+observation is complete in `.4.8`; never repeat the batch to measure it again.
+The new homepage editor changes presentation only; see `HOMEPAGE_EDITOR.md`.
+
+Historical November2 fresh-topic discovery is COMPLETE: release
 `daily-2026-11-02-4a32e930-e0a20859`, snapshot56853576, genuine D1 receipt330dbf98,
 resolved build, idle40/681 and accepted successor. All3388 identities remain,
 3355 public/33 excluded and41 optional articles. Never replay that run, its
@@ -111,8 +117,8 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-semantic-delta/stupid.gifts`
-after its source/release acceptance is recorded in `.4.18`. Until then use
+`/Users/cameronehrlich/.codex/worktrees/stupid-homepage-editor/stupid.gifts`
+after its source/release acceptance is recorded in `.11`. Until then use
 the latest accepted operator recorded in the existing task, never an unmerged
 branch or a checkout with an active build/run.
 The old `stupid-catalog-care` checkout remains frozen for original source
@@ -145,8 +151,11 @@ it does not increase the normal30k ceiling or tomorrow's supplier allowance.
   bylines. Amazon tag: `goose-gifts-37-20`. Never fabricate prices/availability.
 - Every home/search/guide card shows image, title and short description. Preserve
   the white gallery,24-item batches, factual short names and original detail
-  disclosures. Six weekly anchors plus eighteen daily qualified rediscoveries
-  rotate at successful publication, not midnight or each visitor.
+  disclosures. The existing Codex job chooses six weekly highlights and eighteen daily
+  discoveries from actual product photos and copy. There is no homepage keyword
+  or category gate. Editions rotate at publication, not each visitor. Follow
+  `docs/ops/HOMEPAGE_EDITOR.md`; failed optional curation reuses the last good
+  edition rather than blocking catalog care.
 - Directory `/gifts` and Weird Gift Index stay404; individual `/gifts/[slug]`
   pages remain canonical. The unlisted `/h` rehearsal stays noindex and keeps
   its separate opening assortment and seven approved reveal products.
@@ -197,6 +206,15 @@ or pending publication. Never fetch a replacement batch. A reporting-only
 throttle after an accepted release does not invalidate that release.
 
 ## Commands
+
+Before preparation, the SAME task performs the bounded visual editorial step
+in `HOMEPAGE_EDITOR.md` using `catalog:homepage preview` and `select`. This is
+Codex editorial work using existing context/tools, not a second product-model
+API call or supplier batch. It reads accepted public data only (about10k D1
+reads in the measured114/96-candidate briefs) and saves ID-only choices. Current
+Monday admissions enter this pool only after acceptance, for the next edition.
+If it fails, continue with normal care and last-good curation. Do not change an
+already-prepared run's edition/config.
 
 Use Node22, the exact maintained checkout above, and a scrubbed environment:
 

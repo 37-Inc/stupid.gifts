@@ -1,3 +1,5 @@
+import { readHomepageEdition } from '../../lib/catalog/homepage-edition.ts';
+import type { HomepageEdition } from '../../lib/catalog/homepage-edition.ts';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -16,14 +18,14 @@ import { canonicalJson } from '../../lib/catalog/canonical-json.ts';
 import { verifySemanticCatalogIdentities } from '../../lib/catalog/semantic-profile.ts';
 
 export type ReleaseBuildContext = Pick<SiteAssetManifest, 'schemaVersion' | 'releaseId' | 'codeSha' | 'catalogRevision'
-  | 'catalogSnapshotSha256' | 'generatedAt' | 'vectorSyncWatermark' | 'priorReleaseId' | 'sourceMode'> & { retainedManifestSha256: string | null };
+  | 'catalogSnapshotSha256' | 'generatedAt' | 'vectorSyncWatermark' | 'priorReleaseId' | 'sourceMode'> & { retainedManifestSha256: string | null; homepage?: HomepageEdition };
 /** Explicit reviewed context; zero/null are valid only when actually supplied.
  * Build retries must reuse the sealed package, not overwrite an existing release ID.
  */
 export function validateBuildContext(value: unknown, snapshot: CatalogSnapshot, codeSha: string, snapshotDigest: string, now = new Date()): ReleaseBuildContext {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Explicit release build context is required');
   const input = value as ReleaseBuildContext;
-  if (Object.keys(input).sort().join(',') !== 'catalogRevision,catalogSnapshotSha256,codeSha,generatedAt,priorReleaseId,releaseId,retainedManifestSha256,schemaVersion,sourceMode,vectorSyncWatermark'
+  if (Object.keys(input).sort().join(',') !== `catalogRevision,catalogSnapshotSha256,codeSha,generatedAt,${Object.hasOwn(input, 'homepage') ? 'homepage,' : ''}priorReleaseId,releaseId,retainedManifestSha256,schemaVersion,sourceMode,vectorSyncWatermark`
     || input.schemaVersion !== 1 || typeof input.releaseId !== 'string' || !/^[a-zA-Z0-9._-]{1,200}$/.test(input.releaseId)
     || !/^[a-f0-9]{40}$/.test(input.codeSha) || input.codeSha !== codeSha || input.catalogRevision !== snapshot.catalogRevision
     || !/^[a-f0-9]{64}$/.test(input.catalogSnapshotSha256) || input.catalogSnapshotSha256 !== snapshotDigest
@@ -32,13 +34,15 @@ export function validateBuildContext(value: unknown, snapshot: CatalogSnapshot, 
     || input.priorReleaseId === input.releaseId
     || input.retainedManifestSha256 !== null && (typeof input.retainedManifestSha256 !== 'string'
       || !/^[a-f0-9]{64}$/.test(input.retainedManifestSha256) || input.priorReleaseId === null)) throw new Error('Release build context is malformed or incompatible');
+  if (Object.hasOwn(input, 'homepage') && !readHomepageEdition(input.homepage)) throw new Error('Invalid homepage edition');
   const generated = Date.parse(canonicalTime(input.generatedAt));
   resolveSiteSourceMode(input.sourceMode);
   if (!Number.isFinite(now.getTime()) || generated < Date.parse(snapshot.generatedAt) || generated > now.getTime()) throw new Error('Release build context has an invalid capture time');
   return { schemaVersion: 1, sourceMode: input.sourceMode, releaseId: input.releaseId, codeSha: input.codeSha, catalogRevision: input.catalogRevision,
     catalogSnapshotSha256: input.catalogSnapshotSha256, generatedAt: input.generatedAt,
     vectorSyncWatermark: input.vectorSyncWatermark, priorReleaseId: input.priorReleaseId,
-    retainedManifestSha256: input.retainedManifestSha256 };
+    retainedManifestSha256: input.retainedManifestSha256,
+    ...(input.homepage ? { homepage: readHomepageEdition(input.homepage)! } : {}) };
 }
 
 export function siteIdentityBytes(sourceMode: ReleaseBuildContext['sourceMode']): string {
@@ -114,7 +118,7 @@ export async function buildStaticRelease(root: string) {
   // Validate Next's complete export before selecting this native-anchor site's
   // document output. HTML includes its own hydration payload; standalone Flight
   // navigation files are deliberately not published. Safe/legal text remains.
-  const navigationRoutes = createStaticRoutes(snapshot, [...currentAssets.keys()], undefined, siteIdentityFor(context.sourceMode), context.generatedAt);
+  const navigationRoutes = createStaticRoutes(snapshot, [...currentAssets.keys()], undefined, siteIdentityFor(context.sourceMode), context.generatedAt, context.homepage);
   const assembled = assembleReleaseAssets(snapshot, documentAssets(currentAssets, navigationRoutes), context, priorPackage);
   // Only generated outputs in this build are removed, never historical packages.
   for (const name of currentAssets.keys()) if (!assembled.assets.has(name))
