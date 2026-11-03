@@ -13,6 +13,15 @@ once daily, with Monday discovery. An explicitly requested additional run uses
 `--run <unique-label>` consistently for prepare/start/review/publish/status.
 Do not reset or delete historical day/week reservations or any charged usage.
 
+An approved new identity whose120-character URL ends in a hyphen can be
+repaired once under its SAME freezing owner. This is not an existing-page
+rename: preserve the original unused URL in history, archive/copy/native
+proof and original approval; append the exact repaired-row receipt. The
+atomic transaction restores the original slug trigger before committing.
+The provider phases do not repeat. Runtime/config remain pinned; a reviewed
+newer operator may resume the original repository binding to finish this
+specific repair. All normal request/row limits and deadlines still apply.
+
 Latest November2 acceptance: `daily-2026-11-02-564a2960` serves source564a296,
 snapshot`d0048850c3bf6964c01d2798b13b16afa8ad0d07354fdadce6d322f29641adf0`.
 All3352 public listings/41 articles remain;3385 identities include two new

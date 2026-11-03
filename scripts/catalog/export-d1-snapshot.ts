@@ -326,14 +326,19 @@ function approvedRevisionReadFence(owner:MutationOwner):MutationQuery{
       canonicalJson({...owner,epoch:owner.epoch-1})]};
 }
 export async function readApprovedRevisionSource(db:CatalogD1,owner:MutationOwner,ids:string[],
-  changes:Array<{publicId:string;operationId:string}>,ownerBaseReview?:OwnerBaseCatalogReview){
+  changes:Array<{publicId:string;operationId:string}>,ownerBaseReview?:OwnerBaseCatalogReview,
+  approvalContext?:Pick<import('../../lib/catalog/freeze-approved-cohort.ts').ApprovedCohortRequest,'approval'|'previous'>){
   const fence=approvedRevisionReadFence(owner),current=await captureCurrentRows(db,owner,[...ids].sort(),fence);
   const approved=await readApprovedCurrentRows(db,changes.map(c=>c.publicId),owner,true,undefined,ownerBaseReview);
   const operations=ownerBaseReview?await readOwnerBaseOperationReceipts(db,owner,changes.map(c=>c.operationId),true):changes.length?(await db.prepare(`SELECT * FROM catalog_maintenance_operations
-    WHERE operation_id IN(SELECT value FROM json_each(?)) AND ${fence.sql}`)
-    .bind(JSON.stringify(changes.map(c=>c.operationId)),...fence.params).all<Row>()).results:[];
+    WHERE (operation_id IN(SELECT value FROM json_each(?)) OR (run_id=? AND json_extract(result_json,'$.kind')='new-product-slug-repair-v1')) AND ${fence.sql}`)
+    .bind(JSON.stringify(changes.map(c=>c.operationId)),approvalContext?.approval.runId??'',...fence.params).all<Row>()).results:[];
   const byOp=new Map(operations.map(r=>[r.operation_id,r])),byId=new Map(current.map(r=>[String(r.public_id),r]));
-  for(const row of approved.current){const change=changes.find(c=>c.publicId===row.public_id)!,op=byOp.get(change.operationId);
+  const {effectiveSlugApproval}=await import('./new-product-slug-repair.ts');
+  for(const row of approved.current){const original=changes.find(c=>c.publicId===row.public_id)!;
+    const change=approvalContext?effectiveSlugApproval(approvalContext.approval.changes.find(c=>c.publicId===row.public_id)!,operations,
+      approved.rows.find(r=>r.public_id===row.public_id)!,owner,approvalContext):original;
+    const op=byOp.get(change.operationId);
     if(!op)throw new Error('approved_identity_missing');row.approval_operation_json=canonicalJson(op);byId.set(String(row.public_id),row);}
   const rows=[...byId.values()].sort((a,b)=>String(a.public_id).localeCompare(String(b.public_id)));
   if(rows.length!==ids.length)throw new Error('approved_identity_missing');

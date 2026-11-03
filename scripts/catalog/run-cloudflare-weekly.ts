@@ -31,6 +31,7 @@ import { approvedCohortOperationKey, approvedCohortVectorPlan } from '../../lib/
 import type { ApprovedCohortRequest, ApprovedCohortRevision } from '../../lib/catalog/freeze-approved-cohort.ts';
 import type { CatalogD1 } from '../../lib/catalog/storage/d1.ts';
 import { canonicalTime } from '../../lib/catalog/snapshot.ts';
+import {repairApprovedNewSlugs} from './new-product-slug-repair.ts';
 import amazonCreators from '../../lib/amazon-creators.js';
 import { dailyCatalogPhases, pacificCatalogCalendar, runDailyCatalogWithBackend, withCatalogCadence, validCatalogRunKey } from '../ops/catalog-daily.mjs';
 import {validateExecutionAdoption,validateExecutionAdoptionConfigs} from './execution-adoption.ts';
@@ -558,6 +559,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         let owner=await claimMutationOwnership(db,scope,claim);
         if(!owner){if(cp.owner?.phase!=='writing')throw new Error('weekly_freeze_claim');await releaseExact(db,cp.owner);owner=await claimMutationOwnership(db,scope,claim);}
         if(!owner)throw new Error('weekly_freeze_claim');await write({owner});
+        owner=await repairApprovedNewSlugs(db,owner,request,now());await write({owner});
         const prepared=await prepareOwnedApprovedCohortPlan({db,owner,request,adapters});revision=prepared.revision;
         const pin=await putOrdered(ws,approvedRevisionControl(revision),approvedArtifactObservedAt(revision.snapshot,now(),config.retention.rules.publication.maxAgeMs));
         await write({owner:prepared.owner,pins:{...cp.pins,preparedRevision:pin},state:{...state(),vectorOffset:0,vectorIds:prepared.remainingIds}});

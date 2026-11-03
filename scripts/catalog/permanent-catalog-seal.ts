@@ -19,6 +19,7 @@ import type {OwnedVectorAdapters} from './owned-vector-delivery.ts';
 import {approvedBaseChangeLimit} from '../../lib/catalog/owner-base-review.ts';
 import type {OwnerBaseCatalogReview} from '../../lib/catalog/owner-base-review.ts';
 import {recoveredBaseLink} from './cleared-base-recovery.ts';
+import {effectiveSlugApproval} from './new-product-slug-repair.ts';
 
 type Row=Record<string,unknown>;
 const HASH=/^[a-f0-9]{64}$/,UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -105,9 +106,13 @@ export async function readCatalogPredecessor(options:{db:CatalogD1;owner:Mutatio
     cutoff:owner.capturedAt,vectorSyncWatermark:0,publicationReceiptWatermark:0,priorPublication:seal.publication});
   const capture=()=>readOwnedLogicalRows(db,owner,{phase:'freezing',tables:['products','catalog_maintenance_products','catalog_maintenance_operations']});
   const actual=await capture(),current=permanentSourceRows(actual),inventory=permanentSourceInventory(current);
-  const old=new Map(prior.inventory.map(r=>[r.publicId,r])),changes=new Map(approval.changes.map(c=>[c.publicId,c])),changed:string[]=[];
+  const old=new Map(prior.inventory.map(r=>[r.publicId,r])),changed:string[]=[];
   const products=new Map(actual.products.map(p=>[p.public_id,p]));
-  for(const change of approval.changes){const product=products.get(change.publicId),ops=actual.catalog_maintenance_operations.filter(op=>op.operation_id===change.operationId),op=ops[0];
+  const priorIdentities={products:prior.inventory,heldProducts:[]};
+  const effective=approval.changes.map(c=>effectiveSlugApproval(c,actual.catalog_maintenance_operations,products.get(c.publicId)!,owner,{approval,previous:priorIdentities}));
+  const changes=new Map(effective.map(c=>[c.publicId,c]));
+  const repairs=new Set(effective.filter((c,i)=>c.operationId!==approval.changes[i].operationId).map(c=>c.operationId));
+  for(const change of effective){const product=products.get(change.publicId),ops=actual.catalog_maintenance_operations.filter(op=>op.operation_id===change.operationId),op=ops[0];
     if(!product||ops.length!==1||product.catalog_revision!==approval.catalogRevision||sha256(canonicalJson(product))!==change.productSha256
       ||sha256(String(product.public_display_json??'null'))!==change.displaySha256||op.input_sha256!==change.inputSha256||op.run_id!==approval.runId
       ||op.catalog_revision!==approval.catalogRevision||op.environment!==owner.environment||op.index_name!==owner.indexName
@@ -121,8 +126,8 @@ export async function readCatalogPredecessor(options:{db:CatalogD1;owner:Mutatio
     if(approved?approved.productSha256!==row.productSha256:!recovered)fail();
     const product=current.find(p=>p.public_id===row.publicId)!;let hash:string|null=before?.productSha256??null,steps=0,last='';
     const links=actual.catalog_maintenance_operations.filter(op=>(op.run_id===approval.runId||recovered)&&op.environment===owner.environment&&op.index_name===owner.indexName
-      &&Number(op.generation)>prior.generation&&(Number(op.generation)<owner.generation||op.operation_id===recovered?.operation_id)
-      &&String(op.database_time)>=envelope.generatedAt&&(String(op.database_time)<=owner.capturedAt||op.operation_id===recovered?.operation_id))
+      &&Number(op.generation)>prior.generation&&(Number(op.generation)<owner.generation||op.operation_id===recovered?.operation_id||repairs.has(String(op.operation_id)))
+      &&String(op.database_time)>=envelope.generatedAt&&(String(op.database_time)<=owner.capturedAt||op.operation_id===recovered?.operation_id||repairs.has(String(op.operation_id))))
       .flatMap(op=>(JSON.parse(String(op.changes_json)) as Row[]).filter(c=>c.productId===product.id).map(c=>({op,c})));
     while(hash!==row.productSha256){const matches=links.filter(l=>l.c.beforeSha256===hash);if(matches.length!==1||++steps>4)fail();
       hash=String(matches[0].c.afterSha256);last=String(matches[0].op.operation_id);}
