@@ -16,6 +16,7 @@ import {createSealedSnapshotEnvelope} from '../scripts/catalog/export-d1-snapsho
 import {approvedRevisionControl,hydrateApprovedRevision} from '../scripts/catalog/approved-catalog-seal.ts';
 
 const NOW='2026-11-02T12:00:00.000Z';
+const OBSERVED='2026-11-02T11:59:00.000000Z';
 function fixture(){
   const input={id:'B000000001',title:'Synthetic lobster mitts',price:12,currency:'USD',imageUrl:'https://example.invalid/mitts.jpg',
     affiliateUrl:'https://www.amazon.com/dp/B000000001?tag=test-20',source:'amazon',sourceQuery:'test-only',humorTags:['lobster'],
@@ -29,11 +30,11 @@ function fixture(){
   const persistent=Object.fromEntries(Object.entries({title:p.title,description:p.wittyDescription,affiliateUrl:p.affiliateUrl,
     wittyDescription:p.wittyDescription,humorTags:JSON.stringify(p.humorTags)}).map(([k,v])=>[k,grant(v)]));
   persistent.imageUrl=grant('/images/gift-placeholder.svg');
-  const rights={...persistent,imageUrl:{basis:'merchant',reference:'test-only-observation',value:p.imageUrl,observedAt:NOW,expiresAt:'2026-11-03T12:00:00.000Z'},persistent};
+  const rights={...persistent,imageUrl:{basis:'merchant',reference:'test-only-observation',value:p.imageUrl,observedAt:new Date(OBSERVED).toISOString(),expiresAt:'2026-11-03T11:59:00.000Z'},persistent};
   const row={...maintenanceProjection(p,rights,'new-run',NOW,true,NOW,undefined,true).row,
     embedding_text_hash:sha256(maintenanceEmbeddingText(p)),source_record_json:canonicalJson({kind:'maintenance_creation',id:p.id,public_id:p.publicId,slug:p.slug,product:p}),
     timestamp_provenance_json:canonicalJson({schemaVersion:1,fields:{availability_checked_at:{state:'evidenced',basis:'maintenance_operation',
-      operationId:'1'.repeat(64),observedAt:NOW,sourceFactsHash:facts,reference:'test-only-observation'}}})};
+      operationId:'1'.repeat(64),observedAt:OBSERVED,sourceFactsHash:facts,reference:'test-only-observation'}}})};
   assert.equal(row.public_display_json,null);
   const native=encodePgvectorSendBase64(Array(1536).fill(.25)),text=maintenanceEmbeddingText(p);
   const state={product_id:p.id,version:1,semantic_json:canonicalJson(p),embedding_present:1,embedding_native_base64:native,
@@ -71,7 +72,9 @@ test('only fixes never-public trailing-hyphen truncation; source, observations a
     assert.equal(plan.after[field],f.row[field]);
   for(const field of ['embedding_native_base64','embedding_provenance_json'])assert.equal(plan.nextState[field],f.state[field]);
   for(const mutate of [x=>x.request.previous.products.push({publicId:x.change.publicId}),x=>x.row.is_active=0,x=>x.row.slug='valid-slug',
-    x=>x.row.public_display_json='{}',x=>x.owner.phase='writing',x=>x.state.embedding_provenance_json='{}']){
+    x=>x.row.public_display_json='{}',x=>x.owner.phase='writing',x=>x.state.embedding_provenance_json='{}',
+    x=>{const proof=JSON.parse(x.row.timestamp_provenance_json);proof.fields.availability_checked_at.observedAt='2026-11-02T12:01:00.000Z';
+      x.row.timestamp_provenance_json=canonicalJson(proof);}]){
     const bad=fixture();mutate(bad);assert.throws(()=>planNewProductSlugRepair(bad));
   }
 });
