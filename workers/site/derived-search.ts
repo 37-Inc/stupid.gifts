@@ -1,7 +1,7 @@
 import { canonicalJson } from '../../lib/catalog/canonical-json.ts';
 import { persistentPublicProduct } from '../../lib/catalog/display.ts';
 import { semanticHash, semanticPublicFields, semanticVectorIdentity, semanticVectorMetadata,
-  validateSemanticCatalog, DERIVED_SEARCH_PROFILE } from '../../lib/catalog/semantic-profile.ts';
+  validateSemanticCatalog, semanticEntryFromMetadata, DERIVED_SEARCH_PROFILE } from '../../lib/catalog/semantic-profile.ts';
 import type { CatalogSnapshot } from '../../lib/catalog/types.ts';
 import type { VectorMatch } from './bindings.ts';
 
@@ -27,7 +27,9 @@ export function createDerivedSemanticSearch(snapshot: CatalogSnapshot, input: un
     async resolve(matches: readonly VectorMatch[]) {
       const ids = new Set<string>();
       const verified = await Promise.all(matches.slice(0, 100).map(async match => {
-        const entry = entries.get(match.id), product = entry && products.get(entry.publicId);
+        const metadata = match.metadata as {publicId?:string} | undefined;
+        const product = products.get(metadata?.publicId ?? '');
+        const entry = entries.get(match.id) ?? (product && semanticEntryFromMetadata(match.id,metadata,product.id));
         if (!entry || !product || product.id !== entry.productId || !Number.isFinite(match.score)
           || canonicalJson(match.metadata ?? null) !== canonicalJson(semanticVectorMetadata(entry))
           || await semanticVectorIdentity(entry) !== entry.vectorId

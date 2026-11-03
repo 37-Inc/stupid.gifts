@@ -32,6 +32,7 @@ import type { ApprovedCohortRequest, ApprovedCohortRevision } from '../../lib/ca
 import type { CatalogD1 } from '../../lib/catalog/storage/d1.ts';
 import { canonicalTime } from '../../lib/catalog/snapshot.ts';
 import {repairApprovedNewSlugs} from './new-product-slug-repair.ts';
+import {syncApprovedSearchDelta} from './sync-semantic-delta.ts';
 import amazonCreators from '../../lib/amazon-creators.js';
 import { dailyCatalogPhases, pacificCatalogCalendar, runDailyCatalogWithBackend, withCatalogCadence, validCatalogRunKey } from '../ops/catalog-daily.mjs';
 import {validateExecutionAdoption,validateExecutionAdoptionConfigs} from './execution-adoption.ts';
@@ -157,7 +158,7 @@ export function validateCloudflareWeeklyConfig(input:unknown):CloudflareWeeklyCo
   }
   return structuredClone(c);
 }
-async function reviewedBytes(path:string,digest:string,repo:string,max=512*1024) {
+async function reviewedBytes(path:string,digest:string,repo:string,max=512*1024,canonical=false) {
   if(!isAbsolute(path)||!HASH.test(digest))throw new Error('weekly_private_input');
   const stat=await lstat(path);const actual=await realpath(path);const rel=relative(await realpath(repo),actual);
   if(stat.isSymbolicLink()||!stat.isFile()||stat.uid!==process.getuid?.()||stat.mode&0o077||stat.size>max
@@ -170,12 +171,13 @@ async function reviewedBytes(path:string,digest:string,repo:string,max=512*1024)
       if(!part.bytesRead)break;length+=part.bytesRead;if(length>max)throw new Error('weekly_private_input');
       const bytes=chunk.subarray(0,part.bytesRead);chunks.push(bytes);hasher.update(bytes);}
     const after=await handle.stat();
-    if(after.size!==stat.size||after.mtimeMs!==stat.mtimeMs||after.ctimeMs!==stat.ctimeMs||hasher.digest('hex')!==digest)throw new Error('weekly_input_digest');
-    return Buffer.concat(chunks);
+    const bytes=Buffer.concat(chunks),actualDigest=canonical?sha256(canonicalJson(JSON.parse(bytes.toString('utf8')))):hasher.digest('hex');
+    if(after.size!==stat.size||after.mtimeMs!==stat.mtimeMs||after.ctimeMs!==stat.ctimeMs||actualDigest!==digest)throw new Error('weekly_input_digest');
+    return bytes;
   }finally{await handle.close();}
 }
-async function reviewed(path:string,digest:string,repo:string,max=512*1024) {
-  return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await reviewedBytes(path,digest,repo,max)));
+async function reviewed(path:string,digest:string,repo:string,max=512*1024,canonical=false) {
+  return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await reviewedBytes(path,digest,repo,max,canonical)));
 }
 // Strip product/candidate bodies and search-theme strings from phase counts.
 // Token/cost usage remains exact private operational evidence, not analytics.
@@ -588,6 +590,14 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           if(pass===3||result.errorCode==='mutation_unknown'&&!await mutationKnown(db,result.deliveryId))
             return{state:'pending',phase:cp.phase,errorCode:result.errorCode,budget:await ws.budget()};
         }
+      }
+      const derived=config.publication.semanticSearch?.derivedCatalog;
+      if(derived&&!cp.pins.searchDelta){
+        const catalog=await reviewed(derived.path,derived.sha256,repo,8*1024*1024,true);
+        const result=await syncApprovedSearchDelta({db,owner:cp.owner!,revision,catalog,
+          accountId:config.accountId,token,fetch:generalSend});
+        const pin=await putOrdered(ws,{catalogRevision:revision.snapshot.catalogRevision,...result},now());
+        await write({pins:{...cp.pins,searchDelta:pin}});
       }
       const queued=await settleOwnedApprovedCohortVectorProof({db,owner:cp.owner!,revision,adapters});
       const pin=await putOrdered(ws,approvedRevisionControl(revision),approvedArtifactObservedAt(revision.snapshot,now(),config.retention.rules.publication.maxAgeMs));
