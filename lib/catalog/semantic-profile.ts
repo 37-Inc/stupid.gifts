@@ -13,6 +13,7 @@ export interface SemanticCatalogEntry {
   inputSha256: string; originalNativeSha256: string; derivedNativeSha256: string;
   receiptSha256: string; sourceFactsHash: string;
 }
+export type SemanticVectorBinding=Omit<SemanticCatalogEntry,'receiptSha256'|'sourceFactsHash'>;
 export interface SemanticCatalog {
   schemaVersion: 1; indexName: string; profile: DerivedSearchProfile; entries: SemanticCatalogEntry[];
 }
@@ -38,16 +39,29 @@ export function normalizeSemanticPrefix(values: readonly number[], dimensions: n
   if (Math.abs(Math.hypot(...vector) - 1) > 1e-6) throw new Error('search_embedding_normalization');
   return vector;
 }
-export function semanticVectorIdentity(entry: Omit<SemanticCatalogEntry, 'vectorId'> | SemanticCatalogEntry) {
+export function semanticVectorIdentity(entry: Omit<SemanticVectorBinding, 'vectorId'> | SemanticVectorBinding) {
   return semanticHash(canonicalJson({ profile: DERIVED_SEARCH_PROFILE, publicId: entry.publicId,
     productId: entry.productId, publicFieldsSha256: entry.publicFieldsSha256, inputSha256: entry.inputSha256,
     originalNativeSha256: entry.originalNativeSha256, derivedNativeSha256: entry.derivedNativeSha256 }));
 }
-export function semanticVectorMetadata(entry: SemanticCatalogEntry) {
+export function semanticVectorMetadata(entry: SemanticVectorBinding) {
   const profile = DERIVED_SEARCH_PROFILE;
   return { profile: profile.id, model: profile.model, dimensions: profile.dimensions, transform: profile.transform,
     publicId: entry.publicId, publicFieldsSha256: entry.publicFieldsSha256, inputSha256: entry.inputSha256,
     originalNativeSha256: entry.originalNativeSha256, derivedNativeSha256: entry.derivedNativeSha256 };
+}
+/** Trusted index metadata is self-describing; current PUBLIC membership and
+ * input hashes are still checked by the resolver. No client-supplied entries. */
+export function semanticEntryFromMetadata(vectorId: string, metadata: unknown, productId: string): SemanticVectorBinding | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const m = metadata as ReturnType<typeof semanticVectorMetadata>;
+  const entry = { vectorId, productId, publicId:m.publicId, publicFieldsSha256:m.publicFieldsSha256,
+    inputSha256:m.inputSha256, originalNativeSha256:m.originalNativeSha256, derivedNativeSha256:m.derivedNativeSha256 };
+  if(!/^[a-zA-Z0-9_-]{1,100}$/.test(productId)||typeof m.publicId!=='string'
+    ||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(m.publicId)
+    ||[vectorId,m.publicFieldsSha256,m.inputSha256,m.originalNativeSha256,m.derivedNativeSha256]
+      .some(v=>typeof v!=='string'||!/^[a-f0-9]{64}$/.test(v)))return null;
+  return canonicalJson(metadata) === canonicalJson(semanticVectorMetadata(entry)) ? entry : null;
 }
 /** Structural validation does not attest a provider receipt or index coverage. */
 export function validateSemanticCatalog(value: unknown): SemanticCatalog {

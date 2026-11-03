@@ -16,6 +16,19 @@ test('actual Worker serves current cleared products through input-verified deriv
   await w.request();assert.equal(w.calls.embed,1); // Cached input proof, never a second paid call.
 });
 
+test('new content-addressed vector serves from current snapshot without rebuilding the seed inventory',async()=>{
+  const f=await derivedFixture(),catalog=structuredClone(f.catalog),entry=catalog.entries.shift();
+  const {body}=await derivedWorker(f,{catalog}).request();
+  assert.equal(body.results.find(p=>p.id===entry.productId)?.matchType,'semantic');
+  for(const edit of [s=>s.products.splice(s.products.findIndex(p=>p.id===entry.productId),1),
+    s=>s.heldProducts.push({publicId:entry.publicId}),s=>{s.products.find(p=>p.id===entry.productId).title='changed';},
+    s=>{s.products.find(p=>p.id===entry.productId).id='other-product';}]){
+    const snapshot=structuredClone(f.snapshot);edit(snapshot);
+    const result=await derivedWorker(f,{catalog,snapshot}).request();
+    assert.ok(result.body.results.every(p=>p.id!==entry.productId||p.matchType!=='semantic'));
+  }
+});
+
 test('weak semantic neighbors do not invent results for an unrelated query',async()=>{
   const f=await derivedFixture(),w=derivedWorker(f,{vector:async()=>({matches:f.vectors.map(v=>({id:v.id,score:.33,metadata:v.metadata}))})});
   const {body}=await w.request('zxqvplmnork');

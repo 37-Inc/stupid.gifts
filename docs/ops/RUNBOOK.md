@@ -9,10 +9,12 @@ latest protected receipt take precedence over historical journal entries.
 Read the actual public release identity AND protected
 `daily-catalog-care/last-success.json` for the current accepted catalog. The
 dated receipts below are historical evidence, not an instruction to overwrite
-a newer release. Canonical `.4.14.1` owns the explicitly requested November2
-fresh-topic discovery and its same-run repair; check its latest state before
-starting another batch. The original4a runtime/config stay pinned during that
-run; a separately reviewed newer operator supplies its repair/readback logic.
+a newer release. The November2 fresh-topic discovery is COMPLETE: release
+`daily-2026-11-02-4a32e930-e0a20859`, snapshot56853576, genuine D1 receipt330dbf98,
+resolved build, idle40/681 and accepted successor. All3388 identities remain,
+3355 public/33 excluded and41 optional articles. Never replay that run, its
+provider phases, repair, upload or activation. Original4a and finishing156d
+operators remain frozen. `.4.18` owns automatic serving-index coverage.
 
 November2 owner correction: refresh/discovery sizes are PER-RUN guides, not a
 global daily supplier allowance. New runs have independent immutable identities;
@@ -47,8 +49,7 @@ Catalog writing/review now defaults to `gpt-6-luna`, with reasoning disabled
 and bounded `max_completion_tokens`; embeddings remain `text-embedding-3-small`.
 The replacement canonical Keychain item and Worker `OPENAI_API_KEY` secret have
 real successful API checks. No keys belong in source, docs, command arguments
-or output. Funding is restored; `.4.14.1` remains for a real new admission under
-normal cadence or an explicitly requested new run. Do manual preview builds outside the
+or output. Funding and real new-admission acceptance are complete. Do manual preview builds outside the
 retained execution checkout, or clear only your verified generated preview
 outputs before using it as an operator.
 
@@ -110,7 +111,10 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-pending-native-readback/stupid.gifts`.
+`/Users/cameronehrlich/.codex/worktrees/stupid-semantic-delta/stupid.gifts`
+after its source/release acceptance is recorded in `.4.18`. Until then use
+the latest accepted operator recorded in the existing task, never an unmerged
+branch or a checkout with an active build/run.
 The old `stupid-catalog-care` checkout remains frozen for original source
 bindings; it is not the current scheduler's execution source.
 Its runtime includes the reviewed storefront, Howie rehearsal, bounded
@@ -233,6 +237,14 @@ Check home24→48, loaded images/descriptions, a changed product, correct affili
 tag, guides, Random, and the rehearsal. Label browser QA `utm_medium=qa`.
 The reviewed derived semantic index remains enabled under its50-request/
 32,768-token daily limit; changed/unproved inputs use working keyword fallback.
+The native1536 index is authoritative maintenance/history; the serving1024
+index is a normalized projection of the same saved embedding, not a second
+generation. The routine freezing phase automatically syncs its bounded reviewed
+cohort before publication, with exact saved-row/provenance checks and provider
+readback. Immutable content IDs permit safe same-payload retry after uncertainty.
+Current public membership and semantic-field hashes control serving, including
+new entries absent from the historical seed inventory. No index deletion, full
+rebuild, new model call, scheduler or manual per-gift indexing approval is needed.
 Do not use the nearly empty legacy native index. No live model calls are
 permitted during a specifically model-free recovery; use offline search tests
 and label that limitation honestly instead of claiming a live query test.

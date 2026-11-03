@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { RunWorkspace } from './run-workspace.ts';
+import {semanticEntryFromMetadata,DERIVED_SEARCH_PROFILE} from '../../lib/catalog/semantic-profile.ts';
 
 export interface PublicationFetchScope {
   accountId:string;workerName:string;indexName:string;databaseId:string;identityOrigin:string;
-  /** Identity metadata only: never derived-index mutation or vector access. */
+  /** Explicit serving projection: content-addressed reads/upserts, never deletes. */
   derivedIndexName?:string;
 }
 const UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -17,6 +18,19 @@ function ids(body:unknown):boolean {
   return !!value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).join(',')==='ids'
     &&Array.isArray(value.ids)&&value.ids.length>0&&value.ids.length<=10
     &&value.ids.every(id=>typeof id==='string'&&UUID.test(id))&&new Set(value.ids).size===value.ids.length;
+}
+function derivedIds(body:unknown):boolean {
+  const value=body as {ids?:unknown};
+  return !!value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).join(',')==='ids'
+    &&Array.isArray(value.ids)&&value.ids.length>0&&value.ids.length<=30
+    &&value.ids.every(id=>typeof id==='string'&&/^[a-f0-9]{64}$/.test(id))&&new Set(value.ids).size===value.ids.length;
+}
+function derivedVector(body:unknown):boolean {
+  const value=body as {id:string;values:number[];metadata:unknown};
+  return !!value&&Object.keys(value).sort().join(',')==='id,metadata,values'
+    &&!!semanticEntryFromMetadata(value.id,value.metadata,'metadata-validation')&&Array.isArray(value.values)
+    &&value.values.length===DERIVED_SEARCH_PROFILE.dimensions&&value.values.every(n=>typeof n==='number'&&Number.isFinite(n))
+    &&Math.abs(Math.hypot(...value.values)-1)<1e-6;
 }
 function mutationBody(body:unknown,kind:'upsert'|'deploy'):boolean {
   if(!body||typeof body!=='object'||Array.isArray(body))return false;
@@ -71,8 +85,10 @@ function accountedFetch(ws:Pick<RunWorkspace,'reserveBudget'|'settleBudget'>,sen
     if(method==='POST'&&url.origin==='https://api.cloudflare.com'&&typeof init.body==='string'&&Buffer.byteLength(init.body)<=128*1024){
       try{const body=JSON.parse(init.body);
         native=url.pathname===`${vector}/get_by_ids`&&Buffer.byteLength(init.body)<=4096&&ids(body);
+        if(derived&&url.pathname===`${derived}/get_by_ids`&&Buffer.byteLength(init.body)<=4096&&derivedIds(body))native=true;
         mutation=!readOnly&&(url.pathname===`${vector}/delete_by_ids`&&ids(body)
           ||url.pathname===`${vector}/upsert`&&mutationBody(body,'upsert')
+          ||!!derived&&url.pathname===`${derived}/upsert`&&derivedVector(body)
           ||url.pathname===`${worker}/deployments`&&mutationBody(body,'deploy'));
       }catch{}
     }

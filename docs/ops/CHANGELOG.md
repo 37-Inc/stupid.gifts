@@ -1,5 +1,20 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-03 — Automatic semantic projection for new gifts
+
+[owner+codex] Keep the authoritative1536-dimensional native index and its
+smaller1024-dimensional website projection, but remove manual synchronization.
+Routine publication derives only reviewed new/changed public inputs from
+verified saved native bytes, then upserts and reads back immutable IDs.
+The Worker checks new self-describing entries against the current public
+snapshot without rebuilding the seed inventory. Held/stale entries stay excluded;
+uncertain writes retry the same payload, not suppliers or embedding generation.
+
+The preceding discovery release is fully accepted:3355 public/3388 identities,
+genuine D1 receipt330dbf98, resolved build, idle40/681 and saved successor. PR334
+removed the request-count blocker; all6672 requests/10197 SQL/2463052 reads/
+21161 writes/three unknowns remain recorded. No new batch or repeated deployment.
+
 ## 2026-11-02 — Request counts are telemetry for routine catalog care
 
 [owner+codex] Remove the routine6,000-request hard stop at both the durable
