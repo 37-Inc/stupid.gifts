@@ -6,6 +6,7 @@ import type { OneTimeMigrationBudget } from './one-time-migration-budget.ts';
 import { assertPublicationRecoveryBudget } from './publication-recovery-budget.ts';
 import type { PublicationRecoveryBudget } from './publication-recovery-budget.ts';
 import { canonicalJson } from './migration.ts';
+import {MAINTENANCE_SLUG_TRIGGER} from './maintenance-state.ts';
 const ownedClients=new WeakSet<CatalogD1>();
 export function isCatalogD1Rest(db:CatalogD1):boolean{return ownedClients.has(db);}
 
@@ -45,9 +46,11 @@ const integer = (value:unknown):value is number => Number.isSafeInteger(value) &
 const object = (value:unknown):value is Record<string,unknown> => Boolean(value && typeof value==='object' && !Array.isArray(value));
 
 // One statement per batch member. Ignore delimiters in SQL strings/comments;
-// schema/trigger scripts are deliberately not this operational adapter's API.
+// Schema scripts are not this API. One exact, single-statement trigger restore
+// is allowed for the atomic unpublished-URL repair; arbitrary bodies are not.
 function sqlText(value:unknown):string {
   if(typeof value!=='string'||!value.trim()||value.includes('\0')||Buffer.byteLength(value)>64*1024)throw new Error('catalog_d1_statement_invalid');
+  if(value===MAINTENANCE_SLUG_TRIGGER)return value;
   let token=false,ended=false;
   for(let i=0;i<value.length;i++){
     const c=value[i];if(/\s/.test(c))continue;

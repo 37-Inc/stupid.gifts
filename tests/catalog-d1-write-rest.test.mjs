@@ -5,6 +5,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { createCatalogD1Rest, createCatalogD1ReadOnlyRest, CATALOG_D1_REST_LIMITS } from '../scripts/catalog/d1-write-rest.ts';
 import { claimMutationOwnership, readMutationOwner, releaseMutationOwnership } from '../lib/catalog/mutation-fence.ts';
 import { createD1CatalogTelemetryStore } from '../scripts/catalog/telemetry-d1.ts';
+import {MAINTENANCE_SLUG_TRIGGER} from '../scripts/catalog/maintenance-state.ts';
 
 const config={accountId:'a'.repeat(32),databaseId:'00000000-0000-4000-8000-000000000001',databaseName:'test-only-write-db',token:'TEST_ONLY_TOKEN'};
 const base=`https://api.cloudflare.com/client/v4/accounts/${config.accountId}/d1/database/${config.databaseId}`;
@@ -81,6 +82,22 @@ test('wrong/missing database identity, replication and primary evidence refuse b
     assert.equal(count,2);
   }
   await assert.rejects(createCatalogD1Rest({...config,fetch:async(url)=>url===base?ok(identity):ok([result([{catalog_d1_primary:0}])])}),/primary_unproven/);
+});
+test('only the exact single slug-guard restore permits an internal SQL delimiter',async t=>{
+  const f=await fixture(t);
+  f.sql.exec('CREATE TABLE products(id TEXT PRIMARY KEY,slug TEXT)');
+  f.sql.exec(MAINTENANCE_SLUG_TRIGGER);
+  f.sql.prepare("INSERT INTO products VALUES('test','old')").run();
+  await f.db.batch([f.db.prepare('DROP TRIGGER products_maintenance_slug_immutable'),
+    f.db.prepare("UPDATE products SET slug='corrected' WHERE id='test'"),f.db.prepare(MAINTENANCE_SLUG_TRIGGER)]);
+  assert.equal(f.sql.prepare('SELECT slug FROM products').get().slug,'corrected');
+  assert.throws(()=>f.sql.prepare("UPDATE products SET slug='unapproved'").run(),/preserves existing slugs/);
+  for(const value of [MAINTENANCE_SLUG_TRIGGER+'; DROP TABLE products',MAINTENANCE_SLUG_TRIGGER.replace('preserves existing slugs','changed'),
+    "SELECT 1; DELETE FROM products"])
+    assert.throws(()=>f.db.prepare(value),/catalog_d1_statement_invalid/);
+  await assert.rejects(f.db.batch([f.db.prepare('DROP TRIGGER products_maintenance_slug_immutable'),f.db.prepare("SELECT json('invalid')"),
+    f.db.prepare(MAINTENANCE_SLUG_TRIGGER)]),/catalog_d1_result_unknown/);
+  assert.throws(()=>f.sql.prepare("UPDATE products SET slug='still-unapproved'").run(),/preserves existing slugs/);
 });
 test('invalid configuration has no ambient credential/env fallback or provider calls; defaults are finite',async()=>{
   for(const changed of [{accountId:'../evil'},{databaseId:'bad'},{databaseName:'../other'},{databaseName:undefined},{token:undefined},

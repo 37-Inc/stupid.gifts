@@ -2,16 +2,12 @@ import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
 import {mutationAssertion,mutationAdvance} from '../../lib/catalog/mutation-fence.ts';
 import type {ApprovedChange,ApprovedCohortRequest} from '../../lib/catalog/freeze-approved-cohort.ts';
-import {maintenanceEmbeddingText,maintenanceProjection,maintenanceState} from './maintenance-state.ts';
+import {maintenanceEmbeddingText,maintenanceProjection,maintenanceState,MAINTENANCE_SLUG_TRIGGER as SLUG_TRIGGER} from './maintenance-state.ts';
 import {canonicalJson,sha256} from './migration.ts';
 import {createHash} from 'node:crypto';
 
 type Row=Record<string,unknown>;
 const KIND='new-product-slug-repair-v1';
-const SLUG_TRIGGER=`CREATE TRIGGER products_maintenance_slug_immutable BEFORE UPDATE OF slug ON products
-WHEN OLD.slug IS NOT NEW.slug BEGIN
-  SELECT RAISE(ABORT,'Maintenance preserves existing slugs');
-END`;
 const hash=(value:unknown)=>sha256(canonicalJson(value));
 const same=(a:unknown,b:unknown)=>canonicalJson(a)===canonicalJson(b);
 const slug=(v:unknown)=>typeof v==='string'&&/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v);

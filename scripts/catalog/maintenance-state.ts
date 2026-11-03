@@ -7,6 +7,11 @@ import { editorialSourceHash } from '../ops/catalog-editorial-core.mjs';
 import { normalizedEditorialFacts, originalEditorialEquivalent } from '../../lib/catalog/editorial-equivalence.ts';
 
 export type Row = Record<string, unknown>;
+/** Exact existing guard, restored inside an unpublished-URL repair batch. */
+export const MAINTENANCE_SLUG_TRIGGER=`CREATE TRIGGER products_maintenance_slug_immutable BEFORE UPDATE OF slug ON products
+WHEN OLD.slug IS NOT NEW.slug BEGIN
+  SELECT RAISE(ABORT,'Maintenance preserves existing slugs');
+END`;
 /** Private PG semantics, not a public DTO. Existing wall times stay opaque. */
 export interface SemanticProduct {
   [key: string]: unknown;
