@@ -173,7 +173,7 @@ export function approvedRevisionControl(revision:ApprovedCohortRevision){
 }
 export async function hydrateApprovedRevision(db:CatalogD1,owner:MutationOwner,control:ReturnType<typeof approvedRevisionControl>){
   const request=await hydrateApprovedRequest(db,owner,control.request);
-  const sourceRows=await readApprovedRevisionSource(db,owner,control.sourceIds,request.approval.changes,request.ownerBaseReview);
+  const sourceRows=await readApprovedRevisionSource(db,owner,control.sourceIds,request.approval.changes,request.ownerBaseReview,request);
   const revision={...control.revision,request,sourceRows};
   if(control.schemaVersion!==1||control.kind!=='approved-revision-control'||sha256(canonicalJson(sourceRows))!==control.sourceRowsSha256
     ||sha256(canonicalJson(revision))!==control.revisionSha256)throw new Error('cohort_revision_changed');

@@ -13,6 +13,7 @@ import {validatePublicCatalogProduct} from '../lib/catalog/snapshot.ts';
 import {createProjectionPacket,projectionQueries} from '../lib/catalog/d1.ts';
 import {approvedCohortOperationKey,prepareApprovedCohort} from '../lib/catalog/freeze-approved-cohort.ts';
 import {createSealedSnapshotEnvelope} from '../scripts/catalog/export-d1-snapshot.ts';
+import {approvedRevisionControl,hydrateApprovedRevision} from '../scripts/catalog/approved-catalog-seal.ts';
 
 const NOW='2026-11-02T12:00:00.000Z';
 function fixture(){
@@ -123,4 +124,5 @@ test('the original immutable approval seals the repaired display through the rea
   assert.equal(prepared.revision.snapshot.products[0].slug,'a'.repeat(119));
   assert.equal(canonicalJson(prepared.revision.request.approval),before);
   assert.equal(sql.prepare('SELECT count(*) n FROM catalog_maintenance_operations').get().n,2);
+  assert.deepEqual(await hydrateApprovedRevision(db,prepared.owner,approvedRevisionControl(prepared.revision)),prepared.revision);
 });
