@@ -42,7 +42,7 @@ export async function resumePublication(day){
   const options={directory:workspace,repository:root,mode:'resume',runId:config.runId,codeSha:config.codeSha,configSha256:record.configSha256,
     scope:{environment:config.environment,accountId:config.accountId,databaseId:config.database.id,databaseName:config.database.name,
       workerName:config.publication.workerName,indexName:config.vectorIndex.name},retention:config.retention,
-    budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements}};
+    budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe'};
   let authority;
   try{authority=await read(directory+'/resume-authority.json');}catch(e){if(e.code!=='ENOENT')throw e;}
   const w=await openRunWorkspace(options);

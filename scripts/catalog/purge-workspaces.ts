@@ -53,7 +53,7 @@ async function resumeOptions(directory:string,repository:string,runId:string,now
   // The workspace itself validates every scope/policy/cap field and the exact
   // immutable manifest. Cleanup never substitutes today's config/code/policy.
   return{directory,repository,mode:'resume',runId,configSha256:manifest.configSha256,codeSha:manifest.codeSha,
-    scope:manifest.scope,retention:manifest.retention,budgetCaps:manifest.budgetCaps,
+    scope:manifest.scope,retention:manifest.retention,budgetCaps:manifest.budgetCaps,requestLimit:'observe',
     expectedManifestSha256:sha256(canonicalJson(manifest)),now};
 }
 async function unregisteredOutputs(directory:string,success:PublicationSuccess|null){

@@ -69,6 +69,7 @@ function sqlText(value:unknown):string {
 
 type RestOptions={
   accountId:string;databaseId:string;databaseName:string;token:string;fetch?:typeof fetch;limits?:Partial<Limits>;accounting?:D1Accounting;
+  requestLimit?:'enforce'|'observe';
 };
 type RestClient=CatalogD1 & { providerIdentity:string;metrics:()=>{
   requests:number;statements:number;reportedRowsRead:number|null;reportedRowsWritten:number|null;unconfirmedRequests:number;
@@ -225,7 +226,9 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     ||Object.keys(limits).some(key=>!Object.hasOwn(CATALOG_D1_REST_LIMITS,key))
     ||Object.entries(limits).some(([key,value])=>!integer(value)||value<1||value>(migrationAssert&&key==='reportedRowsRead'?5_000_000
       :migrationAssert&&key==='reportedRowsWritten'?100_000:HARD_LIMITS[key as keyof Limits]))
-    ||limits.timeoutMs<10)throw new Error('catalog_d1_configuration_invalid');
+    ||limits.timeoutMs<10||options.requestLimit!==undefined&&!['enforce','observe'].includes(options.requestLimit)
+    ||options.requestLimit==='observe'&&(!options.accounting||migrationAssert))throw new Error('catalog_d1_configuration_invalid');
+  const enforceRequests=options.requestLimit!=='observe';
   const send=options.fetch??fetch;
   const base=`https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}`;
   let requests=0,statements=0,rowsRead=0,rowsWritten=0,unconfirmedRequests=0;
@@ -236,7 +239,7 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
       ||accounting.scope.databaseName!==databaseName||typeof accounting.reserve!=='function'||typeof accounting.settle!=='function'
       ||!object(initial)||Object.keys(initial).sort().join(',')!=='httpRequests,knownRowsRead,knownRowsWritten,sqlStatements,unconfirmedRequests'
       ||Object.values(initial).some(value=>!integer(value))||initial.unconfirmedRequests>initial.httpRequests
-      ||initial.httpRequests>limits.requests||initial.sqlStatements>limits.statements)throw new Error('catalog_d1_accounting_invalid');
+      ||enforceRequests&&initial.httpRequests>limits.requests||initial.sqlStatements>limits.statements)throw new Error('catalog_d1_accounting_invalid');
     ({httpRequests:requests,sqlStatements:statements,knownRowsRead:rowsRead,knownRowsWritten:rowsWritten,unconfirmedRequests}=initial);
   }
   async function reserve(body:string|undefined,count:number){
@@ -254,7 +257,7 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
   const bindings=new WeakMap<D1Statement,Query>();
   async function request(body?:string,signal?:AbortSignal):Promise<unknown> {
     migrationAssert?.();
-    if(requests>=limits.requests)throw new Error('catalog_d1_budget_exhausted');requests++;
+    if(enforceRequests&&requests>=limits.requests)throw new Error('catalog_d1_budget_exhausted');requests++;
     if(signal?.aborted)throw new Error('catalog_d1_result_unknown');
     const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
     let reader:ReadableStreamDefaultReader<Uint8Array>|undefined,pending:Promise<unknown>|undefined,cancellation:Promise<unknown>|undefined;
@@ -287,11 +290,11 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     signal?.throwIfAborted();
     const body=JSON.stringify({batch});
     if(Buffer.byteLength(body)>limits.requestBytes)throw new Error('catalog_d1_request_bound');
-    if(statements+batch.length>limits.statements||requests>=limits.requests
+    if(statements+batch.length>limits.statements||enforceRequests&&requests>=limits.requests
       ||rowsRead>=limits.reportedRowsRead||rowsWritten>=limits.reportedRowsWritten)throw new Error('catalog_d1_budget_exhausted');
     beforeBatch?.(batch);
     const reservation=await reserve(body,batch.length);
-    if(statements+batch.length>limits.statements||requests>=limits.requests
+    if(statements+batch.length>limits.statements||enforceRequests&&requests>=limits.requests
       ||rowsRead>=limits.reportedRowsRead||rowsWritten>=limits.reportedRowsWritten)throw new Error('catalog_d1_budget_exhausted');
     statements+=batch.length;
     let results:Result[];
@@ -324,7 +327,7 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
       ||rowsWritten>limits.reportedRowsWritten)throw new Error('catalog_d1_reported_usage_exceeded');
     return results;
   }
-  if(accounting&&(requests>=limits.requests||statements>=limits.statements||rowsRead>=limits.reportedRowsRead
+  if(accounting&&(enforceRequests&&requests>=limits.requests||statements>=limits.statements||rowsRead>=limits.reportedRowsRead
     ||rowsWritten>=limits.reportedRowsWritten))throw new Error('catalog_d1_budget_exhausted');
   const reservation=await reserve(undefined,0);
   let identity:unknown;

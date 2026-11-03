@@ -338,6 +338,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     runId:original.runId,configSha256:options.configSha256,codeSha:original.codeSha,
     scope:{...scope,accountId:config.accountId,databaseId:config.database.id,databaseName:config.database.name,workerName:config.publication.workerName},
     retention:original.retention,budgetCaps:{httpRequests:original.limits.requests,sqlStatements:original.limits.statements},
+    ...(config.cadence?{requestLimit:'observe' as const}:{}),
     ...(adoption?{expectedManifestSha256:adoption.original.manifestSha256}:{}),now};
   if(options.command==='status'){
     const report=await readRunWorkspace(workspaceOptions);
@@ -413,7 +414,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       ?`Basic ${Buffer.from(`staging:${await resolveToken(config.credentials.stagingAuthSecret)}`).toString('base64')}`:undefined;
     const admittedReadCap=await ws.budgetRowsReadCeiling()??finish?.budget.reportedRowsRead;
     const db=await createCatalogD1Rest({accountId:config.accountId,databaseId:config.database.id,databaseName:config.database.name,
-      token,fetch:dependencies.fetch,limits:finish?{...config.limits,requests:(await ws.budgetCeiling()).httpRequests,
+      token,fetch:dependencies.fetch,...(config.cadence?{requestLimit:'observe' as const}:{}),limits:finish?{...config.limits,requests:(await ws.budgetCeiling()).httpRequests,
         statements:(await ws.budgetCeiling()).sqlStatements,reportedRowsRead:admittedReadCap}:config.limits,accounting:{scope:{accountId:config.accountId,databaseId:config.database.id,databaseName:config.database.name},
         initial:await ws.budget(),reserve:async value=>{
           // Broad proof batches retain80k headroom. The explicit receipt-only

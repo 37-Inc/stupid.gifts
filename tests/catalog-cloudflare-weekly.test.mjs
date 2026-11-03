@@ -745,11 +745,12 @@ test('adopted expired-context daily resumes new source through actual normal pub
   assert.equal((await w.readCheckpoint()).checkpoint.phase,'finalized');await w.close();
 });
 
-test('small permanent daily composes actual package verification through receipt/readback with model-free cadence and shared CF accounting',async t=>{
+test('small permanent daily finishes beyond its request estimate with model-free cadence and shared CF accounting',async t=>{
   const f=await setup(t,{permanent:1,held:1});f.config.cadence={day:'2026-10-20',featuredIds:[ID]};
-  f.config.backfillLimit=0;f.config.limits={requests:800,statements:1200};delete f.config.credentials.openai;
+  f.config.backfillLimit=0;f.config.limits={requests:5,statements:1200};delete f.config.credentials.openai;
   await put(f.options.configPath,f.config);f.options.configSha256=sha256(await fs.readFile(f.options.configPath));
-  f.workspaceOptions.configSha256=f.options.configSha256;f.workspaceOptions.budgetCaps={httpRequests:800,sqlStatements:1200};
+  f.workspaceOptions.configSha256=f.options.configSha256;f.workspaceOptions.budgetCaps={httpRequests:5,sqlStatements:1200};
+  f.workspaceOptions.requestLimit='observe';
   const start=await f.run('start');assert.equal(start.reason,'awaiting_reviewed_approval');
   const result=await f.run('resume',await f.approve());assert.equal(result.state,'finalized',JSON.stringify(result));
   assert.equal(f.calls.getItems,1);assert.equal(f.calls.search+f.calls.chat+f.calls.embedding,0);
@@ -761,6 +762,7 @@ test('small permanent daily composes actual package verification through receipt
   const projected=f.sql.prepare("SELECT public_id,public_display_json FROM catalog_public_products WHERE catalog_revision='weekly-r' ORDER BY public_id").all();
   assert.deepEqual(projected.map(p=>p.public_id),[UUID]);assert.equal(JSON.parse(projected[0].public_display_json).eligibleUntil,null);
   assert.equal(result.budget.httpRequests,f.calls.http);assert.equal(result.budget.sqlStatements,f.calls.sql);
+  assert.ok(result.budget.httpRequests>f.config.limits.requests);
   const calls=structuredClone(f.calls);assert.equal((await f.run('resume')).state,'finalized');assert.deepEqual(f.calls,calls);
   t.diagnostic(JSON.stringify({scenario:'small permanent daily executor',budget:result.budget,providerCalls:f.calls,
     compilation:'mock',uploadCommand:'mock (protected bridge/asset HTTP tested separately, not part of this capacity proof)',

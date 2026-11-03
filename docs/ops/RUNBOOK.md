@@ -151,6 +151,16 @@ it does not increase the normal30k ceiling or tomorrow's supplier allowance.
 
 ## Per-run policy and budgets
 
+Owner correction November2: routine HTTP request count is telemetry, NOT a
+release/admission ceiling. The reviewed routine operator uses explicit
+`requestLimit: 'observe'` in the workspace and accounted D1 client; original
+manifest estimates and every charged/unknown request remain unchanged. Do not
+ask for another count-only allowance to finish ordinary maintenance. Keep real
+SQL/row/model budgets, bounded retries/timeouts, single-writer checks and actual
+provider failures. Diagnostic and immutable migration clients keep their own
+finite limits. Always use the compatible maintained reader for cleanup/status
+after a routine run exceeds its historical request estimate.
+
 The normal batch refreshes up to ten EXISTING products per run: four oldest
 featured public gifts and six oldest other public gifts, with deterministic
 sparse-lane backfill. Retries retain that run's reservations; a new explicitly
@@ -166,10 +176,11 @@ categories. Six searches remain six searches; no quality/dedup bypass.
 Required factual short descriptions are independent of optional long articles.
 Tuesday–Sunday are model-free. Reuse unchanged approved copy and embeddings.
 
-Provider-confirmed Free retains5,000HTTP/12,000SQL/1.5Mknown reads/30kknown
+Provider-confirmed Free retains12,000SQL/1.5Mknown reads/30kknown
 writes and its existing uncertainty/headroom checks. On the owner's existing
-Standard plan, the reviewed routine profile is6,000HTTP/12,000SQL/3Mknown
-reads/40kknown writes. The accepted full-catalog run measured1.83Mreads, so the
+Standard plan, the reviewed routine profile is12,000SQL/3Mknown
+reads/40kknown writes. Legacy5,000/6,000HTTP fields are recorded estimates only,
+not a reason to strand an already-live release. The accepted full-catalog run measured1.83Mreads, so the
 old1.5Mguard could not reliably finish normal work. This finite margin does not
 rewrite any prior run's budget/charges.
 Check fresh account-wide usage and the actual plan before work/publication.

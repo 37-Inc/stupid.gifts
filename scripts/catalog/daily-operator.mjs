@@ -128,7 +128,7 @@ export async function assertNoUnsealedMaintenance(db,seal,scope=SCOPE){
     .bind(scope.environment,scope.indexName,generation).all()).results;
   if(rows.length)refuse('unsealed_maintenance');
 }
-function options(config,configPath,configSha256){return{config,driver:{configPath,configSha256,workspace:WORKSPACE,cadenceOnly:true},workspace:{directory:WORKSPACE,repository:ROOT,mode:'resume',runId:config.runId,codeSha:SOURCE,configSha256,scope:SCOPE,retention:config.retention,budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements}}};}
+function options(config,configPath,configSha256){return{config,driver:{configPath,configSha256,workspace:WORKSPACE,cadenceOnly:true},workspace:{directory:WORKSPACE,repository:ROOT,mode:'resume',runId:config.runId,codeSha:SOURCE,configSha256,scope:SCOPE,retention:config.retention,budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe'}};}
 async function prepare(directory,calendar){
   const old=await optional(directory+'/operator.json');
   if(old&&await optional(directory+'/success.json'))return{state:'skipped',reason:'run_already_completed',runId:old.runId};
@@ -182,13 +182,13 @@ async function review(entry,config,directory){
     console.log(JSON.stringify({state:'requires_agent_review',proposalPath,proposalSha256,summary,budget:await w.budget()}));
   }finally{await w.close();}
 }
-async function remember(result,entry,config,directory){
+export async function remember(result,entry,config,directory){
   if(result.state!=='finalized'||!result.catalogSeal)return;
   const w=await openRunWorkspace(entry.workspace);
   try{const cp=await w.readCheckpoint({controlOnly:true});if(cp?.checkpoint.phase!=='finalized'||cp.checkpoint.owner!==null)refuse('final_state');const control=cp.checkpoint.control.publication;
   if(control.stage!=='published'||!control.intent||control.intent.releaseId!==config.publication.releaseId||!control.versionReference)refuse('final_identity');
   const file=directory+'/catalog-control.json',hash=await put(file,result.catalogSeal),next={control:{path:file,sha256:hash},versionReference:control.versionReference,manifestSha256:control.intent.manifestSha256};
-  await put(directory+'/success.json',{next,result:weeklyCommandSummary(result),source:SOURCE,helperSha256:self});
+  await put(directory+'/success.json',{next,result:weeklyCommandSummary(result),source:config.codeSha,operatorSource:SOURCE,helperSha256:self});
   const pointer=CARE+'/last-success.json',old=await optional(pointer);
   if(old&&old.control.sha256!==config.inputs.previous.sha256&&old.control.sha256!==hash)refuse('successor_pointer_changed');
   if(old?.control.sha256===hash)return;
