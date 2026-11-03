@@ -3,7 +3,7 @@ import test from 'node:test';
 import {DatabaseSync} from 'node:sqlite';
 import {readFile,readdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-import {planNewProductSlugRepair,applyNewProductSlugRepair,effectiveSlugApproval,repairApprovedNewSlugs} from '../scripts/catalog/new-product-slug-repair.ts';
+import {planNewProductSlugRepair,applyNewProductSlugRepair,effectiveSlugApproval,repairApprovedNewSlugs,repairedSlugOriginalVector} from '../scripts/catalog/new-product-slug-repair.ts';
 import {maintenanceProjection,maintenanceEmbeddingText} from '../scripts/catalog/maintenance-state.ts';
 import {mergeCatalogMaintenanceUpsert} from '../scripts/ops/catalog-maintenance-merge.mjs';
 import {editorialSourceHash} from '../scripts/ops/catalog-editorial-core.mjs';
@@ -128,4 +128,15 @@ test('the original immutable approval seals the repaired display through the rea
   assert.equal(canonicalJson(prepared.revision.request.approval),before);
   assert.equal(sql.prepare('SELECT count(*) n FROM catalog_maintenance_operations').get().n,2);
   assert.deepEqual(await hydrateApprovedRevision(db,prepared.owner,approvedRevisionControl(prepared.revision)),prepared.revision);
+  const current={...sql.prepare('SELECT * FROM products WHERE id=?').get(f.row.id)};
+  // Owned technical fixture for the full private-inventory binding supplied by
+  // the real permanent predecessor. This is not a provider acceptance claim.
+  const state={...sql.prepare('SELECT * FROM catalog_maintenance_products').get()};
+  const proofRevision={...prepared.revision,persistent:{inventory:[{publicId:f.change.publicId,privateStateSha256:sha256(canonicalJson(state))}]}};
+  const native=await repairedSlugOriginalVector(db,prepared.owner,proofRevision,f.change,current);
+  assert.equal(native.values.length,1536);assert.equal(native.values[0],.25);
+  assert.equal(sql.prepare('SELECT count(*) n FROM vector_sync_outbox').get().n,0);
+  await assert.rejects(repairedSlugOriginalVector(db,prepared.owner,prepared.revision,f.change,current));
+  sql.prepare("UPDATE catalog_maintenance_products SET embedding_provenance_json='{}' WHERE product_id=?").run(f.row.id);
+  await assert.rejects(repairedSlugOriginalVector(db,prepared.owner,proofRevision,f.change,current));
 });

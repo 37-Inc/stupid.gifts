@@ -25,6 +25,7 @@ import { nativeHash, payloadVector, visible } from './vector-outbox.ts';
 import type { ImmutableVectorPayload, SyncVector, VectorEvent } from './vector-outbox.ts';
 import { approvedBaseChangeLimit } from '../../lib/catalog/owner-base-review.ts';
 import type { OwnerBaseCatalogReview } from '../../lib/catalog/owner-base-review.ts';
+import {repairedSlugOriginalVector} from './new-product-slug-repair.ts';
 
 type Row = Record<string, unknown>;
 type Code = 'provider_failed' | 'not_visible' | 'mutation_unknown' | 'attempts_exhausted';
@@ -570,6 +571,12 @@ export function deliverOwnedApprovedCohortVector(options: Omit<Parameters<typeof
     if(plan.products.length+plan.absentIds.length>(policy?SNAPSHOT_READ_LIMITS.identities:OWNED_VECTOR_PROOF_LIMIT))throw new Error('vector_plan_invalid');
     if(!change || !plan.products.some(value=>value.publicId===options.publicId)) return pruneDelivery(options,true,policy??undefined);
     if(options.original)throw new Error('vector_original_unproven');
+    const product=(await options.db.prepare('SELECT * FROM products WHERE public_id=?').bind(options.publicId).all()).results[0];
+    if(!product)throw new Error('vector_product_changed');
+    if(sha256(canonicalJson(product))!==change.productSha256){
+      const original=await repairedSlugOriginalVector(options.db,options.owner,options.revision,change,product);
+      return pruneDelivery({...options,original:{sha256:sha256(canonicalJson(original)),async load(){return original;}}},true,policy??undefined);
+    }
     const rows=(await options.db.prepare(`SELECT o.* FROM catalog_maintenance_vector_payloads p CROSS JOIN vector_sync_outbox o
       ON o.sequence=p.sequence WHERE p.operation_id=? AND o.public_id=? AND o.source_revision=? AND o.status='complete' AND o.operation='upsert' LIMIT 2`)
       .bind(change.operationId,options.publicId,options.revision.snapshot.catalogRevision).all()).results;
@@ -577,8 +584,6 @@ export function deliverOwnedApprovedCohortVector(options: Omit<Parameters<typeof
     const row=rows[0];const event:VectorEvent={sequence:Number(row.sequence),publicId:String(row.public_id),catalogRevision:String(row.source_revision),
       embeddingTextHash:String(row.embedding_text_hash),operation:'upsert'};
     const payload=await loadMaintenanceVectorPayload(options.db,event);
-    const product=(await options.db.prepare('SELECT * FROM products WHERE public_id=?').bind(options.publicId).all()).results[0];
-    if(!product||sha256(canonicalJson(product))!==change.productSha256)throw new Error('vector_product_changed');
     // Decoding an existing immutable payload is not an embedding/model call.
     const vector=payloadVector(event,payload,product,undefined,Date.parse(options.revision.snapshot.generatedAt));
     if(!vector)throw new Error('vector_original_unproven');
