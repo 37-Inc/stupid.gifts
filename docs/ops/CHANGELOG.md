@@ -1,6 +1,6 @@
 # goose.gifts — Running Changelog & Plan
 
-## 2026-11-02 — Reuse the repaired candidate's captured native embedding
+## 2026-11-02 — Reuse the repaired candidate's captured native embedding (PR332)
 
 [owner+codex] The URL-repaired new gift had a verified saved embedding but no
 earlier public upsert, correctly. The sealed same-owner repair now supplies

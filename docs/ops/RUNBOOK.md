@@ -6,6 +6,14 @@ latest protected receipt take precedence over historical journal entries.
 
 ## Current state
 
+Read the actual public release identity AND protected
+`daily-catalog-care/last-success.json` for the current accepted catalog. The
+dated receipts below are historical evidence, not an instruction to overwrite
+a newer release. Canonical `.4.14.1` owns the explicitly requested November2
+fresh-topic discovery and its same-run repair; check its latest state before
+starting another batch. The original4a runtime/config stay pinned during that
+run; a separately reviewed newer operator supplies its repair/readback logic.
+
 November2 owner correction: refresh/discovery sizes are PER-RUN guides, not a
 global daily supplier allowance. New runs have independent immutable identities;
 retry the same run without repeating provider phases. Scheduled care remains
@@ -102,7 +110,7 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-discovery-run-themes/stupid.gifts`.
+`/Users/cameronehrlich/.codex/worktrees/stupid-discovery-native-proof/stupid.gifts`.
 The old `stupid-catalog-care` checkout remains frozen for original source
 bindings; it is not the current scheduler's execution source.
 Its runtime includes the reviewed storefront, Howie rehearsal, bounded
