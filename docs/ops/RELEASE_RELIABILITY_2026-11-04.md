@@ -45,6 +45,13 @@ uploaded version and real deployed identity/receipt readback. After acceptance,
 the successor is saved before regenerable source cleanup. Cleanup failure is
 reported separately rather than undoing an accepted release.
 
+The full3388-identity inventory check is a paged job, not a single request.
+Routine checks allow up to fifteen minutes rather than aborting at two minutes;
+individual request timeouts and original publication/content deadlines still
+apply. Historical migration checks retain their original window. Sanitized D1
+error codes containing the provider name's digit are preserved rather than
+flattened to `publication_pending`. Interrupted read charges remain recorded.
+
 The `recover` CLI is post-provider only: original config/helper/source remain
 frozen, the original review SHA is required, and pre-review phases refuse.
 There is no supplier/model phase, new batch, counter reset, new scheduler,

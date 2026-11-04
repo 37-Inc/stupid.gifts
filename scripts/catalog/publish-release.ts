@@ -254,6 +254,14 @@ async function commandDefault(command:PublicationCommand){
   catch{throw new Error('publication_command_unknown');} // Never log stdout/stderr/provider errors.
 }
 
+/** Paged whole-catalog checks need a job-sized window, not a single-request
+ * timeout. Individual D1 requests remain bounded and original deadlines win. */
+export async function withPublicationInventorySignal<T>(routineCare:boolean,remaining:number,check:(signal:AbortSignal)=>Promise<T>):Promise<T>{
+  if(remaining<=0)throw new Error('publication_upload_retry_cutoff');
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),Math.min(routineCare?900_000:120_000,remaining));
+  try{return await check(controller.signal);}finally{clearTimeout(timer);}
+}
+
 /** No retries, redirects or uncertain-write replay in this REST client. The API
  * budget is per invocation. Wrangler separately retries asset/immutable VERSION
  * upload internally; duplicate matching versions are ambiguous, never activated.
@@ -599,12 +607,11 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // observation. No proof survives this invocation or crosses an owner change.
     const permanentProof=async()=>{
       if(!options.permanent&&!options.approvedCatalog?.persistent)return;
-      const controller=new AbortController(),remaining=control!.permit?120_000:Date.parse(activationDeadline??control!.build.request.cutoff)-now().getTime();
-      if(remaining<=0)throw new Error('publication_upload_retry_cutoff');
-      const timer=setTimeout(()=>controller.abort(),Math.min(120_000,remaining));
-      try{if(options.permanent)await assertPermanentCatalog(db,owner,options.permanent,control!.permit??undefined,controller.signal);
-        else await assertApprovedCatalogInventory(db,owner,options.approvedCatalog!,controller.signal);}
-      finally{clearTimeout(timer);} // The concrete D1 sender joins its own ledger before returning.
+      const remaining=control!.permit?(options.routineCare?900_000:120_000):Date.parse(activationDeadline??control!.build.request.cutoff)-now().getTime();
+      await withPublicationInventorySignal(Boolean(options.routineCare),remaining,async signal=>{
+        if(options.permanent)await assertPermanentCatalog(db,owner,options.permanent,control!.permit??undefined,signal);
+        else await assertApprovedCatalogInventory(db,owner,options.approvedCatalog!,signal);
+      }); // The concrete D1 sender joins its own ledger before returning.
     };
     const readPrior=async(signal:AbortSignal):Promise<DeploymentObservation>=>{
       signal.throwIfAborted();await workspace.assertHeld();signal.throwIfAborted();
@@ -1040,7 +1047,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // exact durable control/package and has no second activation path.
     return executePublication({...options,owner,dependencies:options.dependencies});
   }catch(error){
-    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_)[a-z_]+$/.test(error.message)?error.message:'publication_pending';
+    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_)[a-z0-9_]+$/.test(error.message)?error.message:'publication_pending';
     return{state:'pending',owner,errorCode:code};
   }
 }
