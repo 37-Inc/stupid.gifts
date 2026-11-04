@@ -39,6 +39,18 @@ test('source/state/input/model/native drift cannot be relabeled as a new semanti
     const x=await fixture();edit(x);await assert.rejects(deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory));
   }
 });
+test('photo-only fact refresh reuses the original serving identity and observation, without re-embedding',async()=>{
+  const x=await fixture();x.product.imageUrl='/images/gift-placeholder.svg';
+  const original=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory);
+  x.row.embedding_text_hash=null;x.row.source_facts_hash='c'.repeat(64);
+  const p=JSON.parse(x.state.semantic_json);p.sourceFactsHash=x.row.source_facts_hash;x.state.semantic_json=JSON.stringify(p);
+  x.row.public_display_json=JSON.stringify({...x.product,imageUrl:'https://example.invalid/fresh-photo.jpg',
+    eligibleUntil:'2026-11-05T00:00:00.000Z',persistent:x.product});
+  x.inventory={productSha256:hash(x.row),privateStateSha256:hash(x.state)};
+  await assert.rejects(deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory));
+  const before=structuredClone(x),current=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory,x.product);
+  assert.deepEqual(current,original);assert.deepEqual(x,before);
+});
 test('delta visits only reviewed public changes, skipping unchanged seed entries and excluded products',async()=>{
   const x=await fixture(),calls=[],catalog=structuredClone(x.f.catalog);
   catalog.entries=catalog.entries.filter(e=>e.publicId!==x.product.publicId);

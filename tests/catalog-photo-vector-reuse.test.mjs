@@ -24,6 +24,11 @@ test('photo refresh reuses exact verified text/native bytes without inventing a 
   assert.equal(v.values.length,1536);assert.equal(v.values[0],.125);assert.equal(v.embeddingTextHash,null);
   assert.equal(v.sourceFactsHash,f.member.sourceFactsHash);assert.equal(v.catalogRevision,'fresh-photo');assert.deepEqual(f,original);
 });
+test('saved verified binding remains exact when supplier availability produces no new outbox entry',()=>{
+  const f=fixture(),proof=JSON.parse(f.state.embedding_provenance_json);
+  f.member.embeddingTextHash=f.product.embedding_text_hash=proof.embeddingTextHash;
+  assert.equal(preservedPhotoVector(f.product,f.state,f.previous,f.member,'fresh-photo').embeddingTextHash,proof.embeddingTextHash);
+});
 for(const mutation of ['text','copy','native','provenance','absent','permanent-photo','binding'])test(`photo-native reuse rejects changed or unproven ${mutation}`,()=>{
   const f=fixture();
   if(mutation==='text'){const s=JSON.parse(f.state.semantic_json);s.wittyDescription='Different joke';f.state.semantic_json=JSON.stringify(s);}
