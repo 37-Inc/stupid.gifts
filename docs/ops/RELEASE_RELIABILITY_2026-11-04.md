@@ -55,6 +55,12 @@ proof plus fresh complete inventory, rather than a redundant queueing proof
 whose original execution cutoff has already elapsed. This does not change the
 native bytes, owner, publication intent or original supplier deadlines.
 
+V5 also binds the captured code-only serving prior separately from its original
+D1 catalog receipt, using the same exact-prior validation as normal publishing.
+The activation marker and marked-CAS recovery retain that immutable identity.
+This permits a verified footer/UI release over the same catalog; it never accepts
+a different catalog, changed serving version or an invented publication receipt.
+
 The `recover` CLI is post-provider only: original config/helper/source remain
 frozen, the original review SHA is required, and pre-review phases refuse.
 There is no supplier/model phase, new batch, counter reset, new scheduler,

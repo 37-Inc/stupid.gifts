@@ -377,6 +377,13 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
   const dependencies={repository:repo,fetch,resolveToken:async ref=>`TEST_ONLY_${ref.service.split('.').at(-1)}`,now:()=>clock,publication:{fetch,command,now:()=>new Date(clock)}};
   const options={configPath,configSha256,workspace};
   return{sql,local,previous,packet,config,options,dependencies,mode,calls,wire,index,workspaceOptions,now:()=>clock,advance(ms){clock=new Date(Date.parse(clock)+ms).toISOString();},
+    setServingPrior(){
+      const serving={releaseId:'code-only-prior',codeSha:'e'.repeat(40),catalogRevision:previous.catalogRevision,
+        catalogSnapshotSha256:packet.receipt.snapshot_sha256,manifestSha256:'f'.repeat(64),versionReference:'00000000-0000-4000-8000-000000000008'};
+      config.publication.servingPrior=serving;active.versions=[{version_id:serving.versionReference,percentage:100}];
+      priorIdentity={release_id:serving.releaseId,code_sha:serving.codeSha,catalog_revision:serving.catalogRevision,
+        catalog_snapshot_sha256:serving.catalogSnapshotSha256,manifest_sha256:serving.manifestSha256};
+    },
     async configure(){await put(options.configPath,config);options.configSha256=sha256(await fs.readFile(options.configPath));
       Object.assign(workspaceOptions,{runId:config.runId,configSha256:options.configSha256,retention:config.retention,
         budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements}});},
@@ -711,6 +718,7 @@ test('small permanent daily finishes beyond HTTP and SQL estimates with model-fr
 
 test('routine saved permanent-cohort upload recovers beyond its queueing cutoff without provider replay',async t=>{
   const f=await setup(t,{permanent:22,held:2,authenticPrior:true});
+  f.setServingPrior();
   f.config.publication.releaseId=f.config.runId;
   f.config.publication.prior.directory=null;
   f.config.cadence={day:'2026-10-20',featuredIds:Array.from({length:10},(_,i)=>`B${String(11+i).padStart(9,'0')}`)};f.config.backfillLimit=0;delete f.config.credentials.openai;

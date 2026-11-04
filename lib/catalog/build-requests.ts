@@ -336,6 +336,8 @@ export interface ReviewedUploadActivationInput {
   claim:CatalogBuildClaim;publication:PublicationClaim;versionReference:string;owner:MutationOwner;
   approval:ReviewedUploadActivationApproval;priorApproval?:ReviewedUploadActivationApprovalV1;
   original:{build:Record<string,unknown>;publication:Record<string,unknown>};
+  /** V5 binds the actual code-only storefront over the original catalog. */
+  servingPrior?:DeploymentIdentity;
   /** Separate fresh dispatch authority for an already acknowledged immutable
    * upload. Original build/source/retention times are never rewritten. */
   finishAuthorization?:{authorizationSha256:string;reviewedAt:string;activationDeadline:string;versionReference:string};
@@ -392,6 +394,7 @@ const reviewedRefuse=():never=>{throw new Error('build_reviewed_activation_fence
 async function reviewedInput(value:ReviewedUploadActivationInput){
   const i=structuredClone(value),{claim:c,publication:p,owner:o,approval:a,original:r}=i;
   encodeReviewedUploadActivationApproval(a);mutationFenceQuery(o,['freezing']);
+  if(i.servingPrior!==undefined&&a.schemaVersion!==5)reviewedRefuse();
   const bytes=encodeBuildRequest(c.request),intent=encodePublicationIntent(p.intent),b=r.build,u=r.publication;
   if(a.requestId!==c.requestId||await digest(bytes)!==c.requestId||o.environment!==c.request.environment||!c.request.priorReleaseId
     ||typeof i.versionReference!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(i.versionReference)
@@ -464,7 +467,7 @@ export async function beginReviewedUploadActivation(db:CatalogD1,value:ReviewedU
     ||await digest(`${JSON.stringify(snapshot)}\n`)!==c.request.sourceDigest||snapshot.products.some(x=>catalogDisplayDeadline(x)<=Date.parse(i.activationDeadline))
     ||!(await rollbackPreflight(db,snapshot,new Date(at))).ok)reviewedRefuse();
   const observed=await observe(readDeployment,30_000);
-  if(observed.environment!==o.environment||observed.settled!==true||!(await priorMatches(db,c.request,observed.active)))reviewedRefuse();
+  if(observed.environment!==o.environment||observed.settled!==true||!(await priorMatches(db,c.request,observed.active,i.servingPrior)))reviewedRefuse();
   const source=sourceGate(c.request,i.activationDeadline),visible=publicationActivationGate(snapshot,p.intent),imports=await unabandonedImportsQuery(db,o.environment);
   // Separate assertions in the SAME transaction preserve the full shared gate
   // while keeping its nested current-rights predicate below D1 depth100.
