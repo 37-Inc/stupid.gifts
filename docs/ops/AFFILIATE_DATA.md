@@ -1,5 +1,36 @@
 # Affiliate Data Availability
 
+## Current reporting reference — November 4, 2026
+
+| Field | Correct value |
+| --- | --- |
+| Parent Store ID | `rileyehrlic0b-20` |
+| Website tracking ID | `goose-gifts-37-20` |
+| Current public site | `https://stupid.gifts` |
+| Reports | `https://affiliate-program.amazon.com/p/reporting/earnings` |
+
+Verified again in the signed-in in-app browser: this exact tracking ID is listed
+under the correct parent, and Amazon reports credited clicks against it. The
+live chicken-vase destination uses the same tag. Private numerical evidence is
+`~/.codex/private/goose-gifts-migration/affiliate-report-20261104.json`.
+
+Select the **parent store at the top of the page first**, then filter Tracking
+ID to `goose-gifts-37-20`, select the intended dates, and view **Commissions**.
+The separate `onamzrileyehr-20` store and its `goose-gifts-20` tag are not this
+website's reporting scope. Do not rename/switch the live tag merely to match the
+new brand, or mix all-store revenue with website attribution. Never retain an
+authenticated sign-in URL as the report link.
+
+Routine care supplies the canonical tag in `scripts/catalog/daily-operator.mjs`'s
+`catalog.associateTag`; provider URL validation consumes that value. Saved runs
+pin it immutably. Keep every published retailer destination consistent with it.
+Historical Vercel environment instructions below are not the current writer.
+
+Ordered items normally update hourly, most within three hours; earnings are
+reported through the previous day and depend on shipments. Dashes/suppressed
+low-volume metrics are not a verified numeric zero. Recorded clicks prove tag
+credit, not a qualifying purchase or eventual commission.
+
 Last technically audited: 2026-10-19. Account ownership/report verification
 remains a separate gate.
 
