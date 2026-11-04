@@ -104,8 +104,9 @@ export async function headroom(token,spent={knownRowsRead:0,knownRowsWritten:0},
 export async function observeHeadroom(token,spent,anchor,send,plan){
   try{return await headroom(token,spent,anchor,send,plan);}
   catch(error){
-    if(plan!=='standard'||!/^routine_headroom_(?:rate_limited|unavailable|invalid)$/.test(error?.message??''))throw error;
-    console.warn(JSON.stringify({usageAlert:error.message,usage:'unknown',releaseBlocked:false}));
+    if(plan!=='standard'||error?.message==='routine_run_budget_exceeded')throw error;
+    const code=/^routine_headroom_(?:rate_limited|unavailable|invalid)$/.test(error?.message??'')?error.message:'routine_headroom_unavailable';
+    console.warn(JSON.stringify({usageAlert:code,usage:'unknown',releaseBlocked:false}));
     return{observedAt:new Date().toISOString(),usageUnknown:true};
   }
 }

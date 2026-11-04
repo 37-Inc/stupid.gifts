@@ -133,5 +133,8 @@ test('Standard usage reporting failure is unknown/advisory, not another release 
   const fail=async()=>Response.json({errors:[{extensions:{code:'budget'}}]});
   const result=await observeHeadroom('synthetic',undefined,null,fail,'standard');
   assert.equal(result.usageUnknown,true);assert.equal(result.rowsRead,undefined);
+  for(const send of [async()=>{throw Error('private transport detail');},async()=>new Response('not JSON')])
+    assert.equal((await observeHeadroom('synthetic',undefined,null,send,'standard')).usageUnknown,true);
+  await assert.rejects(observeHeadroom('synthetic',{knownRowsRead:-1,knownRowsWritten:0},null,fail,'standard'),/run_budget_exceeded/);
   await assert.rejects(observeHeadroom('synthetic',undefined,null,fail,'free'),/headroom_rate_limited/);
 });
