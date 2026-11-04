@@ -88,8 +88,7 @@ export function localFixture(now: () => number, lifetimeMs: number) {
       async keyword(_query, limit, at) { calls.keyword++; assert.ok(limit <= 240);
         if (failure === 'storage') throw new Error('PRIVATE_FAKE_PROVIDER_ERROR');
         return snapshot.products.filter(p => catalogDeadline(p.eligibleUntil) > at.getTime()).slice(0, limit); },
-    }), async reserveSemantic(scope, tokens) { calls.budget++; assert.deepEqual(scope, { environment: 'staging', index: 'local-only' });
-      assert.ok(Number.isInteger(tokens) && tokens > 0 && tokens <= 816); return failure !== 'budget'; },
+    }),
     async embed() { calls.embeddings++; if (failure === 'embedding') throw new Error('PRIVATE_FAKE_PROVIDER_ERROR'); await pause(5); return Array(1536).fill(.1); },
     async diagnostic(record) { calls.diagnostics++; assert.match(record.queryHash, /^[a-f0-9]{64}$/);
       assert.equal(Object.keys(record).sort().join(','), 'id,matchType,outcome,queryHash,queryLength,resultCount,topSimilarity'); },
@@ -120,11 +119,11 @@ export async function safetyProbes() {
   assert.equal(selected.products.length, 36); assert.ok(selected.inspected <= 20 + 36 + 8);
   const feed = await f.request('/api/catalog-feed', { method: 'POST', body: JSON.stringify({ seed: 'fixed', limit: 999 }) });
   assert.ok((await feed.json() as { products: unknown[] }).products.length <= 36); assert.equal(f.calls.ids, 0);
-  for (const mode of ['embedding', 'budget', 'storage', 'asset']) {
+  for (const mode of ['embedding', 'storage', 'asset']) {
     f.fail(mode); const response = await f.request(mode === 'asset' ? '/' : `/api/search-products?q=controlled-${mode}`, { headers: { 'CF-Connecting-IP': mode } });
     const body = await response.text(); assert.doesNotMatch(body, /PRIVATE_FAKE/);
     assert.equal(response.status, ['storage', 'asset'].includes(mode) ? 503 : 200);
-    if (mode === 'budget' || mode === 'embedding') assert.match(body, /"matchType":"keyword"/);
+    if (mode === 'embedding') assert.match(body, /"matchType":"keyword"/);
   }
   f.fail(''); const prior = { ...f.calls };
   await f.request('/api/search-products?q=cache-proof', { headers: { 'CF-Connecting-IP': 'cache' } });
@@ -190,8 +189,8 @@ export async function runLocalBurst(seconds = 600, progress: (value: unknown) =>
     await Promise.all(pending); await pause(Math.max(0, seconds * 1000 - (performance.now() - start))); histogram.disable();
     const elapsedMs = performance.now() - start, cpuUsed = process.cpuUsage(cpu), endMemory = process.memoryUsage();
     const expectedSearch = seconds * RATE / 20;
-    const checks = { adapterCounts: [f.calls.ids, f.calls.embeddings, f.calls.vectors, f.calls.budget, f.calls.diagnostics].every(value => value === expectedSearch)
-      && f.calls.keyword === 0, noNetwork: networkAttempts === 0 };
+    const checks = { adapterCounts: [f.calls.ids, f.calls.embeddings, f.calls.vectors, f.calls.diagnostics].every(value => value === expectedSearch)
+      && f.calls.budget === 0 && f.calls.keyword === 0, noNetwork: networkAttempts === 0 };
     return { schemaVersion: 1, kind: 'local-only-worker-rehearsal', startedAt, durationRequestedSeconds: seconds, elapsedMs: Math.round(elapsedMs),
       environment: { node: process.version, platform: process.platform, architecture: process.arch, transport: 'in-process', cacheState: 'warm handler; no CDN' },
       measurement: 'Handler dispatch through consumed response body; not network TTFB.',

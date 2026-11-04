@@ -3,7 +3,6 @@ import { catalogDeadline, persistentPublicProduct, resolvePublicProduct } from '
 import type { ProductSearchResult } from '../../lib/types.ts';
 import { isCatalogDisplayEligibleProduct, suppressNearDuplicateProducts } from '../../lib/db/product-scoring.ts';
 import type { SearchAdapters, SemanticBudgetScope, SiteEnv } from './bindings.ts';
-import { semanticBudgetConfig, semanticTokenUpperBound } from './semantic-budget.ts';
 import { catalogSearchTerms } from '../../lib/catalog/search-terms.ts';
 import { DERIVED_SEARCH_PROFILE, normalizeSemanticPrefix } from '../../lib/catalog/semantic-profile.ts';
 import type { DerivedSearchProfile } from '../../lib/catalog/semantic-profile.ts';
@@ -132,8 +131,7 @@ export function createSearchHandler<Env extends SiteEnv>(options: {
   const clients = new Map<string, { until: number; count: number }>();
   const maxRequests = Math.max(1, Math.min(options.rateLimit ?? 20, 60));
   const derived = options.derivedSemantic;
-  const budgetScope = options.semanticBudgetScope && Object.freeze({ ...options.semanticBudgetScope,
-    ...(derived ? { index: derived.indexName } : {}) });
+  const scope = options.semanticBudgetScope && Object.freeze({ ...options.semanticBudgetScope });
 
   return async (request: Request, env: Env): Promise<Response> => {
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
@@ -158,10 +156,12 @@ export function createSearchHandler<Env extends SiteEnv>(options: {
     if (++client.count > maxRequests) return json({ error: 'Too many searches' }, 429, { 'Retry-After': String(Math.ceil((client.until - startedAt) / 1000)) });
     const queryHash = await sha256(query.toLowerCase());
     // The kill switch changes the key so cached semantic responses are not reused.
-    const caps = semanticBudgetConfig(env, budgetScope);
+    // Usage monitoring must not gate search or require a D1 budget write.
     const vectorBinding = derived ? env.SEMANTIC_VECTORIZE : env.VECTORIZE;
-    const semantic = Boolean(derived !== null && caps && vectorBinding && options.adapters.reserveSemantic && (options.adapters.embed || env.OPENAI_API_KEY));
-    const key = `${options.catalogRevision}:${derived?.profile.id ?? EMBEDDING_MODEL}:${semantic}:${semantic ? `${caps!.requests}:${caps!.tokens}` : ''}:${limit}:${queryHash}`;
+    const semantic = Boolean(derived !== null && scope && env.ENVIRONMENT === scope.environment
+      && ['staging', 'production'].includes(scope.environment) && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$/.test(scope.index)
+      && env.SEMANTIC_SEARCH_ENABLED === 'true' && vectorBinding && (options.adapters.embed || env.OPENAI_API_KEY));
+    const key = `${options.catalogRevision}:${derived?.profile.id ?? EMBEDDING_MODEL}:${semantic}:${limit}:${queryHash}`;
     const cached = cache.get(key);
     // Hashing above can cross a product deadline. Check the current clock and
     // reselect immediately before serialization, just as for uncached responses.
@@ -178,8 +178,6 @@ export function createSearchHandler<Env extends SiteEnv>(options: {
       let vectorCount = 0;
       if (semantic) {
         try {
-          const reserved = await bounded(() => options.adapters.reserveSemantic!(budgetScope!, semanticTokenUpperBound(query), env), timeout);
-          if (reserved !== true) throw new Error('semantic_unallocated');
           const matches = await bounded(async (signal) => {
             const vector = await (options.adapters.embed || openAIEmbedding)(query, env, signal, derived?.profile);
             // A non-abortable/custom embedding can settle after fallback. It

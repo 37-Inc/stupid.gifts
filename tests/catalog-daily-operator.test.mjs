@@ -56,11 +56,12 @@ test('preparation pins the settled storefront only when it serves the sealed cat
   await assert.rejects(routineServingPrior('synthetic',seal,make(raw,'11234567-89ab-cdef-0123-456789abcdef')),/serving_identity/);
   await assert.rejects(routineServingPrior('synthetic',seal,make({...raw,extra:true})),/serving_identity/);
 });
-test('routine publication preserves only the approved bounded semantic policy',()=>{
-  assert.deepEqual(routineSearchPolicy(null),{enabled:false,dailyRequestCap:50,dailyTokenCap:32768});
+test('routine publication strips retired search budgets while preserving the verified index',()=>{
+  assert.deepEqual(routineSearchPolicy(null),{enabled:false});
   const policy={enabled:true,dailyRequestCap:50,dailyTokenCap:32768,derivedCatalog:{
     path:'/Users/cameronehrlich/.codex/private/goose-gifts-migration/search/catalog.json',sha256:'a'.repeat(64),indexName:'stupid-gifts-semantic-v1'}};
-  assert.deepEqual(routineSearchPolicy(policy),policy);
+  const current={enabled:true,derivedCatalog:policy.derivedCatalog};
+  assert.deepEqual(routineSearchPolicy(policy),current);assert.deepEqual(routineSearchPolicy(current),current);
   for(const change of [{dailyRequestCap:51},{dailyTokenCap:32769},{enabled:false},{extra:true},
     {derivedCatalog:{...policy.derivedCatalog,indexName:'stupid-gifts-production'}},
     {derivedCatalog:{...policy.derivedCatalog,path:'/tmp/catalog.json'}},

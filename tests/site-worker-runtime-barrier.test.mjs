@@ -35,7 +35,7 @@ async function fixture(t){
   return{sql,db,owner,state,handler,setBefore(fn){before=fn;},async request(handler,vector){return handler(new Request('https://stupid.gifts/api/search-products?q=desk+object'),
     {...env,VECTORIZE:{query:vector??(async()=>({matches:[]}))}});}};
 }
-test('owned capture blocks every runtime cleanup/insert/upsert while keyword remains usable',async t=>{
+test('owned capture blocks diagnostic/historical budget writes without gating read-only search',async t=>{
   for(const phase of ['writing','freezing']){
     const f=await fixture(t);await appendSearchDiagnostic(f.db,event('old'),new Date('2020-01-01T00:00:00.000Z'));
     f.sql.prepare("INSERT INTO semantic_search_budgets VALUES('production','old-index','2020-01-01',1,1,1,1)").run();
@@ -45,17 +45,17 @@ test('owned capture blocks every runtime cleanup/insert/upsert while keyword rem
     await assert.rejects(appendSearchDiagnostic(f.db,event('new'),now));
     const body=await(await f.request(f.handler(async()=>{providers++;return Array(1536).fill(.1);}))).json();
     assert.equal(body.results[0].id,base.id);assert.equal(body.results[0].matchType,'keyword');assert.equal(body.searchId,null);
-    assert.equal(providers,0);assert.deepEqual(f.state(),before);
+    assert.equal(providers,1);assert.deepEqual(f.state(),before);
     await releaseMutationOwnership(f.db,owner);assert.equal(await reserveSemanticSearch(f.db,budgetScope,env,20),true);
     await appendSearchDiagnostic(f.db,event('released'),now);assert.equal(f.state().diagnostics.length,1);
   }
 });
-test('reservation begun before ownership rechecks at INSERT execution and never calls providers',async t=>{
-  const f=await fixture(t),started=latch(),continueInsert=latch();let providers=0;
-  f.setBefore(async query=>{if(query.startsWith('INSERT INTO semantic_search_budgets')){started.resolve();await continueInsert.promise;}});
-  const pending=f.request(f.handler(async()=>{providers++;return Array(1536).fill(.1);}));await started.promise;
-  const owner=await f.owner('freezing'),before=f.state();continueInsert.resolve();const body=await(await pending).json();
-  assert.equal(body.results[0].matchType,'keyword');assert.equal(body.searchId,null);assert.equal(providers,0);assert.deepEqual(f.state(),before);
+test('search during capture cannot touch budget storage or fail because that storage is unavailable',async t=>{
+  const f=await fixture(t);let providers=0;
+  f.setBefore(async query=>{if(query.includes('semantic_search_budgets'))throw Error('Budget writes must not run');});
+  const owner=await f.owner('freezing'),before=f.state();
+  const body=await(await f.request(f.handler(async()=>{providers++;return Array(1536).fill(.1);}))).json();
+  assert.equal(body.results[0].matchType,'keyword');assert.equal(body.searchId,null);assert.equal(providers,1);assert.deepEqual(f.state(),before);
   await releaseMutationOwnership(f.db,owner);
 });
 test('provider begun before ownership cannot write late diagnostics or settle/debit after capture',async t=>{
@@ -63,5 +63,5 @@ test('provider begun before ownership cannot write late diagnostics or settle/de
   const pending=f.request(f.handler(async()=>{started.resolve();await finish.promise;return Array(1536).fill(.1);}),async()=>{vectors++;return{matches:[]};});
   await started.promise;const owner=await f.owner('freezing'),before=f.state();finish.resolve();const body=await(await pending).json();
   assert.equal(body.results[0].matchType,'keyword');assert.equal(body.searchId,null);assert.equal(vectors,1);assert.deepEqual(f.state(),before);
-  assert.equal(before.budget[0].requests_reserved,1);await releaseMutationOwnership(f.db,owner);
+  assert.equal(before.budget.length,0);await releaseMutationOwnership(f.db,owner);
 });

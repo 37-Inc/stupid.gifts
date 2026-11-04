@@ -117,8 +117,8 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-homepage-editor/stupid.gifts`
-after its source/release acceptance is recorded in `.11`. Until then use
+`/Users/cameronehrlich/.codex/worktrees/stupid-semantic-no-request-cap/stupid.gifts`
+after its source/release acceptance is recorded in `.13`. Until then use
 the latest accepted operator recorded in the existing task, never an unmerged
 branch or a checkout with an active build/run.
 The old `stupid-catalog-care` checkout remains frozen for original source
@@ -253,8 +253,11 @@ deployments remain distinct from D1 catalog receipts.
 
 Check home24→48, loaded images/descriptions, a changed product, correct affiliate
 tag, guides, Random, and the rehearsal. Label browser QA `utm_medium=qa`.
-The reviewed derived semantic index remains enabled under its50-request/
-32,768-token daily limit; changed/unproved inputs use working keyword fallback.
+The reviewed derived semantic index has NO internal daily request/token budget
+and does not reserve/write D1 budget counters. November3 owner direction: usage
+monitoring may alert but must not turn search off. Keep caching, bounded provider
+timeouts and keyword fallback; changed/unproved inputs use that fallback too.
+Historical budget rows/configs remain evidence only, not live admission gates.
 The native1536 index is authoritative maintenance/history; the serving1024
 index is a normalized projection of the same saved embedding, not a second
 generation. The routine freezing phase automatically syncs its bounded reviewed

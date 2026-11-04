@@ -1361,6 +1361,7 @@ test('reviewed semantic policy rejects staging enablement, coercion, unsafe boun
   assert.throws(()=>validatePublicationConfig({...f.config,semanticSearch:{...policy,enabled:true}}),/publication_configuration_invalid/);
   assert.deepEqual(validatePublicationConfig({...production,semanticSearch:{enabled:true,dailyRequestCap:100000,dailyTokenCap:100000000}}).semanticSearch,
     {enabled:true,dailyRequestCap:100000,dailyTokenCap:100000000});
+  assert.deepEqual(validatePublicationConfig({...production,semanticSearch:{enabled:true}}).semanticSearch,{enabled:true});
   for(const semanticSearch of [undefined,null,{},[],{...policy,extra:1},{...policy,enabled:'true'},
     ...[0,-0,-1,1.5,NaN,Infinity,'50',undefined,100001].map(dailyRequestCap=>({...policy,dailyRequestCap})),
     ...[0,-1,1.5,NaN,Infinity,'32768',undefined,100000001].map(dailyTokenCap=>({...policy,dailyTokenCap}))])
@@ -1455,21 +1456,23 @@ test('consecutive production publications preserve exact reviewed search policy 
   assert.equal(f.uploadedConfigs[1].name,f.uploadedConfigs[0].name);
   for(const uploaded of f.uploadedConfigs){
     assert.equal(uploaded.workers_dev,false);
-    assert.deepEqual(uploaded.vars,{ENVIRONMENT:'production',SEMANTIC_SEARCH_ENABLED:'true',
-      SEMANTIC_SEARCH_DAILY_REQUEST_CAP:'123',SEMANTIC_SEARCH_DAILY_TOKEN_CAP:'45678'});
+    assert.deepEqual(uploaded.vars,{ENVIRONMENT:'production',SEMANTIC_SEARCH_ENABLED:'true'});
   }
 });
-test('old production configs remain off; explicit disabled production/staging policies preserve lower caps',async t=>{
+test('old production configs remain off and retired budget vars are never deployed',async t=>{
   const lower={enabled:false,dailyRequestCap:7,dailyTokenCap:256};
   for(const [environment,semanticSearch]of [['production',undefined],['production',lower],['staging',lower]]){
     const f=await setup(t,{environment,semanticSearch});assert.equal((await f.execute()).state,'published');
-    assert.deepEqual(f.uploadedConfigs[0].vars,{ENVIRONMENT:environment,SEMANTIC_SEARCH_ENABLED:'false',
-      SEMANTIC_SEARCH_DAILY_REQUEST_CAP:String(semanticSearch?.dailyRequestCap??50),SEMANTIC_SEARCH_DAILY_TOKEN_CAP:String(semanticSearch?.dailyTokenCap??32768)});
+    assert.deepEqual(f.uploadedConfigs[0].vars,{ENVIRONMENT:environment,SEMANTIC_SEARCH_ENABLED:'false'});
   }
 });
-test('independent uploaded enabled/request/token binding mismatches or missing caps cannot activate',async t=>{
-  const bindings={SEMANTIC_SEARCH_ENABLED:'false',SEMANTIC_SEARCH_DAILY_REQUEST_CAP:'124',SEMANTIC_SEARCH_DAILY_TOKEN_CAP:'45679'};
-  for(const [name,text]of [...Object.entries(bindings),['SEMANTIC_SEARCH_DAILY_REQUEST_CAP',null],['SEMANTIC_SEARCH_DAILY_TOKEN_CAP',null]]){
+test('current cap-free semantic policy survives a complete production publication',async t=>{
+  const f=await setup(t,{environment:'production',semanticSearch:{enabled:true}});
+  assert.equal((await f.execute()).state,'published');
+  assert.deepEqual(f.uploadedConfigs[0].vars,{ENVIRONMENT:'production',SEMANTIC_SEARCH_ENABLED:'true'});
+});
+test('independent uploaded semantic enablement mismatch or missing opt-in cannot activate',async t=>{
+  for(const [name,text]of [['SEMANTIC_SEARCH_ENABLED','false'],['SEMANTIC_SEARCH_ENABLED',null]]){
     const f=await setup(t,{environment:'production',semanticSearch:{enabled:true,dailyRequestCap:123,dailyTokenCap:45678}});
     if(text===null)f.mode.missingSearchBinding=name;else f.mode.searchBinding={name,text};
     assert.equal((await f.execute()).errorCode,'publication_version_scope_mismatch',name);

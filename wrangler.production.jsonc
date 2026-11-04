@@ -21,9 +21,7 @@
   },
   "vars": {
     "ENVIRONMENT": "production",
-    "SEMANTIC_SEARCH_ENABLED": "false",
-    "SEMANTIC_SEARCH_DAILY_REQUEST_CAP": "50",
-    "SEMANTIC_SEARCH_DAILY_TOKEN_CAP": "32768"
+    "SEMANTIC_SEARCH_ENABLED": "false"
   },
   "d1_databases": [{
     "binding": "DB",
