@@ -148,12 +148,12 @@ export function createSearchHandler<Env extends SiteEnv>(options: {
     for (const [key, value] of clients) if (value.until <= startedAt) clients.delete(key);
     let client = clients.get(clientKey);
     if (!client) {
-      // Reject new clients at capacity rather than evicting active limits.
-      if (clients.size >= MAX_STATE_ENTRIES) return json({ error: 'Search busy' }, 429, { 'Retry-After': '60' });
+      // Bound telemetry memory, not the number of visitors allowed to search.
+      if (clients.size >= MAX_STATE_ENTRIES) clients.delete(clients.keys().next().value!);
       client = { until: startedAt + 60_000, count: 0 };
       clients.set(clientKey, client);
     }
-    if (++client.count > maxRequests) return json({ error: 'Too many searches' }, 429, { 'Retry-After': String(Math.ceil((client.until - startedAt) / 1000)) });
+    if (++client.count === maxRequests+1) console.warn('search_rate_above_estimate');
     const queryHash = await sha256(query.toLowerCase());
     // The kill switch changes the key so cached semantic responses are not reused.
     // Usage monitoring must not gate search or require a D1 budget write.

@@ -61,6 +61,31 @@ test('exact routes preserve JWT/multipart/status/retry headers and charge each r
   assert.equal(ws.events.filter(event=>event.reserve).length,2);assert.deepEqual(settled(ws).map(event=>event.status),['known','known']);
 });
 
+test('asset transfer timeout returns retryable503 without killing Wrangler or refunding usage',mac,async t=>{
+  const ws=ledger(),timer=globalThis.setTimeout;let calls=0;
+  t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>timer(fn,ms===180_000?20:ms,...args));
+  await factory(ws,async(_url,init)=>{
+    if(++calls===1)return new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(new Error('fixture timeout')),{once:true}));
+    return response({jwt:'OWNED_COMPLETION'});
+  },async(wrapped,signal)=>{
+    const url=endpoint(wrapped)+`/accounts/${scope.accountId}/workers/assets/upload?base64=true`;
+    const first=await fetch(url,{method:'POST',body:'same immutable asset'});
+    assert.equal(first.status,503);assert.equal(first.headers.get('retry-after'),'1');await first.arrayBuffer();
+    assert.equal(signal.aborted,false);
+    const second=await fetch(url,{method:'POST',body:'same immutable asset'});assert.equal(second.status,200);await second.arrayBuffer();
+  })(command);
+  assert.equal(calls,2);assert.deepEqual(settled(ws).map(e=>e.status),['unknown','known']);
+  assert.equal(ws.events.filter(e=>e.reserve).length,2);
+});
+
+test('uncertain version write remains fenced and records a body-free reason',mac,async()=>{
+  const ws=ledger();
+  await assert.rejects(factory(ws,async()=>{throw new Error('private transport detail');},async wrapped=>{
+    await fetch(endpoint(wrapped)+route+'/versions?bindings_inherit=strict',{method:'POST',body:'version fixture'});
+  })(command),error=>error.code==='publication_upload_unknown'&&error.detail.versionDispatched===true&&error.detail.reason==='transport');
+  assert.deepEqual(settled(ws).map(e=>e.status),['unknown']);
+});
+
 test('caller provisioning flags cannot override the forced no-provision command',mac,async()=>{
   for(const flags of [['--experimental-provision'],['--experimental-provision=true'],['--experimentalProvision=true'],['--x-provision=true'],
     ['--experimental-provision=false','--experimental-provision=true']]){
@@ -70,7 +95,7 @@ test('caller provisioning flags cannot override the forced no-provision command'
 });
 
 test('an incomplete incoming body is actively closed at the deadline before any reservation',mac,async t=>{
-  const ws=ledger(),timer=globalThis.setTimeout;t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>timer(fn,ms===30_000?20:ms,...args));
+  const ws=ledger(),timer=globalThis.setTimeout;t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>timer(fn,ms===180_000?20:ms,...args));
   await assert.rejects(factory(ws,async()=>assert.fail('No remote request'),async wrapped=>{
     await new Promise(resolve=>{const req=httpRequest(`${endpoint(wrapped)}${route}/assets-upload-session`,{method:'POST',headers:{'Content-Length':'100'}});
       req.on('error',()=>resolve());req.write('partial');});

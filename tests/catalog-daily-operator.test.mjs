@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { headroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation } from '../scripts/catalog/daily-operator.mjs';
+import { headroom, observeHeadroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation } from '../scripts/catalog/daily-operator.mjs';
 
 test('scheduled identity prevents duplicate invocations while named runs can repeat on the same day',()=>{
   const calendar={day:'2026-11-02'};
   assert.deepEqual(operatorInvocation(['prepare'],calendar),{command:'prepare',approvalSha:undefined,runKey:'scheduled-2026-11-02'});
   assert.equal(operatorInvocation(['prepare','--run','fresh-discovery'],calendar).runKey,'fresh-discovery');
   assert.equal(operatorInvocation(['--run','fresh-discovery','publish','a'.repeat(64)],calendar).approvalSha,'a'.repeat(64));
+  assert.equal(operatorInvocation(['recover','a'.repeat(64),'--run','scheduled-2026-11-02'],calendar).command,'recover');
   for(const args of [['prepare','--run'],['prepare','--run','../escape'],['start','extra'],
     ['prepare','--run','one','--run','two'],['publish'],['unknown']])assert.throws(()=>operatorInvocation(args,calendar),/routine_command/);
 });
@@ -105,7 +106,7 @@ test('settled work is not double charged but delayed analytics cannot erase it',
 test('missing, malformed, exceeded or uncertain usage cannot authorize provider work',async()=>{
   for(const [read,write]of [[null,0],[0,null],[-1,0],[0,-1],[Number.MAX_SAFE_INTEGER+1,0]])
     await assert.rejects(headroom('synthetic',undefined,null,usage(read,write)),/headroom_invalid/);
-  for(const spent of [{knownRowsRead:-1,knownRowsWritten:0},{knownRowsRead:1_500_001,knownRowsWritten:0},
+  for(const spent of [{knownRowsRead:-1,knownRowsWritten:0},{knownRowsRead:Number.MAX_SAFE_INTEGER+1,knownRowsWritten:0},
     {knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:-1}])
     await assert.rejects(headroom('synthetic',spent,null,usage(0,0)),/run_budget_exceeded/);
 });
@@ -116,7 +117,7 @@ test('verified Standard uses measured finite full-catalog margin without relaxin
   assert.deepEqual(routineLimits('free'),{requests:5000,statements:12000,reportedRowsRead:1500000,reportedRowsWritten:30000});
   assert.deepEqual(routineLimits('standard'),{requests:6000,statements:12000,reportedRowsRead:3000000,reportedRowsWritten:40000});
   await headroom('synthetic',{knownRowsRead:1_830_000,knownRowsWritten:20_373},null,usage(30_000_000,200_000),'standard');
-  await assert.rejects(headroom('synthetic',{knownRowsRead:3_000_001,knownRowsWritten:0},null,usage(0,0),'standard'),/run_budget_exceeded/);
+  await headroom('synthetic',{knownRowsRead:3_000_001,knownRowsWritten:0},null,usage(0,0),'standard');
   assert.throws(()=>routineLimits('unknown'),/plan_unavailable/);
 });
 test('provider-confirmed Standard skips obsolete Free account ceilings but keeps its finite run limit',async()=>{
@@ -125,5 +126,12 @@ test('provider-confirmed Standard skips obsolete Free account ceilings but keeps
   await assert.rejects(currentD1Plan('synthetic',async()=>Response.json({success:true,result:{}})),/plan_unavailable/);
   await headroom('synthetic',undefined,null,usage(6_000_000,200_000),'standard');
   await assert.rejects(headroom('synthetic',undefined,null,usage(6_000_000,200_000),'free'),/free_headroom/);
-  await assert.rejects(headroom('synthetic',{knownRowsRead:3_000_001,knownRowsWritten:0},null,usage(0,0),'standard'),/run_budget_exceeded/);
+  await headroom('synthetic',{knownRowsRead:3_000_001,knownRowsWritten:0},null,usage(0,0),'standard');
+});
+
+test('Standard usage reporting failure is unknown/advisory, not another release budget gate',async()=>{
+  const fail=async()=>Response.json({errors:[{extensions:{code:'budget'}}]});
+  const result=await observeHeadroom('synthetic',undefined,null,fail,'standard');
+  assert.equal(result.usageUnknown,true);assert.equal(result.rowsRead,undefined);
+  await assert.rejects(observeHeadroom('synthetic',undefined,null,fail,'free'),/headroom_rate_limited/);
 });

@@ -81,17 +81,16 @@ test('accounted routine requests are telemetry beyond the old limit, not a reaso
   await db.prepare('SELECT 1').all();await db.prepare('SELECT 2').all();
   assert.equal(db.metrics().requests,6004);assert.equal(db.metrics().statements,3);
   assert.equal(db.metrics().unconfirmedRequests,2);assert.equal(reservations.length,4);
-  const before=f.calls.length;
-  await assert.rejects(db.prepare('SELECT 3').all(),/budget_exhausted/);
-  assert.equal(f.calls.length,before);
+  await db.prepare('SELECT 3').all();
+  assert.equal(db.metrics().statements,4);
 });
 
-test('request observation keeps row budgets and requires durable accounting',async t=>{
+test('routine observation records rows beyond estimates and still requires durable accounting',async t=>{
   const f=await fixture(t),accounting={scope:{accountId:config.accountId,databaseId:config.databaseId,databaseName:config.databaseName},
     initial:{httpRequests:6000,sqlStatements:0,knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:0},async reserve(){},async settle(){}};
   const db=await createCatalogD1Rest({...config,fetch:f.fetch,requestLimit:'observe',limits:{requests:3,reportedRowsRead:2},accounting});
-  await db.prepare('SELECT 1').all();const before=f.calls.length;
-  await assert.rejects(db.prepare('SELECT 2').all(),/budget_exhausted/);assert.equal(f.calls.length,before);
+  await db.prepare('SELECT 1').all();await db.prepare('SELECT 2').all();
+  assert.ok(db.metrics().reportedRowsRead>2);
   await assert.rejects(createCatalogD1Rest({...config,fetch:f.fetch,requestLimit:'observe'}),/configuration_invalid/);
   await assert.rejects(createCatalogD1Rest({...config,fetch:f.fetch,requestLimit:'unlimited',accounting}),/configuration_invalid/);
 });

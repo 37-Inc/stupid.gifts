@@ -33,6 +33,7 @@ import type { CatalogD1 } from '../../lib/catalog/storage/d1.ts';
 import { canonicalTime } from '../../lib/catalog/snapshot.ts';
 import {repairApprovedNewSlugs} from './new-product-slug-repair.ts';
 import {syncApprovedSearchDelta} from './sync-semantic-delta.ts';
+import {routineUploadRetry} from './routine-upload-retry.ts';
 import amazonCreators from '../../lib/amazon-creators.js';
 import { dailyCatalogPhases, pacificCatalogCalendar, runDailyCatalogWithBackend, withCatalogCadence, validCatalogRunKey } from '../ops/catalog-daily.mjs';
 import {validateExecutionAdoption,validateExecutionAdoptionConfigs} from './execution-adoption.ts';
@@ -78,7 +79,7 @@ export function reviewedUploadResume(saved:{sha256:string;checkpoint:Omit<Worksp
     ||retry.evidence.reference!==`objects/${retry.evidence.sha256}.json`)return false;
   try{encodeReviewedUploadActivationApproval(retry.approval);}catch{return false;}
   const cp=saved.checkpoint,c=cp.control?.publication,a=retry.approval,p=cp.pins;
-  if(a.schemaVersion!==4||!['attention',...(retry.transport?['publishing']:[])].includes(cp.phase)||cp.owner?.phase!=='freezing'||!c||c.permit||c.deploymentId
+  if(![4,5].includes(a.schemaVersion)||!['attention',...(retry.transport||a.schemaVersion===5?['publishing']:[])].includes(cp.phase)||cp.owner?.phase!=='freezing'||!c||c.permit||c.deploymentId
     ||!p.publicationUploadPending||!p.publicationUploadReview||p.publicationUploadAcknowledged
     ||p.publicationUploadRetryAcknowledged&&!p.publicationUploadRetryPending
     ||a.requestId!==c.requestId||a.packageSha256!==c.packageSha256||a.configSha256!==c.configSha256
@@ -86,8 +87,8 @@ export function reviewedUploadResume(saved:{sha256:string;checkpoint:Omit<Worksp
   if(retry.transport&&(!exact(retry.transport,'previous')||!exact(retry.transport.previous,'reference,sha256')
     ||retry.transport.previous.reference!==`objects/${retry.transport.previous.sha256}.json`
     ||retry.transport.previous.sha256!==p.publicationUploadRetryPending?.sha256||p.publicationUploadRetryAcknowledged))return false;
-  const pending=retry.transport?p.publicationUploadTransportPending:p.publicationUploadRetryPending;
-  const ack=retry.transport?p.publicationUploadTransportAcknowledged:p.publicationUploadRetryAcknowledged;
+  const label=a.schemaVersion===5?`publicationUploadRoutine${a.attempt}`:retry.transport?'publicationUploadTransport':'publicationUploadRetry';
+  const pending=p[`${label}Pending`],ack=p[`${label}Acknowledged`];
   if(ack&&!pending)return false;
   return pending
     ?!!ack&&['uploading','uploaded'].includes(c.stage)
@@ -101,12 +102,12 @@ export async function recoverMarkedReviewedActivation(options:{db:CatalogD1;work
   retry:Parameters<typeof executePublication>[0]['reviewedUploadRetry'];
   finishAuthorization?:Parameters<typeof executePublication>[0]['finishAuthorization']}) {
   const {db,workspace,saved,config,retry}=options,cp=saved.checkpoint,c=cp.control?.publication,pins=cp.pins;
-  if(!pins.reviewedUploadActivationPending||c?.permit||retry?.approval.schemaVersion!==4)return null;
+  if(!pins.reviewedUploadActivationPending||c?.permit||!retry||![4,5].includes(retry.approval.schemaVersion))return null;
   if(!c||c.stage!=='uploaded'||!c.publication||!c.versionReference||!cp.owner||!['publishing','attention'].includes(cp.phase)
     ||!reviewedUploadResume({...saved,checkpoint:{...cp,phase:'attention'}},retry))
     throw new Error('weekly_reviewed_activation_fenced');
-  const pending=retry!.transport?pins.publicationUploadTransportPending:pins.publicationUploadRetryPending;
-  const acknowledged=retry!.transport?pins.publicationUploadTransportAcknowledged:pins.publicationUploadRetryAcknowledged;
+  const label=retry.approval.schemaVersion===5?`publicationUploadRoutine${retry.approval.attempt}`:retry.transport?'publicationUploadTransport':'publicationUploadRetry';
+  const pending=pins[`${label}Pending`],acknowledged=pins[`${label}Acknowledged`];
   const record=await workspace.readArtifact(pending) as {original:unknown};
   const input={claim:c.build,publication:c.publication,versionReference:c.versionReference,owner:cp.owner,
     approval:retry!.approval,original:record.original,
@@ -334,7 +335,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     return withCatalogCadence({workspace:options.workspace,repository:repo,now,runKey:config.cadence.runKey},(cadence:Dependencies['cadence'])=>runCloudflareWeekly(options,{...dependencies,cadence}));
   if(options.approval&&options.command!=='resume')throw new Error('weekly_approval_requires_phase_resume');
   if(options.reviewedUploadRetry&&options.command!=='resume')throw new Error('weekly_upload_retry_requires_resume');
-  const reviewedUploadRetry=options.reviewedUploadRetry
+  let reviewedUploadRetry=options.reviewedUploadRetry
     ?await reviewed(options.reviewedUploadRetry.path,options.reviewedUploadRetry.sha256,repo) as Parameters<typeof executePublication>[0]['reviewedUploadRetry']:undefined;
   const scope={environment:config.environment,indexName:config.vectorIndex.name};const resolveToken=dependencies.resolveToken||resolveReadToken;
   const workspaceOptions:RunWorkspaceOptions={directory:options.workspace,repository:adoption?original.publication.sourceRoot:repo,mode:options.command==='start'?'create':'resume',
@@ -408,6 +409,10 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     if(finish?.terminalReceiptOnly&&!permanentFinalization)throw Error('weekly_terminal_scope_required');
     if(!permanentFinalization)await ws.purgeExpired();
     let saved=await ws.readCheckpoint({controlOnly:true});
+    if(config.cadence&&!reviewedUploadRetry&&saved?.checkpoint.control?.publication){
+      try{reviewedUploadRetry=await routineUploadRetry(ws,now());}
+      catch(error){return{state:'attention',phase:saved.checkpoint.phase,errorCode:safeCode(error),budget:await ws.budget()};}
+    }
     if(!permanentFinalization&&saved&&['phases_running','phase_failed','attention','finalized'].includes(saved.checkpoint.phase)
       &&!(saved.checkpoint.phase==='attention'&&(resolving(saved.checkpoint)||reviewedUploadResume(saved,reviewedUploadRetry))))
       return{state:saved.checkpoint.phase==='finalized'?'finalized':'attention',phase:saved.checkpoint.phase,
@@ -608,7 +613,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     if(cp.phase==='publishing'){
       revision=revision||await hydrateApprovedRevision(db,hydrationOwner??cp.owner!,await readOrdered<ReturnType<typeof approvedRevisionControl>>(ws,cp.pins.revision));
       const result=await executePublication({db,owner:cp.owner!,revision,approvedCatalog:revision,requestId:String(state().requestId),runReference:config.runId,workspace:ws,
-        config:config.publication,credentials:{cloudflareToken:token,identityAuthorization:await identityAuthorization()},dependencies:publication,reviewedUploadRetry,finishAuthorization:finish?.authorization});
+        config:config.publication,routineCare:Boolean(config.cadence),credentials:{cloudflareToken:token,identityAuthorization:await identityAuthorization()},dependencies:publication,reviewedUploadRetry,finishAuthorization:finish?.authorization});
       const changed=await ws.readCheckpoint();if(!changed)throw new Error('weekly_checkpoint_missing');saved=changed;cp=changed.checkpoint;
       if(result.state!=='published')return{...result,phase:cp.phase,budget:await ws.budget()};
       const actual=(await db.prepare('SELECT * FROM publication_receipts WHERE release_id=?').bind(result.releaseId).all()).results;
@@ -642,6 +647,12 @@ export function weeklyCommandSummary(result:Record<string,unknown>){
     const value=result[key];if(typeof value==='string'&&/^[a-zA-Z0-9._-]{1,200}$/.test(value))output[key]=value;
   }
   if(result.budget)output.budget=result.budget;
+  if(result.budget&&typeof result.budget==='object'){
+    const b=result.budget as Record<string,number>;
+    const estimates={httpRequests:6000,sqlStatements:12000,knownRowsRead:3000000,knownRowsWritten:40000};
+    const alerts=Object.entries(estimates).filter(([k,n])=>b[k]>n).map(([k,n])=>`${k}_above_estimate_${n}`);
+    if(alerts.length)output.usageAlerts=alerts;
+  }
   return output;
 }
 async function main(){

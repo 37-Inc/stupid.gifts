@@ -30,6 +30,7 @@ import { openRunWorkspace } from '../scripts/catalog/run-workspace.ts';
 import { createCatalogD1Rest } from '../scripts/catalog/d1-write-rest.ts';
 import { accountedPublicationFetch, accountedPublicationReadFetch } from '../scripts/catalog/publication-read-fetch.ts';
 import {readOnlyUploadEvidence,readOnlyTransportEvidence} from '../scripts/catalog/upload-preflight-proof.ts';
+import {routineUploadRetry} from '../scripts/catalog/routine-upload-retry.ts';
 import { readOwnedLogicalRows } from '../scripts/catalog/owned-operational-import.ts';
 import safeCatalogPayload from '../static-site/public/safe/catalog.json' with {type:'json'};
 
@@ -158,7 +159,7 @@ async function setup(t,{real=false,prior=true,identityOnlyPrior=false,environmen
     }else if(command.args.includes('upload')){
       uploadCalls++;const cfg=JSON.parse(await fs.readFile(command.args[command.args.indexOf('--config')+1]));assert.equal(cfg.name,config.workerName);
       const base=path.join(workspace.directory,'publication-runtime',config.releaseId);
-      const sub=['read-only-retry','read-only-transport'].find(s=>command.env.WRANGLER_LOG_PATH===path.join(base,s,'logs'));
+      const sub=['read-only-retry','read-only-transport','routine-retry-1','routine-retry-2','routine-retry-3'].find(s=>command.env.WRANGLER_LOG_PATH===path.join(base,s,'logs'));
       const runtime=sub?path.join(base,sub):base;
       assert.equal(command.args[command.args.indexOf('--outdir')+1],path.join(runtime,'bundle'));
       assert.equal(command.env.TMPDIR,path.join(runtime,'tmp'));assert.equal(command.env.WRANGLER_LOG_PATH,path.join(runtime,'logs'));
@@ -494,6 +495,35 @@ test('protected upload refusal persists a body-free review gate that resume cann
 const protectedCommand=(f,run=f.command)=>accountedPublicationUploadCommand({workspace:f.workspace,
   scope:{accountId:f.config.accountId,workerName:f.config.workerName},send:async()=>assert.fail('No remote upload in synthetic command fixture'),command:run});
 const protectedMac={skip:process.platform!=='darwin'};
+
+test('routine asset-only retry publishes the original package after its execution cutoff without refetch/build or rights renewal',protectedMac,async t=>{
+  const f=await setup(t,{real:true,retentionMs:24*3600000,cutoffMs:3600000});f.config.releaseId='fixture-run';
+  const originalProducts=canonicalJson(f.sql.prepare('SELECT * FROM products').all());
+  const failed=protectedCommand(f,async wrapped=>{
+    if(!wrapped.args.includes('upload'))return f.command(wrapped);
+    const log=path.join(wrapped.env.WRANGLER_LOG_PATH,'wrangler-2026-10-19_12-00-00_000.log');
+    await fs.mkdir(path.dirname(log),{recursive:true,mode:0o700});
+    await fs.writeFile(log,`-- START CF API REQUEST: POST http://127.0.0.1:1234/nonce/client/v4/accounts/${f.config.accountId}/workers/assets/upload?base64=true\n`,{mode:0o600});
+    await fs.writeFile(wrapped.env.WRANGLER_OUTPUT_FILE_PATH,JSON.stringify({type:'wrangler-session',command_line_args:wrapped.args,log_file_path:log})+'\n',{mode:0o600});
+    await f.workspace.reserveBudget({id:'lost-asset',requestSha256:'f'.repeat(64),units:{httpRequests:1,sqlStatements:0}});
+    await f.workspace.settleBudget('lost-asset',{status:'unknown',usage:null});
+    throw Error('Synthetic interrupted asset, no version submitted');
+  });
+  assert.equal((await f.execute(f.db,{command:failed})).errorCode,'publication_upload_command_failed');
+  const original=structuredClone(f.checkpoint().control.publication),review=f.checkpoint().pins.publicationUploadReview;
+  f.advance(2*3600000);await f.reopen();
+  const retry=await routineUploadRetry(f.workspace,f.now().toISOString());assert.equal(retry.approval.schemaVersion,5);
+  const result=await f.execute(f.db,{command:protectedCommand(f)},undefined,retry);
+  assert.equal(result.state,'published',JSON.stringify(result));
+  assert.equal(f.counts().buildCalls,1);assert.equal(f.counts().uploadCalls,1);assert.equal(f.counts().activateCalls,1);
+  assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM products').all()),originalProducts);
+  assert.deepEqual(f.checkpoint().control.publication.build.request,original.build.request);
+  assert.deepEqual(f.checkpoint().pins.publicationUploadReview,review);
+  assert.equal((await f.workspace.budget()).unconfirmedRequests,1);
+  assert.equal(await readMutationOwner(f.db,scope),null);
+  const before=f.counts();assert.equal((await f.execute(f.db,{command:protectedCommand(f)},undefined,retry)).state,'published');
+  assert.equal(f.counts().uploadCalls,before.uploadCalls);assert.equal(f.counts().activateCalls,before.activateCalls);
+});
 
 function readOnlyFailureCommand(f){
   return accountedPublicationUploadCommand({workspace:f.workspace,scope:{accountId:f.config.accountId,workerName:f.config.workerName},

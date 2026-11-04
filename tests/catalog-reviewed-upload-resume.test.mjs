@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {reviewedUploadResume} from '../scripts/catalog/run-cloudflare-weekly.ts';
+import {reviewedUploadResume,weeklyCommandSummary} from '../scripts/catalog/run-cloudflare-weekly.ts';
 
 const digest=n=>String(n).repeat(64),ref=n=>({sha256:digest(n),reference:`objects/${digest(n)}.json`});
 function fixture(){
@@ -21,6 +21,22 @@ test('only exact V4 initial attention enters publication; acknowledged same retr
   assert.equal(reviewedUploadResume(f.saved,f.retry),true);
   c.stage='uploaded';c.versionReference='00000000-0000-4000-8000-000000000001';
   assert.equal(reviewedUploadResume(f.saved,f.retry),true);
+});
+
+test('routine V5 resumes only the pinned package/attempt, retaining earlier unacknowledged markers',()=>{
+  const f=fixture();Object.assign(f.retry.approval,{schemaVersion:5,attempt:2,activationDeadline:'2026-10-25T01:00:00.000Z'});
+  f.saved.checkpoint.pins.publicationUploadRoutine1Pending=ref(8);
+  assert.equal(reviewedUploadResume(f.saved,f.retry),true);
+  f.saved.checkpoint.pins.publicationUploadRoutine2Pending=ref(8);
+  assert.equal(reviewedUploadResume(f.saved,f.retry),false);
+  f.saved.checkpoint.pins.publicationUploadRoutine2Acknowledged=ref(9);
+  assert.equal(reviewedUploadResume(f.saved,f.retry),true);
+});
+
+test('usage estimates produce alerts without changing a successful result or erasing unknown charges',()=>{
+  const budget={httpRequests:7000,sqlStatements:13000,knownRowsRead:4000000,knownRowsWritten:50000,unconfirmedRequests:2};
+  const result=weeklyCommandSummary({state:'finalized',budget});
+  assert.equal(result.state,'finalized');assert.deepEqual(result.budget,budget);assert.equal(result.usageAlerts.length,4);
 });
 
 test('unapproved/legacy/malformed authority or initial checkpoint, owner, package, config, request and pin drift never leaves attention',async t=>{

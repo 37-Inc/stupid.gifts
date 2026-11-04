@@ -331,8 +331,9 @@ function budgetReservation(state:State,value:BudgetReservation) {
   if(state.recovery?.scope==='approved-permanent-finalization'
     &&([...state.reservations.values()].filter(r=>r.settlement?.status==='unknown').length!==state.recovery.usage.unconfirmedRequests
       ||value.units.sqlStatements&&current.knownRowsRead>=state.recovery.reportedRowsRead!))fail('recovery_read_budget');
-  if(state.requestLimit==='enforce'&&current.httpRequests+value.units.httpRequests>limit.httpRequests
-    ||current.sqlStatements+value.units.sqlStatements>limit.sqlStatements)fail('budget_exceeded');
+  // Routine care records usage; historical estimates are not permission gates.
+  if(state.requestLimit==='enforce'&&(current.httpRequests+value.units.httpRequests>limit.httpRequests
+    ||current.sqlStatements+value.units.sqlStatements>limit.sqlStatements))fail('budget_exceeded');
 }
 async function pathWithoutLinks(path:string) {
   if(!isAbsolute(path)||normalize(path)!==path||path.endsWith(sep)||path.includes('\0'))fail('path');
@@ -683,7 +684,7 @@ async function loadState(directory:string,manifest:WorkspaceManifest,repairHead=
     if(!state.count||!same(head,previousHead))fail('journal_head');
     if(repairHead)await replaceHead(directory,previousHead,next);
   }
-  const usage=totals(state),limit=ceiling(state);if(requestLimit==='enforce'&&usage.httpRequests>limit.httpRequests||usage.sqlStatements>limit.sqlStatements)fail('budget_exceeded');
+  const usage=totals(state),limit=ceiling(state);if(requestLimit==='enforce'&&(usage.httpRequests>limit.httpRequests||usage.sqlStatements>limit.sqlStatements))fail('budget_exceeded');
   return state;
 }
 function receipt(value:ProviderReceipt) {
