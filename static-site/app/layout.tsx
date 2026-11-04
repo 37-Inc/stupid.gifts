@@ -70,6 +70,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <span>© Thirty Seven Inc.</span>
             <a href="/gift-guides">Gift guides</a>
             <a href="/random-gift">Surprise me</a>
+            <a href="https://www.pinterest.com/stupid_gifts/" target="_blank" rel="noopener noreferrer">
+              Pinterest<span className="sr-only"> (opens in a new tab)</span>
+            </a>
             <a href="mailto:goosegifts@37.technology">Contact</a>
             <a href="/privacy">Privacy</a>
           </div>

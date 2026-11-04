@@ -112,6 +112,23 @@ test("layout and show wordmarks/URLs follow source mode without losing contact o
     assert.ok(slides.includes(`${config.siteIdentity.hostname}/howie/controlled-fixture`));
   }
 });
+test("shared footer links to the owned Pinterest profile safely without changing adjacent links", () => {
+  for (const mode of ["preview", "goose-production", "stupid-production"]) {
+    for (const fixture of [false, true]) {
+      const layout = component("../static-site/app/layout.tsx", identity({ CATALOG_SITE_MODE: mode }), fixture);
+      const html = renderToStaticMarkup(React.createElement(layout.default));
+      const footer = html.match(/<footer>([\s\S]*?)<\/footer>/)[1];
+      const bottom = footer.match(/<div class="footer-bottom">([\s\S]*?)<\/div>/)[1];
+      assert.match(bottom, /<a href="https:\/\/www\.pinterest\.com\/stupid_gifts\/" target="_blank" rel="noopener noreferrer">Pinterest<span class="sr-only"> \(opens in a new tab\)<\/span><\/a>/);
+      assert.deepEqual([...bottom.matchAll(/href="([^"]+)"/g)].map(match => match[1]), [
+        "/gift-guides", "/random-gift", "https://www.pinterest.com/stupid_gifts/",
+        "mailto:goosegifts@37.technology", "/privacy",
+      ]);
+      assert.match(footer, /We may earn a commission\. As an Amazon Associate we earn from qualifying purchases\./);
+      assert.match(bottom, /© Thirty Seven Inc\./);
+    }
+  }
+});
 test("actual show and QR generation use only selected compile-time origin across all source modes", () => {
   const script = `
     import { episodeShareUrl } from './static-site/lib/show.ts';
