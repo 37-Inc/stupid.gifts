@@ -10,13 +10,13 @@ import {Icon} from '../static-site/components/Icon.tsx';
 import {projectCard} from '../static-site/lib/card-shard.ts';
 
 globalThis.React=React;
-const module={exports:{}},require=createRequire(new URL('../static-site/components/RandomSelection.tsx',import.meta.url));
+const commonJs={exports:{}},require=createRequire(new URL('../static-site/components/RandomSelection.tsx',import.meta.url));
 const source=fs.readFileSync(new URL('../static-site/components/RandomSelection.tsx',import.meta.url),'utf8');
 const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX}});
-vm.runInNewContext(compiled.outputText,{module,exports:module.exports,require:name=>name==='./ProductCard'
+vm.runInNewContext(compiled.outputText,{module:commonJs,exports:commonJs.exports,require:name=>name==='./ProductCard'
   ?{ProductCard:({product})=>React.createElement('article',{'data-product':product.id},product.title)}
   :name==='./Icon'?{Icon}:require(name)});
-const {RandomSelection}=module.exports;
+const {RandomSelection}=commonJs.exports;
 const fixture=JSON.parse(fs.readFileSync(new URL('../static-site/fixtures/catalog.snapshot.json',import.meta.url)));
 test('random action uses the existing decorative dice glyph without the redundant no-repeat sentence',()=>{
   const initial=projectCard(fixture.products[0]);
