@@ -26,6 +26,7 @@ import type { ImmutableVectorPayload, SyncVector, VectorEvent } from './vector-o
 import { approvedBaseChangeLimit } from '../../lib/catalog/owner-base-review.ts';
 import type { OwnerBaseCatalogReview } from '../../lib/catalog/owner-base-review.ts';
 import {repairedSlugOriginalVector} from './new-product-slug-repair.ts';
+import {preservedPhotoVector} from './photo-vector-reuse.ts';
 
 type Row = Record<string, unknown>;
 type Code = 'provider_failed' | 'not_visible' | 'mutation_unknown' | 'attempts_exhausted';
@@ -580,6 +581,13 @@ export function deliverOwnedApprovedCohortVector(options: Omit<Parameters<typeof
     const rows=(await options.db.prepare(`SELECT o.* FROM catalog_maintenance_vector_payloads p CROSS JOIN vector_sync_outbox o
       ON o.sequence=p.sequence WHERE p.operation_id=? AND o.public_id=? AND o.source_revision=? AND o.status='complete' AND o.operation='upsert' LIMIT 2`)
       .bind(change.operationId,options.publicId,options.revision.snapshot.catalogRevision).all()).results;
+    if(rows.length===0&&product.embedding_text_hash===null){
+      const state=(await options.db.prepare('SELECT * FROM catalog_maintenance_products WHERE product_id=?').bind(product.id).all()).results;
+      if(state.length!==1)throw Error('vector_original_unproven');
+      const original=preservedPhotoVector(product,state[0],options.revision.request.previous.products.find(p=>p.publicId===options.publicId),
+        plan.products.find(p=>p.publicId===options.publicId)!,options.revision.snapshot.catalogRevision);
+      return pruneDelivery({...options,original:{sha256:sha256(canonicalJson(original)),async load(){return original;}}},true,policy??undefined);
+    }
     if(rows.length!==1)throw new Error('vector_original_unproven');
     const row=rows[0];const event:VectorEvent={sequence:Number(row.sequence),publicId:String(row.public_id),catalogRevision:String(row.source_revision),
       embeddingTextHash:String(row.embedding_text_hash),operation:'upsert'};
