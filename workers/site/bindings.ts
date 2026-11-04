@@ -24,6 +24,8 @@ export interface SearchStorage {
 
 /** Compiled deployment identity shared by all revisions/isolates using this index.
  * Never derive either field from a request, catalog revision or client identifier.
+ * The historical name remains compatible with retained publication entries;
+ * this is an environment/index scope, not a runtime spending budget.
  */
 export interface SemanticBudgetScope { environment: 'staging' | 'production'; index: string }
 
@@ -35,6 +37,7 @@ export interface SiteEnv {
   OPENAI_API_KEY?: string;
   /** Semantic calls require explicit opt-in; keyword search remains available. */
   SEMANTIC_SEARCH_ENABLED?: string;
+  /** Historical configuration only; live search ignores both former caps. */
   SEMANTIC_SEARCH_DAILY_REQUEST_CAP?: string;
   SEMANTIC_SEARCH_DAILY_TOKEN_CAP?: string;
   ENVIRONMENT?: string;
@@ -45,5 +48,4 @@ export interface SearchAdapters<Env extends SiteEnv = SiteEnv> {
   storage(env: Env): SearchStorage;
   diagnostic?(record: SearchDiagnostic, env: Env, now: Date): Promise<void>;
   embed?(query: string, env: Env, signal: AbortSignal, profile?: DerivedSearchProfile): Promise<number[]>;
-  reserveSemantic?(scope: SemanticBudgetScope, tokenUpperBound: number, env: Env): Promise<boolean>;
 }

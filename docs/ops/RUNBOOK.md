@@ -253,8 +253,11 @@ deployments remain distinct from D1 catalog receipts.
 
 Check home24→48, loaded images/descriptions, a changed product, correct affiliate
 tag, guides, Random, and the rehearsal. Label browser QA `utm_medium=qa`.
-The reviewed derived semantic index remains enabled under its50-request/
-32,768-token daily limit; changed/unproved inputs use working keyword fallback.
+The reviewed derived semantic index has NO internal daily request/token budget
+and does not reserve/write D1 budget counters. November3 owner direction: usage
+monitoring may alert but must not turn search off. Keep caching, bounded provider
+timeouts and keyword fallback; changed/unproved inputs use that fallback too.
+Historical budget rows/configs remain evidence only, not live admission gates.
 The native1536 index is authoritative maintenance/history; the serving1024
 index is a normalized projection of the same saved embedding, not a second
 generation. The routine freezing phase automatically syncs its bounded reviewed

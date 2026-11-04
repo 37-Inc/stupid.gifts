@@ -37,7 +37,6 @@ export function derivedWorker(fixture, options = {}) {
     semanticBudgetScope:{environment:'staging',index:'native-fixture-index'},searchAdapters:{
       storage:()=>({async byPublicIds(){throw new Error('do not use finite supplier/native lookup');},
         async keyword(){throw new Error('cleared keyword search must stay database-free');}}),
-      async reserveSemantic(scope){calls.reserve.push(scope);return options.reserve !== false;},
       async embed(_q,_env,_signal,profile){calls.embed++;if(options.embed)return options.embed(profile);
         return normalizeSemanticPrefix(Array(1536).fill(.1),profile.dimensions);},
     }});

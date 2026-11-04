@@ -64,8 +64,10 @@ export interface PublicationConfig {
    * observed before the run. The prior above remains the real D1 receipt. */
   servingPrior?:DeploymentIdentity;
   homepage?:HomepageEdition;
-  /** Omission preserves historical config hashes and off/50/32768 behavior. */
-  semanticSearch?:{enabled:boolean;dailyRequestCap:number;dailyTokenCap:number;
+  /** Omission preserves historical config hashes and default-off behavior. */
+  semanticSearch?:{enabled:boolean;
+    /** Accepted only for retained historical configs, never sent to live search. */
+    dailyRequestCap?:number;dailyTokenCap?:number;
     /** Canonical-JSON SHA, public hashes only. Separate from the original native index. */
     derivedCatalog?:{path:string;sha256:string;indexName:string}};
   /** Public build inputs only; omission preserves historical hashes/default-off. */
@@ -106,13 +108,14 @@ export function validatePublicationConfig(input:PublicationConfig):Readonly<Publ
   }
   if(Object.hasOwn(input,'semanticSearch')){
     const policy=input.semanticSearch;
-    if(!policy||!exact(policy,`dailyRequestCap,dailyTokenCap,${Object.hasOwn(policy,'derivedCatalog')?'derivedCatalog,':''}enabled`)||typeof policy.enabled!=='boolean'
-      ||!Number.isInteger(policy.dailyRequestCap)||!Number.isInteger(policy.dailyTokenCap)
-      ||input.environment==='staging'&&policy.enabled
-      // Reuse the runtime's exact positive-integer bounds, even when disabled.
+    const historical=policy&&(Object.hasOwn(policy,'dailyRequestCap')||Object.hasOwn(policy,'dailyTokenCap'));
+    if(!policy||!exact(policy,`${historical?'dailyRequestCap,dailyTokenCap,':''}${Object.hasOwn(policy,'derivedCatalog')?'derivedCatalog,':''}enabled`)
+      ||typeof policy.enabled!=='boolean'||input.environment==='staging'&&policy.enabled
+      // Retained historical configs keep their exact validated bytes/hashes.
+      ||historical&&(!Number.isInteger(policy.dailyRequestCap)||!Number.isInteger(policy.dailyTokenCap)
       ||!semanticBudgetConfig({ENVIRONMENT:input.environment,SEMANTIC_SEARCH_ENABLED:'true',
         SEMANTIC_SEARCH_DAILY_REQUEST_CAP:String(policy.dailyRequestCap),SEMANTIC_SEARCH_DAILY_TOKEN_CAP:String(policy.dailyTokenCap)},
-      {environment:input.environment,index:input.indexName}))throw new Error('publication_configuration_invalid');
+      {environment:input.environment,index:input.indexName})))throw new Error('publication_configuration_invalid');
     if(Object.hasOwn(policy,'derivedCatalog')){const derived=policy.derivedCatalog;
       if(!derived||!exact(derived,'indexName,path,sha256')||typeof derived.path!=='string'||!path.isAbsolute(derived.path)||!HASH.test(derived.sha256)
         ||typeof derived.indexName!=='string'||!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(derived.indexName)||derived.indexName===input.indexName)
@@ -134,9 +137,7 @@ export function validatePublicationConfig(input:PublicationConfig):Readonly<Publ
     ...(Object.hasOwn(input,'publicAnalytics')?{publicAnalytics:Object.freeze({...input.publicAnalytics!})}:{})});
 }
 function searchVars(config:PublicationConfig){
-  const policy=Object.hasOwn(config,'semanticSearch')?config.semanticSearch!:{enabled:false,dailyRequestCap:50,dailyTokenCap:32768};
-  return{SEMANTIC_SEARCH_ENABLED:String(policy.enabled),SEMANTIC_SEARCH_DAILY_REQUEST_CAP:String(policy.dailyRequestCap),
-    SEMANTIC_SEARCH_DAILY_TOKEN_CAP:String(policy.dailyTokenCap)};
+  return{SEMANTIC_SEARCH_ENABLED:String(Object.hasOwn(config,'semanticSearch')&&config.semanticSearch!.enabled)};
 }
 export type PublicationWorkspace=RunWorkspace;
 export type { PublicationControl } from './run-workspace.ts';

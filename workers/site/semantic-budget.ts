@@ -1,6 +1,9 @@
 import type { CatalogD1 } from '../../lib/catalog/storage/d1.ts';
 import type { SemanticBudgetScope, SiteEnv } from './bindings.ts';
 
+// Historical receipt/capture compatibility only. Live search and its D1 adapter
+// no longer import this module or reserve daily request/token budgets.
+
 const MAX_REQUESTS = 100_000;
 const MAX_TOKENS = 100_000_000;
 const TOKEN_OVERHEAD = 16;

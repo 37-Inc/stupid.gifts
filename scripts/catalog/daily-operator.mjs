@@ -61,14 +61,16 @@ async function put(file,value){
 }
 async function optional(file){try{return await json(file);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 export function routineSearchPolicy(value){
-  if(value===null)return{enabled:false,dailyRequestCap:50,dailyTokenCap:32768};
-  if(!value||value.enabled!==true||value.dailyRequestCap!==50||value.dailyTokenCap!==32768
-    ||Object.keys(value).sort().join(',')!=='dailyRequestCap,dailyTokenCap,derivedCatalog,enabled'
+  if(value===null)return{enabled:false};
+  const historical=value&&(Object.hasOwn(value,'dailyRequestCap')||Object.hasOwn(value,'dailyTokenCap'));
+  if(!value||value.enabled!==true
+    ||Object.keys(value).sort().join(',')!==`${historical?'dailyRequestCap,dailyTokenCap,':''}derivedCatalog,enabled`
+    ||historical&&(value.dailyRequestCap!==50||value.dailyTokenCap!==32768)
     ||!value.derivedCatalog||Object.keys(value.derivedCatalog).sort().join(',')!=='indexName,path,sha256'
     ||value.derivedCatalog.indexName!=='stupid-gifts-semantic-v1'||!HASH.test(value.derivedCatalog.sha256)
     ||typeof value.derivedCatalog.path!=='string'||!value.derivedCatalog.path.startsWith(BASE+'/')
     ||value.derivedCatalog.path.split('/').includes('..'))refuse('semantic_policy');
-  return structuredClone(value);
+  return{enabled:true,derivedCatalog:structuredClone(value.derivedCatalog)};
 }
 export async function currentD1Plan(token,send=fetch){
   const r=await send(`https://api.cloudflare.com/client/v4/accounts/${SCOPE.accountId}/workers/standard`,{redirect:'error',

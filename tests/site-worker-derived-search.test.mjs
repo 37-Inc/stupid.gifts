@@ -9,7 +9,7 @@ test('actual Worker serves current cleared products through input-verified deriv
   const f=await derivedFixture(),w=derivedWorker(f),{response,body}=await w.request();
   assert.equal(response.status,200);assert.equal(body.results[0].matchType,'semantic');
   assert.deepEqual(new Set(body.results.map(p=>p.id)),new Set(f.snapshot.products.map(p=>p.id)));
-  assert.deepEqual(w.calls.reserve,[{environment:'staging',index:f.catalog.indexName}]);
+  assert.deepEqual(w.calls.reserve,[]);
   assert.equal(w.calls.vector[0].vector.length,1024);assert.equal(w.calls.legacy,0);
   assert.deepEqual(w.calls.vector[0].params,{topK:50,returnValues:false,returnMetadata:'all'});
   assert.doesNotMatch(JSON.stringify(body),/nativeBase64|receiptSha256|SYNTHETIC retained context|sourceFactsHash|vectorId/);
@@ -124,8 +124,8 @@ test('bad artifact vector identity fails build verification and fails closed at 
   assert.ok(body.results.every(p=>p.id!==f.snapshot.products[0].id||p.matchType==='keyword'));
 });
 
-test('binding absence, flag OFF and budget refusal cause no embedding or vector call',async()=>{
-  for(const options of [{env:{SEMANTIC_VECTORIZE:undefined}},{env:{SEMANTIC_SEARCH_ENABLED:'false'}},{reserve:false}]){
+test('binding absence and flag OFF cause no embedding or vector call',async()=>{
+  for(const options of [{env:{SEMANTIC_VECTORIZE:undefined}},{env:{SEMANTIC_SEARCH_ENABLED:'false'}}]){
     const f=await derivedFixture(),w=derivedWorker(f,options),{body}=await w.request();
     assert.equal(body.results[0].matchType,'keyword');assert.equal(w.calls.embed,0);assert.equal(w.calls.vector.length,0);
   }
