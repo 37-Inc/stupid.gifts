@@ -6,6 +6,46 @@ state changes without dirtying its retained execution checkout.
 
 ---
 
+## 2026-11-04 — Saved catalog recovered; usage stops become alerts
+
+PR345–348 are merged. The original saved run
+`daily-2026-11-04-45544019-00659e77` finalized without another supplier/model
+batch, using uploaded version
+`eb68e5bb-dc59-4c34-a4b5-8f81315e2d0d` and deployment
+`3d87098f-dabe-48d1-9abc-778b2979c767`. Genuine D1 receipt0fc340e0,
+resolved build, idle49/737/external_pending0 and accepted successor were
+independently checked. All3388 identities/3355 public/33 holds/40 articles,
+permanent content and original finite photo deadlines survive. The three real
+refreshed photos load, no listing lacks image/title/short copy, and the first
+unattended homepage edition is live. All original unknowns/charges remain;
+6723HTTP crossed the old estimate successfully with an advisory alert.
+
+A separate code-only build publishes the actual reviewed reliability runtime
+76fa8ba2cc857fbdad5386edd51c5e4f715e6670 over that unchanged accepted catalog:
+`release-reliability-live-20261104-76fa8ba2cc85`, version
+`6cf94f70-0839-4d27-874b-1cc909af486e`, deployment
+`82210779-7b2b-4322-9631-ae139ec62e05`. Full3355-product build, independent
+verifier and actual public/provider identity/body/receipt checks pass with7030
+assets and3400 sitemap URLs. This is NOT an invented second D1 catalog receipt.
+The same08:30/20:30 task is ACTIVE with its hold removed and clean operator
+`stupid-release-reliability-operator/stupid.gifts` pinned to that source.
+
+The failed upload was consistent with the old30-second request abort, not quota
+exhaustion; its precise original network error was flattened. Asset transfers
+now allow180seconds and retry through Wrangler. Same-package recovery preserves
+all evidence, uses a separate execution window without renewing content, and
+recognizes an exact code-only prior using normal validation. Genuine permanent
+predecessor/finite-fallback/code-only-prior regression and focused negative
+tests pass alongside broad364-passing checks. Public search count cutoffs are
+removed; routine aggregate database/request estimates alert instead of stop.
+Cleanup occurs after acceptance, outside the upload's critical path.
+
+All3355 published affiliate URLs have the correct tag. Signed-in account-side
+reports confirm membership and credited clicks for the exact intended tag;
+read `AFFILIATE_DATA.md` for the parent, tag and report controls. Private report
+numbers remain private. No tracking ID/account settings, plans, social posts,
+Vercel/Neon services or independent timers changed.
+
 ## 2026-11-02 — Owner replaces the daily supplier cap with per-run guidance
 
 Owner explicitly authorized another real discovery batch and removed the

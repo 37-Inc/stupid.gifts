@@ -31,8 +31,9 @@ reported through the previous day and depend on shipments. Dashes/suppressed
 low-volume metrics are not a verified numeric zero. Recorded clicks prove tag
 credit, not a qualifying purchase or eventual commission.
 
-Last technically audited: 2026-10-19. Account ownership/report verification
-remains a separate gate.
+The sections below are dated historical evidence, not current account-access or
+deployment instructions. The November 4 reference above supersedes their old
+access gates and Vercel configuration path.
 
 ## October 19 launch review
 
@@ -61,7 +62,7 @@ source/rights/expiry requirements; SerpApi is not an approved-price substitute.
 The following August snapshot remains historical context, not current counts
 or current browser access.
 
-## Current production path
+## August historical production path (retired)
 
 - All 3,363 catalog products are Amazon products; 3,343 are active.
 - Amazon Creators API is the sole Amazon product-data path. It uses OAuth 2.0
@@ -86,7 +87,7 @@ or current browser access.
   earnings, orders, shipped revenue, or commission reports needed for EPC
   optimization.
 
-## Amazon Associates reporting
+## August reporting-access snapshot (superseded above)
 
 Amazon provides orders and earnings through Associates Central reports and
 manual CSV/XLSX/XML downloads. There is no configured API credential for those
