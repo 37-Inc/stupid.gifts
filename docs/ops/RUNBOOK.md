@@ -7,9 +7,39 @@ latest protected receipt take precedence over historical journal entries.
 ## Current state
 
 Read the actual public release identity AND protected
-`daily-catalog-care/last-success.json` for the current accepted catalog. The
-dated receipts below are historical evidence, not an instruction to overwrite
-a newer release. November3's scheduled normal run is accepted as
+`daily-catalog-care/last-success.json` for the current accepted catalog.
+November 4's saved run `daily-2026-11-04-45544019-00659e77` is **COMPLETE**:
+genuine D1 receipt `0fc340e00b0a41e905a2ae5b172fafc9f7c94f6b95632497bcb173b724b5a349`,
+resolved build, idle owner49/737, zero external pending and accepted successor.
+All3388 identities/3355 public/33 holds/40 optional articles remain; images,
+short copy and the first unattended24-gift homepage edition were verified.
+Its saved ten-product batch was NOT refetched. Preserve6723HTTP/9288SQL/
+2584048known reads/20419writes/five unknowns. The old6000-request estimate
+emitted an alert, not a release stop. Never replay this completed recovery.
+
+Current serving code is the separately verified CODE-ONLY release
+`release-reliability-live-20261104-76fa8ba2cc85`, source
+`76fa8ba2cc857fbdad5386edd51c5e4f715e6670`, version
+`6cf94f70-0839-4d27-874b-1cc909af486e`, deployment
+`82210779-7b2b-4322-9631-ae139ec62e05`. It keeps the accepted catalog snapshot
+`5118f7d9f7824812c045a64bbc1f94b28f375ddc057e082d8408a66f278e6e2f`
+and genuine D1 receipt/pointer unchanged. Full build/independent verifier and
+public/provider readback passed:7030 physical assets,3400 sitemap URLs,
+all3355 affiliate tags correct. Public search has no internal spending,
+per-IP query-count or client-count cutoff. See
+`RELEASE_RELIABILITY_2026-11-04.md` and `AFFILIATE_DATA.md`.
+
+The SAME existing task is ACTIVE at08:30 and20:30 Pacific, with the recovery
+hold removed and maintained source below pinned. Private evidence is in
+`daily-catalog-care/runs/scheduled-2026-11-04/{success,live-verified}.json`
+and `release-reliability-live-20261104/build-76fa8ba2cc85/` under the protected
+migration directory. Generated-output cleanup follows acceptance; its failure
+does not undo a verified deployment or authorize upload replay.
+
+### Historical receipts
+
+These are evidence, not instructions to overwrite a newer release.
+November3's scheduled normal run was accepted as
 `daily-2026-11-03-785c60d6-b8b76815`: 3388 identities,3355 public/33 excluded,
 40 optional articles, genuine D1 receipt8898b4ba and idle43/698. Its cost/storage
 observation is complete in `.4.8`; never repeat the batch to measure it again.
@@ -117,10 +147,11 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-pinterest-footer-release/stupid.gifts`
-after its source/release acceptance is recorded in `.17`. Until then use
-the latest accepted operator recorded in the existing task, never an unmerged
-branch or a checkout with an active build/run.
+`/Users/cameronehrlich/.codex/worktrees/stupid-release-reliability-operator/stupid.gifts`
+at accepted76fa8ba2cc857fbdad5386edd51c5e4f715e6670. Reconcile a newer
+accepted release before changing it; never use an unmerged branch or alter a
+checkout with an active build/run. The previous footer455 checkout remains
+frozen as the November4 catalog's original source binding.
 The old `stupid-catalog-care` checkout remains frozen for original source
 bindings; it is not the current scheduler's execution source.
 Its runtime includes the reviewed storefront, Howie rehearsal, bounded
@@ -133,17 +164,19 @@ activation. In particular, the incorrect 3349-public/34-held October30 staging
 revision was withdrawn without deleting its history; it is never a release
 candidate. The exact historical vector affected by that attempt was restored.
 The one-time additional25k publication-write allowance is historical only;
-it does not increase the normal30k ceiling or tomorrow's supplier allowance.
+it does not reset any counter or authorize another supplier batch. Routine
+aggregate usage estimates are now advisory, as described below.
 
 ## Preservation and scope
 
 - Cloudflare `https://stupid.gifts` is the ONLY release target. Use the existing
   provider-confirmed plan; never buy an upgrade or change subscriptions.
   Vercel and Neon were retired; preserve backups and Cloudflare redirects.
-- Preserve all3,383 migrated identities, slugs, original licensed imagery,
-  descriptions, articles, native vectors and operation history. The baseline is
-  3,352public/31specific exclusions/42articles. The31 exclusions are seven
-  confirmed duplicates and24individually justified ordinary products.
+- Preserve every identity, slug, original licensed image/description, editorial,
+  native vector and operation history. Current3388 identities/3355 public/
+  33 specific holds/40 optional articles are evidence, not growth caps.
+  Specific duplicate/commodity exclusions and unfinished candidates remain
+  recorded; expiry alone is never a reason to hide a gift.
 - Cleared base imagery/copy has no expiry. Finite supplier overlays keep their
   original deadlines and fall back to cleared content. Expiry or failed copy
   generation never deletes or deactivates a listing or native entry.
