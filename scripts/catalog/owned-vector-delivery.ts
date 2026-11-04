@@ -581,7 +581,7 @@ export function deliverOwnedApprovedCohortVector(options: Omit<Parameters<typeof
     const rows=(await options.db.prepare(`SELECT o.* FROM catalog_maintenance_vector_payloads p CROSS JOIN vector_sync_outbox o
       ON o.sequence=p.sequence WHERE p.operation_id=? AND o.public_id=? AND o.source_revision=? AND o.status='complete' AND o.operation='upsert' LIMIT 2`)
       .bind(change.operationId,options.publicId,options.revision.snapshot.catalogRevision).all()).results;
-    if(rows.length===0&&product.embedding_text_hash===null){
+    if(rows.length===0){
       const state=(await options.db.prepare('SELECT * FROM catalog_maintenance_products WHERE product_id=?').bind(product.id).all()).results;
       if(state.length!==1)throw Error('vector_original_unproven');
       const original=preservedPhotoVector(product,state[0],options.revision.request.previous.products.find(p=>p.publicId===options.publicId),

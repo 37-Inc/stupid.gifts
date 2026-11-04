@@ -15,7 +15,7 @@ type Row=Record<string,unknown>;
 export function preservedPhotoVector(product:Row,state:Row,previous:PublicCatalogProduct|undefined,
   member:{publicId:string;sourceFactsHash:string;embeddingTextHash:string|null},revision:string){
   const fail=():never=>{throw Error('vector_original_unproven');};
-  if(!previous||member.embeddingTextHash!==null||product.embedding_text_hash!==null
+  if(!previous||member.embeddingTextHash!==product.embedding_text_hash
     ||member.publicId!==product.public_id||member.sourceFactsHash!==product.source_facts_hash
     ||state.embedding_present!==1||typeof state.embedding_native_base64!=='string')fail();
   const display=JSON.parse(String(product.public_display_json)),base=persistentPublicProduct(display),prior=persistentPublicProduct(previous!);
@@ -25,9 +25,11 @@ export function preservedPhotoVector(product:Row,state:Row,previous:PublicCatalo
   const text=maintenanceEmbeddingText(current),bytes=Buffer.from(String(state.embedding_native_base64),'base64');
   if(current.id!==product.id||current.publicId!==member.publicId||current.sourceFactsHash!==member.sourceFactsHash
     ||proof.input!=='verified'||proof.model!=='text-embedding-3-small'||typeof proof.reference!=='string'||!proof.reference.trim()
-    ||proof.text!==text||proof.embeddingTextHash!==sha256(text)||!/^[a-f0-9]{64}$/.test(proof.sourceFactsHash)
+    ||proof.text!==text||proof.embeddingTextHash!==sha256(text)
+    ||member.embeddingTextHash!==null&&member.embeddingTextHash!==proof.embeddingTextHash
+    ||!/^[a-f0-9]{64}$/.test(proof.sourceFactsHash)
     ||createHash('sha256').update(bytes).digest('hex')!==proof.vectorBytesSha256)fail();
   const values=decodePgvectorSendBase64(String(state.embedding_native_base64));
   return{publicId:member.publicId,catalogRevision:revision,sourceFactsHash:member.sourceFactsHash,
-    embeddingTextHash:null,values,vectorBytesSha256:nativeHash(values)};
+    embeddingTextHash:member.embeddingTextHash,values,vectorBytesSha256:nativeHash(values)};
 }

@@ -11,6 +11,7 @@ import type {ApprovedCohortRevision} from '../../lib/catalog/freeze-approved-coh
 import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import {mutationAssertion} from '../../lib/catalog/mutation-fence.ts';
 import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
+import {preservedPhotoVector} from './photo-vector-reuse.ts';
 
 type Row=Record<string,unknown>;
 export type DerivedVector={id:string;values:number[];metadata:ReturnType<typeof semanticVectorMetadata>};
@@ -21,7 +22,7 @@ function refuse():never{throw Error('semantic_delta_source_mismatch');}
 /** Reuse VERIFIED native bytes, not another embedding/model call. The complete
  * private sidecar and products row must belong to the approved inventory. */
 export async function deriveMaintenanceSearchVector(product:PublicCatalogProduct,row:Row,state:Row,
-  inventory:{productSha256:string;privateStateSha256:string}) {
+  inventory:{productSha256:string;privateStateSha256:string},previous?:PublicCatalogProduct) {
   if(product.id!==row.id||product.publicId!==row.public_id||row.is_active!==1||row.duplicate_of_product_id!==null
     ||hash(row)!==inventory.productSha256||hash(state)!==inventory.privateStateSha256
     ||state.product_id!==row.id||state.embedding_present!==1||typeof state.embedding_native_base64!=='string')refuse();
@@ -29,10 +30,11 @@ export async function deriveMaintenanceSearchVector(product:PublicCatalogProduct
   const proof=JSON.parse(String(state.embedding_provenance_json)),text=maintenanceEmbeddingText(
     maintenanceState({...row,maintenance_semantic:state.semantic_json}));
   if(proof.input!=='verified'||proof.model!==DERIVED_SEARCH_PROFILE.model||proof.text!==text
-    ||proof.embeddingTextHash!==sha256(text)||row.embedding_text_hash!==proof.embeddingTextHash
-    ||proof.sourceFactsHash!==row.source_facts_hash
+    ||proof.embeddingTextHash!==sha256(text)
     ||proof.vectorBytesSha256!==digest(Buffer.from(state.embedding_native_base64,'base64'))
     ||!/^objects\/[a-f0-9]{64}\.json$/.test(proof.reference))refuse();
+  if(row.embedding_text_hash!==proof.embeddingTextHash||proof.sourceFactsHash!==row.source_facts_hash)
+    preservedPhotoVector(row,state,previous,{publicId:product.publicId,sourceFactsHash:String(row.source_facts_hash),embeddingTextHash:null},String(row.catalog_revision));
   // Keep the original retained context verbatim. Never relabel a vector whose
   // public semantic fields have changed independently of its captured input.
   const prefix=[product.punnyTitle,product.title,product.wittyDescription].filter(Boolean).join('. ');
@@ -47,7 +49,7 @@ export async function deriveMaintenanceSearchVector(product:PublicCatalogProduct
   const identity={productId:product.id,publicId:product.publicId,publicFieldsSha256:hash(semanticPublicFields(product)),
     inputSha256:sha256(text),originalNativeSha256:proof.vectorBytesSha256,
     derivedNativeSha256:digest(Buffer.from(encodePgvectorSendBase64(values),'base64')),
-    receiptSha256:proof.reference.slice(8,-5),sourceFactsHash:String(row.source_facts_hash)};
+    receiptSha256:proof.reference.slice(8,-5),sourceFactsHash:String(proof.sourceFactsHash)};
   const entry:SemanticCatalogEntry={...identity,vectorId:await semanticVectorIdentity(identity)};
   return {entry,vector:{id:entry.vectorId,values,metadata:semanticVectorMetadata(entry)}};
 }
@@ -67,7 +69,8 @@ export async function prepareMaintenanceSearchDelta(db:CatalogD1,revision:Approv
     const rows=(await db.prepare('SELECT * FROM products WHERE id=?').bind(product.id).all()).results;
     const states=(await db.prepare('SELECT * FROM catalog_maintenance_products WHERE product_id=?').bind(product.id).all()).results;
     if(rows.length!==1||states.length!==1)refuse();
-    const projected=await deriveMaintenanceSearchVector(product,rows[0],states[0],captured);
+    const projected=await deriveMaintenanceSearchVector(product,rows[0],states[0],captured,
+      revision.request.previous?.products.find(p=>p.publicId===product.publicId));
     entries.push(projected.entry);vectors.push(projected.vector);
   }
   return {indexName:catalog.indexName,vectors,entries};

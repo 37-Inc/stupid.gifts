@@ -117,7 +117,7 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-photo-refresh/stupid.gifts`
+`/Users/cameronehrlich/.codex/worktrees/stupid-photo-semantic-reuse/stupid.gifts`
 after its source/release acceptance is recorded in `.4.19`. Until then use
 the latest accepted operator recorded in the existing task, never an unmerged
 branch or a checkout with an active build/run.
@@ -241,6 +241,12 @@ have separate 24-hour observations. Both refresh modes prioritize those photos
 before permanent-photo rotation; fresh photos reuse the exact approved copy and
 native embedding. Photo shards group identical deadlines so an old neighbor
 cannot expire a newly refreshed image.
+
+Both indexes reuse independently verified exact embedding text/native bytes
+when the approved permanent copy is unchanged. Supplier-fact/availability
+changes alone do not require generating another embedding just to publish a
+photo. Preserve the original model observation/receipt; do not relabel it as
+fresh input or change a NULL current source-input binding to a verified one.
 
 At 20:30 Pacific, the SAME task uses `prepare --run photos-YYYY-MM-DD --photos-only`.
 Preparation skips with `photos_current` when no photo is due within18 hours,
