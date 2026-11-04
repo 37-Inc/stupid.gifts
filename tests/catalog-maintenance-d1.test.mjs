@@ -619,6 +619,66 @@ test('daily public selection deterministically lends sparse lanes and respects s
   }
 });
 
+test('daily selection refreshes expired/imminent supplier-only photos before permanent-photo rotation',async()=>{
+  const products=Array.from({length:20},(_,n)=>rawProduct(n+1));
+  const f=await setup({products});
+  try{
+    markPublic(f,products);
+    const deadlines=['2026-10-19T07:00:00.123Z','2026-10-20T08:00:00.123Z','2026-10-21T07:00:00.123Z'];
+    for(let n=0;n<3;n++)f.sqlite.prepare('UPDATE products SET rights_json=?,availability_checked_at=? WHERE id=?')
+      .run(canonicalJson({imageUrl:{basis:'merchant',expiresAt:deadlines[n]},persistent:{imageUrl:{basis:'owned',value:'/images/gift-placeholder.svg'}}}),NOW,id(18+n));
+    // A known permanent photo and a nonpublic identity must not take priority.
+    f.sqlite.prepare('UPDATE products SET rights_json=? WHERE id=?').run(canonicalJson({
+      imageUrl:{basis:'merchant',expiresAt:deadlines[0]},persistent:{imageUrl:{basis:'owned',value:'https://example.invalid/cleared.jpg'}}}),id(17));
+    const rows=await f.store.getProductsForRevalidation({daily:true,limit:10,featuredIds:products.slice(0,8).map(p=>p.id)});
+    assert.deepEqual(rows.slice(0,3).map(p=>p.id),[id(18),id(19),id(20)]);
+    assert.equal(rows.length,10);assert.equal(new Set(rows.map(p=>p.id)).size,10);
+    const photos=await f.store.getProductsForRevalidation({daily:true,limit:10,photosOnly:true});
+    assert.deepEqual(photos.map(p=>p.id),[id(18),id(19),id(20)],'photo-only care must not fill with permanent images');
+    const before=f.epoch();assert.deepEqual(await f.store.getProductsForRevalidation({daily:true,limit:2,featuredIds:[]}),rows.slice(0,2));
+    assert.equal(f.epoch(),before);
+  }finally{f.close();}
+});
+
+test('same-response photo refresh restores a placeholder-backed listing without copy/embedding generation',async()=>{
+  const f=await permanentFixture({preservePermanentListings:true});
+  try{
+    const before=f.row(1),native=f.state(1).embedding_native_base64,provenance=f.state(1).embedding_provenance_json;
+    const observedAt='2026-10-22T08:00:00.123Z';f.setClock(observedAt);
+    f.useIntent({verificationById:{[f.p.id]:{reference:'test/real-new-photo-response',observedAt,sourceFactsHash:f.hash}}});
+    await f.store.upsertProduct({...f.p,embedding:undefined},f.hash);
+    const row=f.row(1),display=JSON.parse(row.public_display_json),permission=JSON.parse(row.rights_json);
+    assert.equal(permission.imageUrl.observedAt,observedAt,'new observation must refresh the photo-only grant');
+    assert.equal(display.imageUrl,f.p.imageUrl);assert.equal(display.title,f.base.title);assert.deepEqual(display.persistent,f.base);
+    assert.equal(display.eligibleUntil,'2026-10-23T08:00:00.123Z');
+    assert.equal(permission.imageUrl.reference,'test/real-new-photo-response');assert.equal(permission.imageUrl.observedAt,observedAt);
+    assert.deepEqual(permission.persistent,f.baseRights);assert.equal(f.base.imageUrl,'/images/gift-placeholder.svg');
+    assert.equal(row.source_record_json,before.source_record_json);assert.equal(f.state(1).embedding_native_base64,native);
+    assert.equal(f.state(1).embedding_provenance_json,provenance);
+    assert.equal(f.supplierRights.imageUrl.expiresAt,'2026-10-21T07:00:00.123Z');
+  }finally{f.close();}
+});
+
+test('photo refresh cannot extend an old observation or replace independently cleared photography',async()=>{
+  for(const permanent of [false,true]){
+    const f=await permanentFixture({preservePermanentListings:true});
+    try{
+      if(permanent){
+        const base={...f.base,imageUrl:'https://example.invalid/cleared-photo.jpg'};
+        const rights={...f.baseRights,imageUrl:{basis:'owned',reference:'test/licensed-photo',value:base.imageUrl}};
+        f.sqlite.prepare('UPDATE products SET public_display_json=?,rights_json=? WHERE id=?')
+          .run(canonicalJson(base),canonicalJson({...f.supplierRights,persistent:rights}),f.p.id);
+      }
+      const observedAt='2026-10-22T08:00:00.123Z';f.setClock(observedAt);
+      if(permanent)f.useIntent({verificationById:{[f.p.id]:{reference:'test/new-response',observedAt,sourceFactsHash:f.hash}}});
+      await f.store.upsertProduct({...f.p,embedding:undefined},f.hash);
+      const row=f.row(1),display=JSON.parse(row.public_display_json),permission=JSON.parse(row.rights_json);
+      assert.equal(display.imageUrl,permanent?'https://example.invalid/cleared-photo.jpg':'/images/gift-placeholder.svg');
+      assert.equal(permission.imageUrl.expiresAt,'2026-10-21T07:00:00.123Z');
+    }finally{f.close();}
+  }
+});
+
 test('compact catalog reads fail closed on oversized views and ownership changes, without returning a partial catalog',async()=>{
   const oversized=await setup({products:[rawProduct(1,{title:'"\\'.repeat(70000)})]});
   try{

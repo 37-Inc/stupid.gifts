@@ -1,7 +1,7 @@
 # Stupid Gifts — Catalog Care
 
 This is the operating contract for the EXISTING `goose-gifts-daily-ops`
-Codex task, daily at 08:30 Pacific. Canonical Beads in `~/roadmap` and the
+Codex task: full care at 08:30 Pacific, photo-only care at 20:30 Pacific. Canonical Beads in `~/roadmap` and the
 latest protected receipt take precedence over historical journal entries.
 
 ## Current state
@@ -24,7 +24,7 @@ operators remain frozen. `.4.18` owns automatic serving-index coverage.
 
 November2 owner correction: refresh/discovery sizes are PER-RUN guides, not a
 global daily supplier allowance. New runs have independent immutable identities;
-retry the same run without repeating provider phases. Scheduled care remains
+retry the same run without repeating provider phases. Full scheduled care remains
 once daily, with Monday discovery. An explicitly requested additional run uses
 `--run <unique-label>` consistently for prepare/start/review/publish/status.
 Do not reset or delete historical day/week reservations or any charged usage.
@@ -117,8 +117,8 @@ A missing receipt is not success. The accepted successor for routine care is
 `~/.codex/private/goose-gifts-migration/daily-catalog-care/last-success.json`.
 
 The maintained operator is this clean, merged checkout:
-`/Users/cameronehrlich/.codex/worktrees/stupid-search-budget-test-cleanup/stupid.gifts`
-after its source/release acceptance is recorded in `.13`. Until then use
+`/Users/cameronehrlich/.codex/worktrees/stupid-photo-refresh/stupid.gifts`
+after its source/release acceptance is recorded in `.4.19`. Until then use
 the latest accepted operator recorded in the existing task, never an unmerged
 branch or a checkout with an active build/run.
 The old `stupid-catalog-care` checkout remains frozen for original source
@@ -233,6 +233,25 @@ label resumes the same run; choosing another label starts a separate batch only
 after prior publication/ownership checks pass. Scheduled invocations omit it
 and share the stable `scheduled-YYYY-MM-DD` identity, preventing duplicate timer
 delivery from creating another batch. Legacy day/week receipts remain untouched.
+
+### Supplier-dependent photos
+
+Permanent owner-cleared photos never expire. Newly discovered supplier photos
+have separate 24-hour observations. Both refresh modes prioritize those photos
+before permanent-photo rotation; fresh photos reuse the exact approved copy and
+native embedding. Photo shards group identical deadlines so an old neighbor
+cannot expire a newly refreshed image.
+
+At 20:30 Pacific, the SAME task uses `prepare --run photos-YYYY-MM-DD --photos-only`.
+Preparation skips with `photos_current` when no photo is due within18 hours,
+before suppliers, models, publication, or reservations. Otherwise `start`,
+`review`, and `publish <actual-SHA>` use the SAME `--run` label and saved config.
+Only supplier-dependent public photos are selected (up to10 per run), with no
+discovery, homepage editorial change, long-copy or embedding generation, even
+on Monday. The normal morning refresh also prioritizes those photos. Original
+observations and prior charges remain immutable; renewal requires a new real
+merchant response. This local task needs the Mac/app running; unavailable
+supplier responses or missed execution must be reported, not falsely renewed.
 
 A pending publication resumes ONLY its original config/source/owner/checkpoint.
 Never force locks/ownership, reset reservations, change a source checkout

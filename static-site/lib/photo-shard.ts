@@ -42,7 +42,7 @@ export function validatePhotoIndex(input: unknown, version: string): PhotoIndex 
     const entry = record(products[id]);
     keys(entry, ["shard", "eligibleUntil"]);
     if (!id.trim() || id.length > 160 || !Number.isSafeInteger(entry.shard)
-      || Number(entry.shard) < 1 || Number(entry.shard) > Math.ceil(10000 / PHOTO_SHARD_SIZE)
+      || Number(entry.shard) < 1 || Number(entry.shard) > 10000
       || !Number.isFinite(instant(entry.eligibleUntil))) fail();
   }
   return value as unknown as PhotoIndex;

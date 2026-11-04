@@ -194,6 +194,19 @@ function retainedBase(previous: { row: Row; product: SemanticProduct } | undefin
       ? validatePublicCatalogProduct({...display,indexable:true},now) as PersistentCatalogProduct : display };
   } catch { return null; } // Unknown/corrupt clearance never becomes a public grant.
 }
+/** Refresh only a supplier-dependent photo, using this run's actual observation.
+ * Cleared imagery and the original permanent copy/identity never change. */
+export function refreshPhotoRights(p: SemanticProduct, rights: ProductRights,
+  observation: {reference:string;observedAt:string}, now: string, previous: {row:Row;product:SemanticProduct}) {
+  const base=retainedBase(previous,p,rights,new Date(now));
+  if(!base?.display||base.display.imageUrl!=='/images/gift-placeholder.svg'||rights.imageUrl?.basis!=='merchant'
+    ||typeof p.imageUrl!=='string'||!/^https:\/\//.test(p.imageUrl))return rights;
+  const observedAt=new Date(explicitMaintenanceTime(observation.observedAt)).toISOString(),expiresAt=new Date(Date.parse(observedAt)+86400000).toISOString();
+  if(Date.parse(observedAt)>Date.parse(now)||Date.parse(expiresAt)<=Date.parse(now))return rights;
+  return{...base.rights,imageUrl:{basis:'merchant' as const,reference:observation.reference,value:p.imageUrl,observedAt,expiresAt},
+    persistent:base.rights};
+}
+
 export function maintenanceProjection(p: SemanticProduct, rights: ProductRights, revision: string, now: string,
   provenInput: boolean, observedVerification: string | null, previous?: { row: Row; product: SemanticProduct }, allowApprovedBase=false) {
   const input = { ...p, price: Number(p.price), qualityScore: p.qualityScore === null ? undefined : Number(p.qualityScore),
@@ -221,7 +234,19 @@ export function maintenanceProjection(p: SemanticProduct, rights: ProductRights,
       if(display)base={saved:display,display,rights:permission};
     }catch{ /* Supplied but invalid clearance remains held, never synthesized. */ }
   }
-  const display=supplier ? {...supplier,...(base?.display ? {persistent:base.display} : {})} : base?.display;
+  let display=supplier ? {...supplier,...(base?.display ? {persistent:base.display} : {})} : base?.display;
+  // A freshly observed photo does not need a new article, model call or native
+  // embedding. Render it over the exact approved base, not unreviewed new copy.
+  const image=rights.imageUrl;
+  if(base?.display?.imageUrl==='/images/gift-placeholder.svg'&&image?.basis==='merchant'&&image.value===p.imageUrl
+    &&image.observedAt&&observedVerification&&Date.parse(image.observedAt)===Date.parse(observedVerification)
+    &&image.expiresAt&&Date.parse(image.expiresAt)>Date.parse(now)){
+    try{
+      const photo=validatePublicCatalogProduct({...base.display,imageUrl:image.value,eligibleUntil:image.expiresAt,persistent:base.display},new Date(now));
+      const expires=publicProductRightsExpiry(photo,rights,new Date(now));
+      if(expires!==null&&expires>=Date.parse(image.expiresAt))display=photo;
+    }catch{/* An invalid supplier image never removes the cleared listing. */}
+  }
   // Preserve supplier evidence/deadlines even when only the permanent view is
   // displayable. Its independent exact grants remain in their existing lane.
   const storedRights=base ? {...rights,persistent:base.rights} : rights;

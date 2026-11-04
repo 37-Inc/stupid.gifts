@@ -92,6 +92,20 @@ test('new run reservations allow multiple same-day batches without repeating a f
   assert.equal(original.runId, 'historical');
 });
 
+test('photo-only Monday care refreshes photos without discovery or text/embedding generation',async t=>{
+  const options=await fixture(t,()=>MONDAY);
+  await withCatalogCadence({...options,runKey:'evening-photos'},async cadence=>{
+    const phases=await dailyCatalogPhases(cadence,[id(7)],true);
+    assert.equal(phases.length,1);
+    assert.equal(phases[0].photosOnly,true);
+    assert.equal(phases[0].skipEnrichment,true);
+    assert.equal(phases[0].enrichSelectedExisting,false);
+    assert.equal(phases[0].revalidateLimit,10);
+    await cadence.reserve('daily','evening-photos');
+    assert.deepEqual(await dailyCatalogPhases(cadence,[],true),[]);
+  });
+});
+
 test('per-run reservation identity rejects path traversal, wrong IDs and overlapping owners', async t => {
   const options = await fixture(t, () => MONDAY);
   for (const runKey of ['', '../escape', 'with/slash', 'a'.repeat(97)])
