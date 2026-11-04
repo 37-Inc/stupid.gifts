@@ -129,7 +129,20 @@ export function RandomSelection({
   const product = pool[index];
   return (
     <section className="random-selection">
-      {product ? (
+      {loading && !loaded ? (
+        <>
+          <div className="random-loading" role="status" aria-live="polite">
+            <div className="skeleton-art" aria-hidden="true" />
+            <p className="quiet">Choosing a gift…</p>
+          </div>
+          {initial && (
+            <noscript>
+              <style>{".random-selection .random-loading{display:none}"}</style>
+              <ProductCard product={initial} lead context="random_gift" />
+            </noscript>
+          )}
+        </>
+      ) : product ? (
         <>
           <ProductCard product={product} lead context="random_gift" />
           <button
