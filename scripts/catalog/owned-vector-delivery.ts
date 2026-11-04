@@ -1162,7 +1162,10 @@ export function readOwnedApprovedCohortVectors(db:CatalogD1,owner:MutationOwner,
 export function readOwnedPermanentCohortNative(db:CatalogD1,owner:MutationOwner,revision:ApprovedCohortRevision,
   adapters:Pick<OwnedVectorAdapters,'readback'|'environment'|'indexName'|'providerIdentity'>):Promise<PrunedVectorObservation>{
   return safe(async()=>{
-    if(!revision.persistent||revision.snapshot.products.some(p=>p.eligibleUntil!==null))throw new Error('vector_plan_invalid');
+    // Native history is independent of finite photo/text overlays. Every
+    // listing must still have its exact permanent cleared fallback; the
+    // publisher separately validates the snapshot and original deadlines.
+    if(!revision.persistent||revision.snapshot.products.some(p=>!persistentPublicProduct(p)))throw new Error('vector_plan_invalid');
     adapterScope(owner,adapters);await db.batch([mutationAssertion(db,owner,['freezing'])]);
     return readPlanVectors(db,owner,await planJournals(db,owner,revision.snapshot.catalogRevision),prunedVectorPlan(revision),adapters,revision,undefined,30000);
   });

@@ -48,9 +48,12 @@ reported separately rather than undoing an accepted release.
 The full3388-identity inventory check is a paged job, not a single request.
 Routine checks allow up to fifteen minutes rather than aborting at two minutes;
 individual request timeouts and original publication/content deadlines still
-apply. Historical migration checks retain their original window. Sanitized D1
-error codes containing the provider name's digit are preserved rather than
-flattened to `publication_pending`. Interrupted read charges remain recorded.
+apply. Historical migration checks retain their original window. Native-proof
+errors retain their sanitized code instead of `publication_pending`. Interrupted
+read charges remain recorded. Routine continuation uses the existing native-only
+proof plus fresh complete inventory, rather than a redundant queueing proof
+whose original execution cutoff has already elapsed. This does not change the
+native bytes, owner, publication intent or original supplier deadlines.
 
 The `recover` CLI is post-provider only: original config/helper/source remain
 frozen, the original review SHA is required, and pre-review phases refuse.

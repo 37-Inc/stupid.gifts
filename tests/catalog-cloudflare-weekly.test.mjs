@@ -709,6 +709,35 @@ test('small permanent daily finishes beyond HTTP and SQL estimates with model-fr
     full2359CapacityAccepted:false,rowsReadMeaning:'mock returned rows, NOT index-inclusive D1 billing'}));
 });
 
+test('routine saved permanent-cohort upload recovers beyond its queueing cutoff without provider replay',async t=>{
+  const f=await setup(t,{permanent:22,held:2,authenticPrior:true});
+  f.config.publication.releaseId=f.config.runId;
+  f.config.publication.prior.directory=null;
+  f.config.cadence={day:'2026-10-20',featuredIds:Array.from({length:10},(_,i)=>`B${String(11+i).padStart(9,'0')}`)};f.config.backfillLimit=0;delete f.config.credentials.openai;
+  f.config.retention.rules=Object.fromEntries(Object.keys(f.config.retention.rules).map(k=>[k,{maxAgeMs:86400000,notAfter:'2026-10-21T12:00:00.123Z'}]));
+  const context=JSON.parse(await fs.readFile(f.config.inputs.context.path));context.cutoff=new Date(Date.parse(f.now())+600000).toISOString();
+  await put(f.config.inputs.context.path,context);f.config.inputs.context.sha256=sha256(await fs.readFile(f.config.inputs.context.path));await f.configure();
+  assert.equal((await f.run('start')).reason,'awaiting_reviewed_approval');const approval=await f.approve();
+  const original=f.dependencies.publication.command;
+  f.dependencies.publication.command=async c=>{
+    if(!c.args.includes('upload'))return original(c);
+    const log=path.join(c.env.WRANGLER_LOG_PATH,'wrangler-2026-10-20_12-00-00_123.log');
+    await fs.mkdir(path.dirname(log),{recursive:true,mode:0o700});
+    await fs.writeFile(log,`-- START CF API REQUEST: POST http://127.0.0.1:1234/nonce/client/v4/accounts/${f.config.accountId}/workers/assets/upload?base64=true\n`,{mode:0o600});
+    await fs.writeFile(c.env.WRANGLER_OUTPUT_FILE_PATH,JSON.stringify({type:'wrangler-session',command_line_args:c.args,log_file_path:log})+'\n',{mode:0o600});
+    throw Error('Synthetic content-addressed transfer interruption');
+  };
+  assert.equal((await f.run('resume',approval)).errorCode,'publication_upload_command_failed');
+  const rows=canonicalJson(f.sql.prepare('SELECT * FROM products ORDER BY public_id').all()),paid={getItems:f.calls.getItems,search:f.calls.search,chat:f.calls.chat,embedding:f.calls.embedding};
+  f.advance(30*60000);f.dependencies.publication.command=original;
+  const result=await f.run('resume',approval);assert.equal(result.state,'finalized',JSON.stringify(result));
+  assert.deepEqual({getItems:f.calls.getItems,search:f.calls.search,chat:f.calls.chat,embedding:f.calls.embedding},paid);
+  assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM products ORDER BY public_id').all()),rows);
+  assert.equal(result.catalogSeal.persistent.inventory.length,24);assert.equal(f.calls.build,1);assert.equal(f.calls.upload,1);assert.equal(f.calls.activate,1);
+  assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'idle');
+  const before=structuredClone(f.calls);assert.equal((await f.run('resume',approval)).state,'finalized');assert.deepEqual(f.calls,before);
+});
+
 test('daily entry point rejects a legacy weekly config before paid calls or workspace creation',async t=>{
   const f=await setup(t);
   await assert.rejects(runCloudflareWeekly({...f.options,command:'start',cadenceOnly:true},f.dependencies),/weekly_daily_cadence_required/);

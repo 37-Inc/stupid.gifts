@@ -600,7 +600,12 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         return readPermanentNativeProof({db,owner,revision:options.permanent,adapters,signal});
       }
       if(options.published)return readPublishedCatalogVectors({db,owner,published:options.published,adapters,signal});
-      if(options.approvedCatalog&&(options.finishAuthorization||continuation))return readOwnedPermanentCohortNative(db,owner,options.approvedCatalog,adapters);
+      // A routine same-package continuation has its own execution window.
+      // Observe the original native proof without reapplying the expired
+      // queueing cutoff; permanentProof still verifies the complete inventory
+      // immediately before upload/activation under the unchanged owner.
+      if(options.approvedCatalog?.persistent&&(options.finishAuthorization||continuation||reviewed?.approval.schemaVersion===5))
+        return readOwnedPermanentCohortNative(db,owner,options.approvedCatalog,adapters);
       return 'approval' in revision.request?readOwnedApprovedCohortVectors(db,owner,revision as ApprovedCohortRevision,adapters):readOwnedPrunedVectors(db,owner,revision,adapters);
     };
     // Full-catalog scans are sequential owned D1 reads, not a short provider
@@ -1047,7 +1052,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // exact durable control/package and has no second activation path.
     return executePublication({...options,owner,dependencies:options.dependencies});
   }catch(error){
-    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_)[a-z0-9_]+$/.test(error.message)?error.message:'publication_pending';
+    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_|vector_)[a-z_]+$/.test(error.message)?error.message:'publication_pending';
     return{state:'pending',owner,errorCode:code};
   }
 }

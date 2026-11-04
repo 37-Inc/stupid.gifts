@@ -6,8 +6,14 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {assetUploadRetryEvidence,routineUploadRetry} from '../scripts/catalog/routine-upload-retry.ts';
 import {encodeReviewedUploadActivationApproval,reviewedUploadActivationDeadline} from '../lib/catalog/build-requests.ts';
+import {readOwnedPermanentCohortNative} from '../scripts/catalog/owned-vector-delivery.ts';
 
 const AT='2026-11-04T18:00:00.000Z',hash='a'.repeat(64);
+test('native-only routine proof cannot treat an uncleared finite listing as permanent',async()=>{
+  const db={prepare(){throw Error('Unexpected database read');}};
+  for(const persistent of [undefined,{}])await assert.rejects(readOwnedPermanentCohortNative(db,{},
+    {persistent,snapshot:{products:[{eligibleUntil:'2026-11-05T18:00:00.000Z'}]}},{}),/vector_plan_invalid/);
+});
 async function fixture(t){
   const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'stupid-asset-retry-')));t.after(()=>fs.rm(root,{recursive:true,force:true}));
   const artifacts=new Map([['c'.repeat(64),{code:'publication_upload_unknown'}]]);
