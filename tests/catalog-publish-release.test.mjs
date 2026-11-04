@@ -1381,8 +1381,7 @@ test('omitted optional policies keep historical config hashes and exact off defa
   assert.equal(f.checkpoint().control.publication.configSha256,sha(before));
   await f.reopen();delete f.mode.stopBeforeActivation;
   assert.equal((await f.execute()).state,'published');assert.equal(canonicalJson(validatePublicationConfig(f.config)),before);
-  assert.deepEqual(f.uploadedConfigs[0].vars,{ENVIRONMENT:'staging',SEMANTIC_SEARCH_ENABLED:'false',
-    SEMANTIC_SEARCH_DAILY_REQUEST_CAP:'50',SEMANTIC_SEARCH_DAILY_TOKEN_CAP:'32768'});
+  assert.deepEqual(f.uploadedConfigs[0].vars,{ENVIRONMENT:'staging',SEMANTIC_SEARCH_ENABLED:'false'});
   for(const command of f.commandEnvironments){assert.equal(command.env.NEXT_PUBLIC_STATIC_ANALYTICS_ENABLED,'false');
     assert.equal(command.env.NEXT_PUBLIC_POSTHOG_KEY,undefined);assert.equal(command.env.NEXT_PUBLIC_POSTHOG_HOST,undefined);}
 });
