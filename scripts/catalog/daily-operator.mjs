@@ -183,7 +183,7 @@ async function prepare(directory,calendar,photosOnly=false){
 async function review(entry,config,directory){
   const w=await openRunWorkspace(entry.workspace);
   try{const cp=await w.readCheckpoint(),owner=cp?.checkpoint.owner;if(cp?.checkpoint.phase!=='phases_complete'||!owner||owner.phase!=='writing')refuse('review_phase');
-    const token=await resolveWranglerOAuth(),db=await createCatalogD1ReadOnlyRest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,limits:config.limits,accounting:{scope:{accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName},initial:await w.budget(),reserve:r=>w.reserveBudget(r),settle:(id,s)=>w.settleBudget(id,s)}});
+    const token=await resolveWranglerOAuth(),db=await createCatalogD1ReadOnlyRest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,limits:config.limits,requestLimit:'observe',accounting:{scope:{accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName},initial:await w.budget(),reserve:r=>w.reserveBudget(r),settle:(id,s)=>w.settleBudget(id,s)}});
     await mutationAssertion(db,owner,['writing']).all();
     const ops=(await db.prepare('SELECT operation_id,input_sha256,changes_json,next_epoch,generation,environment,index_name FROM catalog_maintenance_operations WHERE run_id=? ORDER BY next_epoch').bind(config.runId).all()).results;
     const latest=new Map();for(const op of ops){if(op.generation>owner.generation||op.environment!==SCOPE.environment||op.index_name!==SCOPE.indexName)refuse('operation_scope');for(const change of JSON.parse(op.changes_json))latest.set(change.productId,{op,change});}
