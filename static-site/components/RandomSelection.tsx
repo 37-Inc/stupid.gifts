@@ -5,6 +5,7 @@ import type { CatalogCard } from "../lib/card-shard";
 import { fetchCardShard } from "../lib/card-shard";
 import { eligiblePool, initialRandomIndex, nextRandomIndex } from "../lib/selection";
 import { ProductCard } from "./ProductCard";
+import { Icon } from "./Icon";
 import { captureRenderedLists, captureStaticRandomSpin } from "../lib/analytics";
 import { catalogDeadline } from "../../lib/catalog/display";
 
@@ -137,11 +138,9 @@ export function RandomSelection({
             disabled={poolSize < 2 || loading}
             onClick={spin}
           >
+            <Icon name="dice" />
             {loading ? "Choosing another…" : "Show me another gift"}
           </button>
-          <p className="quiet" role="status" aria-live="polite">
-            {poolSize > 1 && "No repeat on the next spin."}
-          </p>
         </>
       ) : (
         <div className="empty-state">
