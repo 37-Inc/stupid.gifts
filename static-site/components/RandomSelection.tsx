@@ -34,8 +34,9 @@ export function RandomSelection({
   const [index, setIndex] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(poolSize > 1);
+  const choosingInitial = loading && !loaded;
   const pending = useRef<AbortController | null>(null);
-  useEffect(() => captureRenderedLists(), [pool, index]);
+  useEffect(() => captureRenderedLists(), [pool, index, choosingInitial]);
   useEffect(() => {
     if (poolSize < 2) return;
     const abort = new AbortController();
@@ -129,7 +130,7 @@ export function RandomSelection({
   const product = pool[index];
   return (
     <section className="random-selection">
-      {loading && !loaded ? (
+      {choosingInitial ? (
         <>
           <div className="random-loading" role="status" aria-live="polite">
             <div className="skeleton-art" aria-hidden="true" />
