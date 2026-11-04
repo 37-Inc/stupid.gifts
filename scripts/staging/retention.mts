@@ -9,9 +9,9 @@ import { compactRscAssets, expandRscAssets } from '../../static-site/lib/asset-c
 
 type Context = Pick<SiteAssetManifest, 'priorReleaseId' | 'generatedAt' | 'sourceMode' | 'homepage'> & { retainedManifestSha256: string | null };
 type Files = ReadonlyMap<string, Uint8Array>;
-export const CLOUDFLARE_FREE_ASSET_LIMIT = 20000;
-export function assertFreeAssetCapacity(assets: Files) {
-  if (assets.size > CLOUDFLARE_FREE_ASSET_LIMIT) throw new Error('Static export exceeds Cloudflare Free asset limit');
+export const CLOUDFLARE_ASSET_LIMIT = 100000;
+export function assertStaticAssetCapacity(assets: Files) {
+  if (assets.size > CLOUDFLARE_ASSET_LIMIT) throw new Error('Static export exceeds Cloudflare Workers Paid asset limit');
 }
 function fail(): never { throw new Error('Retained release input is missing or incompatible'); }
 function assertPublicIdentitySafe(files: Files) {
@@ -78,7 +78,7 @@ export function assembleReleaseAssets(snapshot: CatalogSnapshot, current: Files,
   if (context.retainedManifestSha256 === null) {
     if (prior !== null) fail();
     const compacted = finish(current, currentRoutes);
-    assertFreeAssetCapacity(compacted.assets);
+    assertStaticAssetCapacity(compacted.assets);
     return { ...compacted, retention: null };
   }
   if (!prior || prior.releaseId !== context.priorReleaseId || prior.manifestSha256 !== context.retainedManifestSha256) fail();
@@ -88,7 +88,7 @@ export function assembleReleaseAssets(snapshot: CatalogSnapshot, current: Files,
   assertPublicIdentitySafe(retained.files);
   const assets = new Map([...retained.files, ...current]);
   const compacted = finish(assets, { ...retained.routes, ...currentRoutes });
-  assertFreeAssetCapacity(compacted.assets);
+  assertStaticAssetCapacity(compacted.assets);
   return { ...compacted,
     retention: { priorManifestSha256: context.retainedManifestSha256, currentAssetPaths } };
 }

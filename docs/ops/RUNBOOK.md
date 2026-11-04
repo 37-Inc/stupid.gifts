@@ -164,15 +164,16 @@ it does not increase the normal30k ceiling or tomorrow's supplier allowance.
 
 ## Per-run policy and budgets
 
-Owner correction November2: routine HTTP request count is telemetry, NOT a
-release/admission ceiling. The reviewed routine operator uses explicit
-`requestLimit: 'observe'` in the workspace and accounted D1 client; original
-manifest estimates and every charged/unknown request remain unchanged. Do not
-ask for another count-only allowance to finish ordinary maintenance. Keep real
-SQL/row/model budgets, bounded retries/timeouts, single-writer checks and actual
-provider failures. Diagnostic and immutable migration clients keep their own
-finite limits. Always use the compatible maintained reader for cleanup/status
-after a routine run exceeds its historical request estimate.
+Owner correction November4: routine HTTP, SQL, row-read and row-write counts
+are telemetry, NOT release/admission ceilings. `requestLimit: 'observe'` now
+observes all aggregate routine usage in both the workspace and accounted D1
+client. Original manifests, estimates and every charged/unknown attempt stay
+unchanged. Crossing an estimate emits `usageAlerts`; report it without stopping
+publication or asking for a budget grant. Provider-usage analytics being delayed
+or throttled on Standard is unknown/advisory, not another publication gate.
+Keep bounded batches/retries, technical timeouts, single-writer/data-integrity
+checks, current observations and real provider failures. Diagnostic and immutable
+migration clients retain their explicitly bounded contracts.
 
 The normal batch refreshes up to ten EXISTING products per run: four oldest
 featured public gifts and six oldest other public gifts, with deterministic
@@ -189,13 +190,12 @@ categories. Six searches remain six searches; no quality/dedup bypass.
 Required factual short descriptions are independent of optional long articles.
 Tuesday–Sunday are model-free. Reuse unchanged approved copy and embeddings.
 
-Provider-confirmed Free retains12,000SQL/1.5Mknown reads/30kknown
-writes and its existing uncertainty/headroom checks. On the owner's existing
-Standard plan, the reviewed routine profile is12,000SQL/3Mknown
-reads/40kknown writes. Legacy5,000/6,000HTTP fields are recorded estimates only,
-not a reason to strand an already-live release. The accepted full-catalog run measured1.83Mreads, so the
-old1.5Mguard could not reliably finish normal work. This finite margin does not
-rewrite any prior run's budget/charges.
+On the owner's existing Standard plan, 6,000HTTP/12,000SQL/3Mknown
+reads/40kknown writes are alert estimates only. They are not Cloudflare quotas.
+The actual Paid static-asset limit is100,000 files, not the obsolete20,000 Free
+ceiling. No subscription changes are authorized. Historical Free profiles and
+real Free account-headroom checks remain available for legacy tooling; they do
+not govern current Standard maintenance. No original budget/charge is rewritten.
 Check fresh account-wide usage and the actual plan before work/publication.
 Never reset counters, erase unknowns, silently repeat a failed batch, change
 subscriptions or silently expand a reserved run. Stop on a genuine failure.
@@ -263,6 +263,22 @@ A pending publication resumes ONLY its original config/source/owner/checkpoint.
 Never force locks/ownership, reset reservations, change a source checkout
 during execution or improvise a replacement batch. A failed preflight for
 unsealed older work must be reconciled before fetching.
+
+Routine content-addressed asset-transfer failures recover automatically under
+that same owner/package. The uploader gives each request three minutes and lets
+Wrangler apply its normal retries/backoff; interrupted asset POSTs receive503,
+not an abort of the entire command. Version-write uncertainty is separate and
+must be reconciled, never blindly repeated. Exact retained logs must prove no
+version POST before a new asset-only attempt. Recovery pins are append-only;
+execution windows are bounded by original content/retention deadlines, never
+new supplier observations. Source-intermediate cleanup runs AFTER acceptance.
+See `RELEASE_RELIABILITY_2026-11-04.md` for the tested contract.
+
+A newer reviewed clean operator can finish an older frozen source's saved
+publication with `npm run catalog:care -- recover <original-proposal-SHA> --run
+<original-run-key>`. It verifies the original source/helper/config and refuses
+all pre-review/provider phases. It cannot refetch suppliers or run models.
+Never replace this with `start` or a new run label.
 
 Credentials come only from existing reviewed Wrangler OAuth/Goose Keychain
 references. Never print values, change ACLs/reseed credentials, repeatedly retry

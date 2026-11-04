@@ -549,73 +549,10 @@ test('pinned daily D1 uses one existing refresh with no model credential, then w
   assert.equal(f.calls.getItems,1);
 });
 
-for(const monday of [false,true])test(`full2359 ${monday?'Monday ten plus20 discoveries':'daily ten'} current driver retains catalog but refuses undersized800HTTP/1200SQL budget`,async t=>{
-  const f=await setup(t,{permanent:2359,held:1024,discovered:monday?20:0,realTransport:true,at:monday?'2026-10-19T18:00:00.000Z':NOW});
-  f.config.cadence={day:monday?'2026-10-19':'2026-10-20',featuredIds:Array.from({length:10},(_,i)=>`B${String(i+1).padStart(9,'0')}`)};
-  f.config.backfillLimit=0;f.config.limits={requests:800,statements:1200};if(!monday)delete f.config.credentials.openai;
-  await put(f.options.configPath,f.config);f.options.configSha256=sha256(await fs.readFile(f.options.configPath));
-  f.workspaceOptions.configSha256=f.options.configSha256;f.workspaceOptions.budgetCaps={httpRequests:800,sqlStatements:1200};
-  const before=f.previous.products.map(p=>p.publicId),beforeDisplays=new Map(f.previous.products.map(p=>[p.publicId,p])),
-    heldRows=()=>f.sql.prepare('SELECT * FROM products WHERE is_active=0 ORDER BY public_id').all().map(r=>({...r})),
-    heldBefore=sha256(canonicalJson(heldRows()));
-  const capture=async(command,approval)=>{try{return await f.run(command,approval);}catch(error){return{state:'refused',reason:error.message};}};
-  const start=await capture('start');
-  if(!monday)assert.equal(start.reason,'awaiting_reviewed_approval',JSON.stringify(start));
-  assert.equal(f.calls.getItems,1);assert.equal(f.calls.search,monday?6:0);
-  assert.equal(f.calls.merchantAuthHttp,1);assert.equal(f.calls.merchantApiHttp,monday?7:1);assert.equal(f.calls.merchantRetries,0);
-  if(!monday)assert.equal(f.calls.chat+f.calls.embedding,0);
-  const current=f.sql.prepare("SELECT * FROM products WHERE catalog_revision='weekly-r' ORDER BY public_id").all();
-  if(start.reason==='awaiting_reviewed_approval')assert.equal(current.length,monday?30:10,'No completed daily/Monday phase is silently truncated');
-  else{assert.equal(monday,true);assert.equal(start.errorCode||start.reason,'catalog_d1_budget_exhausted');assert.ok(current.length>=10&&current.length<=30);}
-  assert.equal(sha256(canonicalJson(heldRows())),heldBefore,'Discovery cannot reactivate/rewrite an inactive same-ASIN or family');
-  assert.equal(f.sql.prepare('SELECT count(*) n FROM products WHERE id=?').get('B000006000').n,0);
-  for(const id of before){const row=f.sql.prepare('SELECT * FROM products WHERE public_id=?').get(id);
-    assert.equal(row.is_active,1);assert.ok(row.public_display_json);const display=JSON.parse(row.public_display_json),base=display.persistent??display;
-    assert.deepEqual(base,beforeDisplays.get(id),'A refreshed optional overlay must retain every exact permanent catalog field');}
-  if(monday)for(const row of current.filter(row=>!before.includes(row.public_id))){
-    const display=JSON.parse(row.public_display_json),base=display.eligibleUntil===null?display:display.persistent;
-    assert.ok(base,'All20 strong discoveries have explicit independent permanent clearance, not merchant-derived fallback rights');
-    assert.equal(base.eligibleUntil,null);assert.equal(base.imageUrl,'/images/gift-placeholder.svg');
-    assert.ok(JSON.parse(row.rights_json).persistent);}
-  const approval=start.reason==='awaiting_reviewed_approval'?await f.approve():undefined;
-  if(approval)assert.equal(JSON.parse(await fs.readFile(approval.path)).changes.length,monday?30:10);
-  const paid=Object.fromEntries(['getItems','search','chat','embedding','merchantAuthHttp','merchantApiHttp','merchantRetries'].map(k=>[k,f.calls[k]]));
-  const resume=()=>capture('resume',approval),result=approval?await resume():start,report=await readRunWorkspace(f.workspaceOptions);
-  assert.notEqual(result.state,'finalized');assert.ok((approval?['freezing']:['attention'])
-    .includes(report.checkpoint.checkpoint.phase),JSON.stringify(result));
-  const refusal=result.errorCode||result.reason;
-  // The measured next owned-plan proof is an atomic three-statement batch;
-  // two remaining statements cannot be spent by partially dispatching it.
-  assert.ok(refusal==='catalog_d1_budget_exhausted'
-    ||refusal==='vector_delivery_failed'&&(report.budget.sqlStatements+3>1200||report.budget.httpRequests===800),
-  `A masked vector-proof refusal requires an exhausted unchanged allowance: ${JSON.stringify({result,budget:report.budget})}`);
-  assert.ok(report.budget.httpRequests<=800);
-  assert.ok(report.budget.sqlStatements<=1200);assert.equal(report.budget.unconfirmedRequests,0);
-  assert.equal(f.calls.build+f.calls.upload+f.calls.activate,0,'Budget refusal cannot deploy a partial/empty catalog');
-  assert.equal(f.sql.prepare('SELECT count(*) n FROM publication_receipts').get().n,1);
-  assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,approval?'freezing':'writing');
-  const charged=structuredClone(report.budget),http=f.calls.http,sql=f.calls.sql,
-    projectionRows=f.sql.prepare("SELECT count(*) n FROM catalog_public_products WHERE catalog_revision='weekly-r'").get().n;
-  // Grouped INSERTs may finish the projection before a later proof exhausts
-  // this deliberately undersized budget. Refusal, not a partial-row count, is
-  // the contract: no deployment and no fresh allowance or paid phase on retry.
-  assert.ok(projectionRows<=2359+(monday?20:0));
-  assert.equal(charged.httpRequests,http,'Every mocked CF/Vectorize/identity request is in the shared ledger');
-  assert.equal(charged.sqlStatements,sql,'Every dispatched SQL statement is in the shared ledger');
-  await resume();const again=await readRunWorkspace(f.workspaceOptions);
-  for(const key of ['httpRequests','sqlStatements','knownRowsRead','knownRowsWritten','unconfirmedRequests'])assert.ok(again.budget[key]>=charged[key],key);
-  assert.ok(again.budget.httpRequests<=800&&again.budget.sqlStatements<=1200);
-  assert.deepEqual(Object.fromEntries(Object.keys(paid).map(k=>[k,f.calls[k]])),paid,'Restart cannot rerun merchant/model phases');
-  assert.equal(f.calls.build+f.calls.upload+f.calls.activate,0);
-  t.diagnostic(JSON.stringify({scenario:monday?'Monday10+20/full2359':'daily10/full2359',result,phase:report.checkpoint.checkpoint.phase,
-    budget:charged,modelHttpOutsideWorkspace:f.calls.modelHttp,merchantMethodCalls:f.calls.getItems+f.calls.search,
-    merchantTransport:{auth:f.calls.merchantAuthHttp,api:f.calls.merchantApiHttp,retries:f.calls.merchantRetries},
-    allObservedHttp:charged.httpRequests+f.calls.modelHttp+f.calls.merchantAuthHttp+f.calls.merchantApiHttp,
-    omittedTransport:'Mock compilation/upload command, not an authentic full publisher/canary or D1 billed-row proof',
-    projectionRows,actualChangedProducts:current.length,fullyCompletedProviderPhase:Boolean(approval),
-    capacityAccepted:false,prior:'reviewed snapshot/genuine generic receipt, NOT permanent successor/native-anchor acceptance',
-    rowsReadMeaning:'mock returned rows, NOT index-inclusive D1 billing'}));
-});
+// The former full-catalog probes asserted refusal at800HTTP/1200SQL. Those
+// estimates are now advisory for routine care. The positive small-cycle test
+// below covers estimate crossings; full build/upload capacity remains in the
+// authentic successor probes above, not obsolete quota-stop assertions.
 
 test('real merchant client counts cold authorization and its single401 refresh without repeating the reserved daily phase',async t=>{
   const f=await setup(t,{permanent:1,realTransport:true});f.config.cadence={day:'2026-10-20',featuredIds:[ID]};
@@ -664,20 +601,22 @@ for(const monday of [false,true])test(`SUCCESS capacity probe full2359 ${monday?
   const paid=structuredClone(f.calls);assert.equal((await f.run('resume')).state,'finalized');assert.deepEqual(f.calls,paid);
 });
 
-test('phase budget exhaustion checkpoints attention locally without a diagnostic D1 read or paid replay',async t=>{
+test('routine SQL estimate crossing preserves costs and reaches review without provider replay',async t=>{
   const f=await setup(t,{permanent:1});f.config.cadence={day:'2026-10-20',featuredIds:[ID]};
   f.config.backfillLimit=0;f.config.limits={requests:800,statements:40};delete f.config.credentials.openai;
   await put(f.options.configPath,f.config);f.options.configSha256=sha256(await fs.readFile(f.options.configPath));
   f.workspaceOptions.configSha256=f.options.configSha256;f.workspaceOptions.budgetCaps={httpRequests:800,sqlStatements:40};
-  const result=await f.run('start');assert.equal(result.state,'attention');assert.equal(result.phase,'attention');
-  assert.equal(result.errorCode,'catalog_d1_budget_exhausted');
-  const report=await readRunWorkspace(f.workspaceOptions);assert.equal((await fullCheckpoint(f.workspaceOptions)).checkpoint.state.errorCode,'catalog_d1_budget_exhausted');
-  assert.equal(report.checkpoint.checkpoint.owner.phase,'writing');assert.equal(report.budget.httpRequests,f.calls.http);
+  f.workspaceOptions.requestLimit='observe';
+  const result=await f.run('start');assert.equal(result.state,'pending');assert.equal(result.reason,'awaiting_reviewed_approval');
+  const report=await readRunWorkspace(f.workspaceOptions);assert.ok(report.budget.sqlStatements>40);
+  assert.equal(report.budget.httpRequests,f.calls.http);
   assert.equal(report.budget.sqlStatements,f.calls.sql);assert.equal(report.budget.unconfirmedRequests,0);
-  const calls=structuredClone(f.calls),budget=structuredClone(report.budget),owner={...f.sql.prepare('SELECT * FROM catalog_mutation_scopes').get()};
-  assert.equal((await f.run('resume')).state,'attention');assert.deepEqual(f.calls,calls);
-  assert.deepEqual((await readRunWorkspace(f.workspaceOptions)).budget,budget);
-  assert.deepEqual({...f.sql.prepare('SELECT * FROM catalog_mutation_scopes').get()},owner);
+  const calls=structuredClone(f.calls),budget=structuredClone(report.budget);
+  assert.equal((await f.run('resume')).reason,'awaiting_reviewed_approval');
+  for(const key of ['getItems','search','chat','embedding','upsert','delete','build','upload','activate'])assert.equal(f.calls[key],calls[key]);
+  const after=(await readRunWorkspace(f.workspaceOptions)).budget;
+  assert.ok(after.httpRequests>=budget.httpRequests);assert.ok(after.sqlStatements>=budget.sqlStatements);
+  assert.equal(after.unconfirmedRequests,0);
   assert.equal(f.calls.upload+f.calls.activate,0);
 });
 
@@ -745,11 +684,11 @@ test('adopted expired-context daily resumes new source through actual normal pub
   assert.equal((await w.readCheckpoint()).checkpoint.phase,'finalized');await w.close();
 });
 
-test('small permanent daily finishes beyond its request estimate with model-free cadence and shared CF accounting',async t=>{
+test('small permanent daily finishes beyond HTTP and SQL estimates with model-free cadence and shared accounting',async t=>{
   const f=await setup(t,{permanent:1,held:1});f.config.cadence={day:'2026-10-20',featuredIds:[ID]};
-  f.config.backfillLimit=0;f.config.limits={requests:5,statements:1200};delete f.config.credentials.openai;
+  f.config.backfillLimit=0;f.config.limits={requests:5,statements:40};delete f.config.credentials.openai;
   await put(f.options.configPath,f.config);f.options.configSha256=sha256(await fs.readFile(f.options.configPath));
-  f.workspaceOptions.configSha256=f.options.configSha256;f.workspaceOptions.budgetCaps={httpRequests:5,sqlStatements:1200};
+  f.workspaceOptions.configSha256=f.options.configSha256;f.workspaceOptions.budgetCaps={httpRequests:5,sqlStatements:40};
   f.workspaceOptions.requestLimit='observe';
   const start=await f.run('start');assert.equal(start.reason,'awaiting_reviewed_approval');
   const result=await f.run('resume',await f.approve());assert.equal(result.state,'finalized',JSON.stringify(result));
@@ -763,6 +702,7 @@ test('small permanent daily finishes beyond its request estimate with model-free
   assert.deepEqual(projected.map(p=>p.public_id),[UUID]);assert.equal(JSON.parse(projected[0].public_display_json).eligibleUntil,null);
   assert.equal(result.budget.httpRequests,f.calls.http);assert.equal(result.budget.sqlStatements,f.calls.sql);
   assert.ok(result.budget.httpRequests>f.config.limits.requests);
+  assert.ok(result.budget.sqlStatements>f.config.limits.statements);
   const calls=structuredClone(f.calls);assert.equal((await f.run('resume')).state,'finalized');assert.deepEqual(f.calls,calls);
   t.diagnostic(JSON.stringify({scenario:'small permanent daily executor',budget:result.budget,providerCalls:f.calls,
     compilation:'mock',uploadCommand:'mock (protected bridge/asset HTTP tested separately, not part of this capacity proof)',

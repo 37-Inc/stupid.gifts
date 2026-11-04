@@ -80,8 +80,8 @@ export async function currentD1Plan(token,send=fetch){
 }
 export async function headroom(token,spent={knownRowsRead:0,knownRowsWritten:0},anchor=null,send=fetch,plan='free'){
   const limits=routineLimits(plan);
-  if(!Number.isSafeInteger(spent.knownRowsRead)||spent.knownRowsRead<0||spent.knownRowsRead>limits.reportedRowsRead
-    ||!Number.isSafeInteger(spent.knownRowsWritten)||spent.knownRowsWritten<0||spent.knownRowsWritten>limits.reportedRowsWritten
+  if(!Number.isSafeInteger(spent.knownRowsRead)||spent.knownRowsRead<0
+    ||!Number.isSafeInteger(spent.knownRowsWritten)||spent.knownRowsWritten<0
     ||!Number.isSafeInteger(spent.unconfirmedRequests??0)||(spent.unconfirmedRequests??0)<0)refuse('run_budget_exceeded');
   const at=new Date(),day=at.toISOString().slice(0,10);
   const r=await send('https://api.cloudflare.com/client/v4/graphql',{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},
@@ -100,6 +100,15 @@ export async function headroom(token,spent={knownRowsRead:0,knownRowsWritten:0},
   if(plan==='free'&&(chargedRead+Math.max(0,limits.reportedRowsRead-spent.knownRowsRead)+20000+500000+300000>5000000
     ||chargedWrite+Math.max(0,limits.reportedRowsWritten-spent.knownRowsWritten)+5000+10000>100000))refuse('free_headroom');
   return{observedAt:new Date().toISOString(),utcDay:day,rowsRead,rowsWritten,unknownReadReserve:500000,unknownWriteReserve:5000,untouchedReads:300000,untouchedWrites:10000};
+}
+export async function observeHeadroom(token,spent,anchor,send,plan){
+  try{return await headroom(token,spent,anchor,send,plan);}
+  catch(error){
+    if(plan!=='standard'||error?.message==='routine_run_budget_exceeded')throw error;
+    const code=/^routine_headroom_(?:rate_limited|unavailable|invalid)$/.test(error?.message??'')?error.message:'routine_headroom_unavailable';
+    console.warn(JSON.stringify({usageAlert:code,usage:'unknown',releaseBlocked:false}));
+    return{observedAt:new Date().toISOString(),usageUnknown:true};
+  }
 }
 export async function routineServingPrior(token,seal,send=fetch){
   const deployments=`https://api.cloudflare.com/client/v4/accounts/${SCOPE.accountId}/workers/scripts/${SCOPE.workerName}/deployments`;
@@ -141,7 +150,7 @@ async function prepare(directory,calendar,photosOnly=false){
   if(await optional(directory+'/prepare-intent.json'))refuse('preparation_interrupted');
   const prior=await optional(CARE+'/last-success.json')??INITIAL,seal=await json(prior.control.path,prior.control.sha256);
   if(!['permanent-catalog-seal','approved-catalog-seal'].includes(seal.kind))refuse('prior_kind');
-  const token=await resolveWranglerOAuth(),plan=await currentD1Plan(token),limits=routineLimits(plan),capacity=await headroom(token,undefined,null,fetch,plan);
+  const token=await resolveWranglerOAuth(),plan=await currentD1Plan(token),limits=routineLimits(plan),capacity=await observeHeadroom(token,undefined,null,fetch,plan);
   const db=await createCatalogD1ReadOnlyRest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,limits:{requests:10,statements:12,reportedRowsRead:20000,reportedRowsWritten:1}});
   const rows=await db.batch([
     db.prepare('SELECT coalesce(max(sequence),0) n FROM vector_sync_outbox WHERE source_revision=?').bind(seal.projectionReceipt.catalog_revision),
@@ -223,26 +232,45 @@ export function operatorInvocation(argv,calendar){
   if(flag>=0){runKey=args[flag+1];args.splice(flag,2);}
   const [command,approvalSha]=args;
   if(!validCatalogRunKey(runKey)
-    ||!['prepare','review','start','publish','status'].includes(command)
-    ||args.length!==(command==='publish'?2:1)||photosOnly&&command!=='prepare'||photosOnly&&flag<0)refuse('command');
+    ||!['prepare','review','start','publish','recover','status'].includes(command)
+    ||args.length!==(['publish','recover'].includes(command)?2:1)||photosOnly&&command!=='prepare'||photosOnly&&flag<0)refuse('command');
   return{command,approvalSha,runKey,...(photosOnly?{photosOnly:true}:{})};
 }
 export async function main(){
 source();const calendar=pacificCatalogCalendar(),{command,approvalSha,runKey,photosOnly}=operatorInvocation(process.argv.slice(2),calendar),directory=CARE+'/runs/'+runKey;
 if(command==='prepare'){console.log(JSON.stringify(await prepare(directory,calendar,photosOnly)));}
 else{
-  const record=await json(directory+'/operator.json');if(record.helperSha256!==self||record.source!==SOURCE)refuse('operator_changed');
+  const record=await json(directory+'/operator.json'),recovering=command==='recover';
+  if(!recovering&&(record.helperSha256!==self||record.source!==SOURCE))refuse('operator_changed');
   const config=validateCloudflareWeeklyConfig(await json(record.configPath,record.configSha256)),entry=options(config,record.configPath,record.configSha256);
+  if(recovering){
+    const old=config.publication.sourceRoot,git=(...args)=>execFileSync('git',args,{cwd:old,encoding:'utf8'}).trim();
+    if(config.codeSha!==record.source||git('rev-parse','HEAD')!==record.source||git('status','--porcelain','--untracked-files=all')
+      ||digest(await fs.readFile(old+'/scripts/catalog/daily-operator.mjs'))!==record.helperSha256)refuse('original_source');
+    entry.workspace.repository=old;entry.workspace.codeSha=record.source;
+    const w=await openRunWorkspace(entry.workspace);
+    try{const cp=await w.readCheckpoint({controlOnly:true});
+      if(!cp||!['freezing','publishing','attention','published','finalized'].includes(cp.checkpoint.phase)||!cp.checkpoint.pins.approval)
+        refuse('provider_replay_forbidden');
+    }finally{await w.close();}
+  }
   if(command==='review')await review(entry,config,directory);
-  else if(['start','publish','status'].includes(command)){
-    if(command==='publish'&&!HASH.test(approvalSha??''))refuse('explicit_review_digest');
-    if(command==='start'){const token=await resolveWranglerOAuth();await headroom(token,undefined,record.capacity,fetch,await currentD1Plan(token));}
-    if(command==='publish'){
+  else if(['start','publish','recover','status'].includes(command)){
+    if(['publish','recover'].includes(command)&&!HASH.test(approvalSha??''))refuse('explicit_review_digest');
+    if(command==='start'){const token=await resolveWranglerOAuth();await observeHeadroom(token,undefined,record.capacity,fetch,await currentD1Plan(token));}
+    if(command==='publish'||recovering){
       const w=await openRunWorkspace(entry.workspace);let spent;try{spent=await w.budget();}finally{await w.close();}
-      const token=await resolveWranglerOAuth();await headroom(token,spent,record.capacity,fetch,await currentD1Plan(token));
+      const token=await resolveWranglerOAuth();await observeHeadroom(token,spent,record.capacity,fetch,await currentD1Plan(token));
     }
-    const result=await runCloudflareWeekly({...entry.driver,command:command==='publish'?'resume':command,...(command==='publish'?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})});
+    const result=await runCloudflareWeekly({...entry.driver,command:command==='publish'||recovering?'resume':command,
+      ...(['publish','recover'].includes(command)?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})},
+      recovering?{repository:config.publication.sourceRoot}:{});
     await remember(result,entry,config,directory);console.log(JSON.stringify(weeklyCommandSummary(result)));
+    if(result.state==='finalized'){
+      const w=await openRunWorkspace(entry.workspace);
+      try{await w.cleanPublicationBuild(config.runId);}
+      catch{console.warn(JSON.stringify({cleanupPending:true,releaseAccepted:true}));}finally{await w.close();}
+    }
   }else refuse('command');
 }
 }

@@ -15,7 +15,7 @@ import { createOgRelease } from '../static-site/lib/og.ts';
 import { siteIdentity } from '../static-site/lib/site-identity.ts';
 import { createStaticRoutes } from '../static-site/lib/asset-routes.ts';
 import { giftGuides } from '../lib/gift-guide-definitions.ts';
-import { assertFreeAssetCapacity, CLOUDFLARE_FREE_ASSET_LIMIT } from '../scripts/staging/retention.mts';
+import { assertStaticAssetCapacity, CLOUDFLARE_ASSET_LIMIT } from '../scripts/staging/retention.mts';
 
 const fixture = JSON.parse(fs.readFileSync(new URL('../static-site/fixtures/catalog.snapshot.json', import.meta.url)));
 const at = Date.parse(fixture.generatedAt), deadline = new Date(at + 86400000).toISOString();
@@ -103,10 +103,10 @@ test('only photo JSON expires; full rendered page/HTML/RSC policies remain perma
 });
 
 test('Cloudflare Free asset capacity is enforced before publication, without a paid fallback', () => {
-  const assets = new Map(Array.from({ length: CLOUDFLARE_FREE_ASSET_LIMIT }, (_, i) => [`/owned-${i}.js`, new Uint8Array()]));
-  assert.doesNotThrow(() => assertFreeAssetCapacity(assets));
+  const assets = new Map(Array.from({ length: CLOUDFLARE_ASSET_LIMIT }, (_, i) => [`/owned-${i}.js`, new Uint8Array()]));
+  assert.doesNotThrow(() => assertStaticAssetCapacity(assets));
   assets.set('/one-too-many.js', new Uint8Array());
-  assert.throws(() => assertFreeAssetCapacity(assets), /Cloudflare Free asset limit/);
+  assert.throws(() => assertStaticAssetCapacity(assets), /Cloudflare Workers Paid asset limit/);
 });
 
 test('actual large persistent static export fits Free, preserves all routes and isolates supplier photos', {
@@ -132,7 +132,7 @@ test('actual large persistent static export fits Free, preserves all routes and 
       ['--import', 'tsx', `scripts/staging/${script}.mts`], { cwd: root, env, stdio: 'inherit' });
     const output = new URL('../static-site/out/', import.meta.url);
     const files = fs.readdirSync(output, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile());
-    assert.ok(files.length <= CLOUDFLARE_FREE_ASSET_LIMIT);
+    assert.ok(files.length <= CLOUDFLARE_ASSET_LIMIT);
     assert.equal(files.filter(entry => entry.parentPath === path.join(output.pathname, 'gifts')
       && /^original-fictional-object-\d+\.html$/.test(entry.name)).length, count);
     let photoShards = 0;

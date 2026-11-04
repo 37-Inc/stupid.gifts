@@ -112,7 +112,7 @@ test('serialized concurrent reservations cannot overspend a single remaining slo
   assert.equal(outcomes.filter(r=>r.status==='fulfilled').length,1);assert.equal((await w.budget()).httpRequests,1);
 });
 
-test('routine request observation retains every charge beyond the old estimate and still enforces SQL across restart',async t=>{
+test('routine usage observation retains every charge beyond HTTP and SQL estimates across restart',async t=>{
   const f=await fixture(t,{budgetCaps:{httpRequests:1,sqlStatements:3},requestLimit:'observe'}),w=await f.open();
   const manifest=await readFile(join(w.directory,'manifest.json'));
   await w.reserveBudget(reservation('first',1));await w.settleBudget('first',{status:'known',usage:{rowsRead:7,rowsWritten:2}});
@@ -122,9 +122,11 @@ test('routine request observation retains every charge beyond the old estimate a
   const resumed=await f.open({mode:'resume'});
   assert.deepEqual(await resumed.budget(),{httpRequests:3,sqlStatements:3,knownRowsRead:12,knownRowsWritten:3,unconfirmedRequests:1});
   assert.deepEqual(await readFile(join(resumed.directory,'manifest.json')),manifest);
-  await assert.rejects(resumed.reserveBudget(reservation('extra-sql',1)),/budget_exceeded/);
+  await resumed.reserveBudget(reservation('extra-sql',1));
+  await resumed.settleBudget('extra-sql',{status:'known',usage:{rowsRead:1,rowsWritten:1}});
   await resumed.reserveBudget(reservation('read-only-control',0));
-  assert.equal((await resumed.budget()).httpRequests,4);
+  assert.equal((await resumed.budget()).httpRequests,5);
+  assert.equal((await resumed.budget()).sqlStatements,4);
   await resumed.close();
   const report=await readRunWorkspace({...f.input,mode:'resume'});
   assert.equal(report.budget.httpRequests,4);assert.equal(report.budget.unconfirmedRequests,2);

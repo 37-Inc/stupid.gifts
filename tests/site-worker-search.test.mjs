@@ -69,7 +69,7 @@ test('semantic response retains contract, rank score, provider and candidate bou
   assert.doesNotMatch(JSON.stringify(diagnostic), /funny button|192\.0\.2\.1/);
 });
 
-test('query input, methods and rates are bounded before providers', async () => {
+test('query input and methods are bounded; rate estimates never reject legitimate searches', async () => {
   const fixture = setup({ handler: { rateLimit: 2 } });
   assert.deepEqual(await (await fixture.request('x')).json(), { results: [], searchId: null });
   assert.equal((await fixture.request('x'.repeat(201))).status, 400);
@@ -78,9 +78,16 @@ test('query input, methods and rates are bounded before providers', async () => 
   assert.equal((await fixture.handler(new Request('https://example.test/api/search-products', { method: 'POST', body: '{}' }), fixture.env)).status, 405);
   assert.equal((await fixture.request('fart')).status, 200);
   assert.equal((await fixture.request('crab')).status, 200);
-  assert.equal((await fixture.request('goat')).status, 429);
+  assert.equal((await fixture.request('goat')).status, 200);
   fixture.advance(60_000);
   assert.equal((await fixture.request('goat')).status, 200);
+});
+
+test('more than256 distinct clients can search without a visitor admission cutoff',async()=>{
+  const f=setup();
+  for(let i=0;i<270;i++)assert.equal((await f.handler(new Request('https://example.test/api/search-products?q=goat',{
+    headers:{'CF-Connecting-IP':`192.0.${Math.floor(i/256)}.${i%256}`}}),f.env)).status,200);
+  assert.equal(f.calls.embed,1,'cached results remain available across clients');
 });
 
 test('normalized cache is short, revision/model scoped and kill switch bypasses semantic cache', async () => {

@@ -13,7 +13,7 @@ const API='https://api.cloudflare.com/client/v4';
 const SANDBOX='/usr/bin/sandbox-exec';
 // Upload chunks have an independent per-request/concurrent-aggregate wire bound,
 // including base64/multipart overhead; this is not the sealed package total bound.
-const REQUEST_BYTES=2*128*1024*1024+1024*1024,RESPONSE_BYTES=512*1024,REQUEST_MS=30_000;
+const REQUEST_BYTES=2*128*1024*1024+1024*1024,RESPONSE_BYTES=512*1024,REQUEST_MS=180_000;
 // A 20k-entry metadata session can exceed512KiB (measured551929B). Asset
 // contents/version responses retain the old bound; this is not a package cap.
 const responseLimit=(url:string)=>/^\/client\/v4\/accounts\/[a-f0-9]{32}\/workers\/scripts\/[a-zA-Z0-9_-]{1,100}\/assets-upload-session$/.test(new URL(url).pathname)?2*1024*1024:RESPONSE_BYTES;
@@ -28,7 +28,8 @@ export function isAccountedPublicationUploadCommand(value:unknown):value is Uplo
   return typeof value==='function'&&protectedCommands.has(value as UploadCommand);
 }
 export class PublicationUploadCommandError extends Error {
-  constructor(readonly code:'publication_upload_scope_invalid'|'publication_upload_budget_failed'|'publication_upload_unknown'|'publication_upload_command_failed'|'publication_upload_sandbox_unavailable'){
+  constructor(readonly code:'publication_upload_scope_invalid'|'publication_upload_budget_failed'|'publication_upload_unknown'|'publication_upload_command_failed'|'publication_upload_sandbox_unavailable',
+    readonly detail?:{versionDispatched:boolean;reason:string}){
     super(code);this.name='PublicationUploadCommandError';
   }
 }
@@ -93,16 +94,18 @@ export function accountedPublicationUploadCommand(options:{workspace:Workspace;s
     await ws.assertHeld();
     const nonce=randomBytes(24).toString('hex'),prefix=`/${nonce}/client/v4`,child=new AbortController();
     const pending=new Set<Promise<void>>(),controllers=new Set<AbortController>();
-    let failure:PublicationUploadCommandError|undefined,buffered=0,stopping=false;
-    const fail=(code:PublicationUploadCommandError['code'])=>{if(!failure||failure.code==='publication_upload_command_failed')failure=new PublicationUploadCommandError(code);child.abort();};
+    let failure:PublicationUploadCommandError|undefined,buffered=0,stopping=false,versionDispatched=false;
+    const fail=(code:PublicationUploadCommandError['code'],reason='transport')=>{
+      if(!failure||failure.code==='publication_upload_command_failed')failure=new PublicationUploadCommandError(code,{versionDispatched,reason});child.abort();};
     async function handle(req:IncomingMessage,res:ServerResponse){
-      let retained=0;const controller=new AbortController();controllers.add(controller);
+      let retained=0,assetContent=false,reason='transport';const controller=new AbortController();controllers.add(controller);
       const abort=()=>{controller.abort();if(!req.complete)req.destroy();};req.once('aborted',abort);res.once('close',()=>{if(!res.writableEnded)abort();});
-      const timer=setTimeout(abort,REQUEST_MS);let reservation:string|undefined,settled=false;
+      const timer=setTimeout(()=>{reason='timeout';abort();},REQUEST_MS);let reservation:string|undefined,settled=false;
       try{
         if(stopping||req.rawHeaders.length>128||!req.url?.startsWith(`${prefix}/`)||req.url.includes('\\')||/%(?:2f|5c|2e)/i.test(req.url))throw new Error('scope');
         const relative=req.url.slice(prefix.length),url=new URL(relative,'https://bridge.invalid');
         if(url.origin!=='https://bridge.invalid'||relative!==`${url.pathname}${url.search}`||!allowed(url,req.method??'',scope))throw new Error('scope');
+        assetContent=req.method==='POST'&&url.pathname.startsWith(`/accounts/${scope.accountId}/workers/assets/upload`);
         const chunks:Buffer[]=[];for await(const value of req){const bytes=Buffer.from(value);retained+=bytes.length;buffered+=bytes.length;
           if(retained>REQUEST_BYTES||buffered>REQUEST_BYTES||controller.signal.aborted)throw new Error('scope');chunks.push(bytes);}
         const body=Buffer.concat(chunks);if(req.method==='GET'&&body.length)throw new Error('scope');
@@ -117,13 +120,14 @@ export function accountedPublicationUploadCommand(options:{workspace:Workspace;s
         const onAbort=()=>rejectAbort(new Error());controller.signal.addEventListener('abort',onAbort,{once:true});
         let sent:Promise<Response>|undefined;
         try{
+          if(req.method==='POST'&&url.pathname.endsWith('/versions'))versionDispatched=true;
           sent=send(target,{method:req.method,headers:outgoing,body:req.method==='POST'?new Uint8Array(body):undefined,redirect:'error',signal:controller.signal}).then(response=>{
             if(controller.signal.aborted){void response.body?.cancel().catch(()=>{});throw new Error();}return response;});
           const response=await Promise.race([sent,aborted]);
-          if(response.status>=300&&response.status<400||response.headers.get('content-encoding')&&!['identity'].includes(response.headers.get('content-encoding')!))throw new Error();
+          if(response.status>=300&&response.status<400||response.headers.get('content-encoding')&&!['identity'].includes(response.headers.get('content-encoding')!)){reason='response_invalid';throw new Error();}
           const reader=response.body?.getReader(),chunks:Uint8Array[]=[];let size=0;
           try{if(reader)for(;;){const part=await Promise.race([reader.read(),aborted]);if(part.done)break;size+=part.value.byteLength;
-            if(size>responseLimit(target)){void reader.cancel().catch(()=>{});throw new Error();}chunks.push(part.value);}}
+            if(size>responseLimit(target)){reason='response_bound';void reader.cancel().catch(()=>{});throw new Error();}chunks.push(part.value);}}
           finally{if(controller.signal.aborted)void reader?.cancel().catch(()=>{});try{reader?.releaseLock();}catch{}}
           const payload=Buffer.concat(chunks);settled=true;await ws.settleBudget(reservation,{status:'known',usage:{rowsRead:0,rowsWritten:0}});
           controller.signal.throwIfAborted();const output=cleanHeaders(Object.fromEntries(response.headers));
@@ -137,8 +141,14 @@ export function accountedPublicationUploadCommand(options:{workspace:Workspace;s
       }catch(error){
         controller.abort();
         if(reservation&&!settled){settled=true;try{await ws.settleBudget(reservation,{status:'unknown',usage:null});}catch{}}
-        fail(error instanceof Error&&error.message==='scope'?'publication_upload_scope_invalid':'publication_upload_unknown');
-        if(!res.destroyed){res.writeHead(400,{'Content-Type':'application/json'});res.end('{"success":false,"errors":[{"code":10000,"message":"Protected upload stopped"}]}');}
+        // Content-addressed asset transfers may safely retry. Keep Wrangler
+        // alive so its existing backoff/retry logic handles transient failures.
+        // Version writes, scope violations and malformed replies remain fenced.
+        const retryable=assetContent&&!versionDispatched&&['transport','timeout'].includes(reason)
+          &&!(error instanceof Error&&error.message==='scope')&&!stopping;
+        if(!retryable)fail(error instanceof Error&&error.message==='scope'?'publication_upload_scope_invalid':'publication_upload_unknown',reason);
+        if(!res.destroyed){res.writeHead(retryable?503:400,{'Content-Type':'application/json',...(retryable?{'Retry-After':'1'}:{})});
+          res.end('{"success":false,"errors":[{"code":10000,"message":"Upload transfer interrupted"}]}');}
       }finally{clearTimeout(timer);req.removeListener('aborted',abort);controllers.delete(controller);buffered-=retained;}
     }
     const server=createServer({maxHeaderSize:16*1024},(req,res)=>{const task=handle(req,res);pending.add(task);
@@ -156,7 +166,7 @@ export function accountedPublicationUploadCommand(options:{workspace:Workspace;s
       await run({...command,file:SANDBOX,args:['-p',profile,command.file,...uploadArgs],env:{...command.env,
         CLOUDFLARE_API_BASE_URL:`http://127.0.0.1:${address.port}${prefix}`,WRANGLER_HIDE_BANNER:'true',WRANGLER_SEND_METRICS:'false',
         WRANGLER_SEND_ERROR_REPORTS:'false',WRANGLER_LOG_SANITIZE:'true'}},child.signal);
-    }catch{failure??=new PublicationUploadCommandError('publication_upload_command_failed');}
+    }catch{failure??=new PublicationUploadCommandError('publication_upload_command_failed',{versionDispatched,reason:'command_failed'});}
     finally{
       stopping=true;const closed=new Promise<void>(resolve=>server.close(()=>resolve()));
       for(const controller of controllers)controller.abort();server.closeIdleConnections();

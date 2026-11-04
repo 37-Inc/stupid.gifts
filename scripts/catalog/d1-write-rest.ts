@@ -228,6 +228,8 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
       :migrationAssert&&key==='reportedRowsWritten'?100_000:HARD_LIMITS[key as keyof Limits]))
     ||limits.timeoutMs<10||options.requestLimit!==undefined&&!['enforce','observe'].includes(options.requestLimit)
     ||options.requestLimit==='observe'&&(!options.accounting||migrationAssert))throw new Error('catalog_d1_configuration_invalid');
+  // Existing routine configs keep their original estimates and hashes. Observe
+  // means all aggregate usage is advisory; wire/SQL/identity bounds stay strict.
   const enforceRequests=options.requestLimit!=='observe';
   const send=options.fetch??fetch;
   const base=`https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}`;
@@ -239,7 +241,7 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
       ||accounting.scope.databaseName!==databaseName||typeof accounting.reserve!=='function'||typeof accounting.settle!=='function'
       ||!object(initial)||Object.keys(initial).sort().join(',')!=='httpRequests,knownRowsRead,knownRowsWritten,sqlStatements,unconfirmedRequests'
       ||Object.values(initial).some(value=>!integer(value))||initial.unconfirmedRequests>initial.httpRequests
-      ||enforceRequests&&initial.httpRequests>limits.requests||initial.sqlStatements>limits.statements)throw new Error('catalog_d1_accounting_invalid');
+      ||enforceRequests&&(initial.httpRequests>limits.requests||initial.sqlStatements>limits.statements))throw new Error('catalog_d1_accounting_invalid');
     ({httpRequests:requests,sqlStatements:statements,knownRowsRead:rowsRead,knownRowsWritten:rowsWritten,unconfirmedRequests}=initial);
   }
   async function reserve(body:string|undefined,count:number){
@@ -290,12 +292,12 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     signal?.throwIfAborted();
     const body=JSON.stringify({batch});
     if(Buffer.byteLength(body)>limits.requestBytes)throw new Error('catalog_d1_request_bound');
-    if(statements+batch.length>limits.statements||enforceRequests&&requests>=limits.requests
-      ||rowsRead>=limits.reportedRowsRead||rowsWritten>=limits.reportedRowsWritten)throw new Error('catalog_d1_budget_exhausted');
+    if(enforceRequests&&(statements+batch.length>limits.statements||requests>=limits.requests
+      ||rowsRead>=limits.reportedRowsRead||rowsWritten>=limits.reportedRowsWritten))throw new Error('catalog_d1_budget_exhausted');
     beforeBatch?.(batch);
     const reservation=await reserve(body,batch.length);
-    if(statements+batch.length>limits.statements||enforceRequests&&requests>=limits.requests
-      ||rowsRead>=limits.reportedRowsRead||rowsWritten>=limits.reportedRowsWritten)throw new Error('catalog_d1_budget_exhausted');
+    if(enforceRequests&&(statements+batch.length>limits.statements||requests>=limits.requests
+      ||rowsRead>=limits.reportedRowsRead||rowsWritten>=limits.reportedRowsWritten))throw new Error('catalog_d1_budget_exhausted');
     statements+=batch.length;
     let results:Result[];
     try{
@@ -323,11 +325,11 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     // Reported costs are checked AFTER execution, never a guarantee that an
     // arbitrary SQL query cannot exceed its allowance. Lost metadata stays
     // unknown; bounded requests still permit the caller's journal readback.
-    if(rowsRead>limits.reportedRowsRead
-      ||rowsWritten>limits.reportedRowsWritten)throw new Error('catalog_d1_reported_usage_exceeded');
+    if(enforceRequests&&(rowsRead>limits.reportedRowsRead
+      ||rowsWritten>limits.reportedRowsWritten))throw new Error('catalog_d1_reported_usage_exceeded');
     return results;
   }
-  if(accounting&&(enforceRequests&&requests>=limits.requests||statements>=limits.statements||rowsRead>=limits.reportedRowsRead
+  if(accounting&&enforceRequests&&(requests>=limits.requests||statements>=limits.statements||rowsRead>=limits.reportedRowsRead
     ||rowsWritten>=limits.reportedRowsWritten))throw new Error('catalog_d1_budget_exhausted');
   const reservation=await reserve(undefined,0);
   let identity:unknown;

@@ -25,6 +25,7 @@ import { isAccountedPublicationUploadCommand, PublicationUploadCommandError } fr
 import { isCatalogD1Rest } from './d1-write-rest.ts';
 import {readOnlyUploadEvidence,readOnlyTransportEvidence} from './upload-preflight-proof.ts';
 import type {ReadOnlyUploadEvidence,ReadOnlyTransportEvidence} from './upload-preflight-proof.ts';
+import {assetUploadRetryEvidence} from './routine-upload-retry.ts';
 import type { PublicationIntent } from '../../lib/catalog/publication.ts';
 import { claimPublication, completeActivatedPublication, completeActivatedPermanentPublication, completeActivatedApprovedCatalogPublication, completePublication, enqueuePublication, encodePublicationIntent, publicationStatus, recordPublicationDispatch } from '../../lib/catalog/publication.ts';
 import type { SiteAssetManifest } from '../../lib/catalog/types.ts';
@@ -32,7 +33,7 @@ import type { ReleaseBuildContext } from '../staging/build.mts';
 import { assertBuildSource, validateBuildContext } from '../staging/build.mts';
 import { verifyReleaseIdentity } from '../staging/release-identity.mts';
 import { verifyFeedPlan, verifyReleaseContext, verifySiteIdentity } from '../staging/verify-release.mts';
-import { CLOUDFLARE_FREE_ASSET_LIMIT, readPriorRelease, verifyRetainedAssets } from '../staging/retention.mts';
+import { CLOUDFLARE_ASSET_LIMIT, readPriorRelease, verifyRetainedAssets } from '../staging/retention.mts';
 import { siteIdentityFor } from '../../static-site/lib/site-identity.ts';
 import { canonicalTime, validateCatalogSnapshot } from '../../lib/catalog/snapshot.ts';
 import { canonicalJson } from './migration.ts';
@@ -159,7 +160,12 @@ export interface ReviewedUploadRetryEvidence {
 }
 type RetryRecord={schemaVersion:1;approval:ReviewedUploadActivationApproval;evidence:ArtifactRef;oldPending:ArtifactRef;oldReview:ArtifactRef;
   owner:MutationOwner;control:PublicationControl;original:ReviewedUploadActivationInput['original'];priorApproval?:ReviewedUploadActivationApprovalV1;transport?:{previous:ArtifactRef}};
-async function reviewedEvidence(value:unknown,config:PublicationConfig,w:RunWorkspace,pending:ArtifactRef,review:ArtifactRef,approval:ReviewedUploadActivationApproval,transport?:{previous:ArtifactRef}) {
+async function reviewedEvidence(value:unknown,config:PublicationConfig,w:RunWorkspace,pending:ArtifactRef,review:ArtifactRef,approval:ReviewedUploadActivationApproval,transport?:{previous:ArtifactRef},control?:PublicationControl) {
+  if(approval.schemaVersion===5){
+    if(!control||transport||canonicalJson(value)!==canonicalJson(await assetUploadRetryEvidence(w,control,approval.checkpointSha256,approval.attempt)))
+      throw new Error('publication_upload_retry_evidence_invalid');
+    return;
+  }
   if(transport){
     const e=value as ReadOnlyTransportEvidence;
     if(approval.schemaVersion!==4||!exact(transport,'previous')||e?.schemaVersion!==3||e.kind!=='read-only-transport-failure'
@@ -226,7 +232,7 @@ async function files(directory:string){const entries=await fs.readdir(directory,
 async function inventory(directory:string){const names=await files(directory);let bytes=0;
   // Count actual files, including private package metadata, within the same
   // conservative Free asset bound already enforced by the static assembler.
-  if(names.length>CLOUDFLARE_FREE_ASSET_LIMIT)throw new Error('publication_package_bound');const hashes:Record<string,string>={};
+  if(names.length>CLOUDFLARE_ASSET_LIMIT)throw new Error('publication_package_bound');const hashes:Record<string,string>={};
   for(const name of names){const file=path.join(directory,name);await privateDirectories(path.dirname(file),directory);
     const body=await privateBytes(file);bytes+=body.length;
     if(bytes>384*1024*1024)throw new Error('publication_package_bound');hashes[name]=sha256(body);}
@@ -384,13 +390,15 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
   workspace:PublicationWorkspace;config:PublicationConfig;credentials:{cloudflareToken:string;identityAuthorization?:string};dependencies?:Dependencies;buildRecovery?:BuildRecoveryApproval;
   acceptedReceiptOnly?:true;
   finishAuthorization?:ReviewedUploadActivationInput['finishAuthorization'];
+  routineCare?:boolean;
   reviewedUploadRetry?:{approval:ReviewedUploadActivationApproval;evidence:ArtifactRef;priorApproval?:ReviewedUploadActivationApprovalV1;transport?:{previous:ArtifactRef}}}):Promise<PublicationResult>{
   const {db,workspace,revision}=options;const config=validatePublicationConfig(options.config);const now=options.dependencies?.now??(()=>new Date());
   if(options.buildRecovery)encodeBuildRecoveryApproval(options.buildRecovery);
   const reviewed=options.reviewedUploadRetry;
   if(options.finishAuthorization&&!reviewed?.transport&&!options.approvedCatalog?.persistent)throw new Error('publication_finish_authorization_invalid');
-  const pendingLabel=reviewed?.transport?'publicationUploadTransportPending':'publicationUploadRetryPending';
-  const ackLabel=reviewed?.transport?'publicationUploadTransportAcknowledged':'publicationUploadRetryAcknowledged';
+  const routine=reviewed?.approval.schemaVersion===5?`publicationUploadRoutine${reviewed.approval.attempt}`:null;
+  const pendingLabel=routine?`${routine}Pending`:reviewed?.transport?'publicationUploadTransportPending':'publicationUploadRetryPending';
+  const ackLabel=routine?`${routine}Acknowledged`:reviewed?.transport?'publicationUploadTransportAcknowledged':'publicationUploadRetryAcknowledged';
   if(reviewed)encodeReviewedUploadActivationApproval(reviewed.approval);
   if(options.permanent&&(options.published||!revision||canonicalJson(options.permanent)!==canonicalJson(revision))
     ||revision?.nativePreservation&&!options.permanent)throw new Error('publication_permanent_input_invalid');
@@ -424,7 +432,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
   let owner=options.owner;const directory=path.join(workspace.directory,'packages',config.releaseId);
   // Preserve the original failed command's logs/output byte-for-byte. The
   // continuation remains inside the already registered retention directory.
-  const runtime=path.join(workspace.directory,'publication-runtime',config.releaseId,...(reviewed?.transport?['read-only-transport']:reviewed?.approval.schemaVersion===4?['read-only-retry']:[]));
+  const runtime=path.join(workspace.directory,'publication-runtime',config.releaseId,...(reviewed?.approval.schemaVersion===5?[`routine-retry-${reviewed.approval.attempt}`]:reviewed?.transport?['read-only-transport']:reviewed?.approval.schemaVersion===4?['read-only-retry']:[]));
   const uploadBinding=()=>({schemaVersion:1,releaseId:config.releaseId,requestId:options.requestId,configSha256,
     packageSha256:control!.packageSha256,uploadMarker:control!.uploadMarker});
   let retryRecord:RetryRecord|undefined,activationDeadline:string|undefined;
@@ -435,7 +443,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
   const runUpload=()=>command({file:process.execPath,args:['node_modules/wrangler/bin/wrangler.js','versions','upload','--config',path.join(directory,'wrangler.json'),
     '--outdir',path.join(runtime,'bundle'),'--tag',control!.uploadMarker,'--message',`package:${control!.packageSha256}`],cwd:config.sourceRoot,
     env:{...childEnv(),TMPDIR:path.join(runtime,'tmp'),CLOUDFLARE_ACCOUNT_ID:config.accountId,CLOUDFLARE_API_TOKEN:options.credentials.cloudflareToken,
-      WRANGLER_LOG_PATH:path.join(runtime,'logs'),WRANGLER_OUTPUT_FILE_PATH:path.join(runtime,'upload.ndjson')},timeoutMs:300_000});
+      WRANGLER_LOG_PATH:path.join(runtime,'logs'),WRANGLER_OUTPUT_FILE_PATH:path.join(runtime,'upload.ndjson')},timeoutMs:900_000});
   const save=async(patch:Partial<PublicationControl>,nextOwner=owner,appendPins?:Record<string,ArtifactRef>)=>{
     await workspace.assertHeld();control={...control!,...patch};owner=nextOwner;
     // Read normal state only before activation; control-only settlement must not
@@ -496,17 +504,18 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
           ||f.activationDeadline>workspace.manifest.retention.rules.publication.notAfter)throw new Error('publication_finish_authorization_invalid');
         activationDeadline=f.activationDeadline;
       }
-      if((a.schemaVersion===3||a.schemaVersion===4)&&now().toISOString()<a.reviewedAt)throw new Error('publication_upload_retry_cutoff');
+      if((a.schemaVersion===3||a.schemaVersion===4||a.schemaVersion===5)&&now().toISOString()<a.reviewedAt)throw new Error('publication_upload_retry_cutoff');
       if(!control.permit&&!marker&&now().toISOString()>=activationDeadline)throw new Error('publication_upload_retry_cutoff');
       // A marker without genuine command ACK is ALWAYS held before provider IO;
       // a visible version can never mint that acknowledgement on resume.
       if(!control.permit){
-        const e=await workspace.readArtifact(reviewed.evidence);await reviewedEvidence(e,config,workspace,pendingUpload,pins.publicationUploadReview,a,reviewed.transport);
+        const e=await workspace.readArtifact(reviewed.evidence);await reviewedEvidence(e,config,workspace,pendingUpload,pins.publicationUploadReview,a,reviewed.transport,control);
         if(!marker){
           if(control.stage!=='uploading'||checkpoint.sha256!==a.checkpointSha256||control.versionReference!==null||control.permit!==null
             ||control.deploymentId!==null||control.receiptSha256!==undefined||owner.phase!=='freezing')throw new Error('publication_upload_retry_fenced');
           const review=await workspace.readArtifact(pins.publicationUploadReview) as Record<string,unknown>;
-          if(review.code!==(a.schemaVersion===4?'publication_upload_command_failed':'publication_upload_unknown')||review.requestId!==control.requestId||review.releaseId!==config.releaseId
+          if((a.schemaVersion===5?!['publication_upload_unknown','publication_upload_command_failed'].includes(String(review.code)):
+            review.code!==(a.schemaVersion===4?'publication_upload_command_failed':'publication_upload_unknown'))||review.requestId!==control.requestId||review.releaseId!==config.releaseId
             ||review.configSha256!==configSha256)throw new Error('publication_upload_retry_fenced');
         }else{
           retryRecord=await workspace.readArtifact(marker) as unknown as RetryRecord;
@@ -631,7 +640,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       const publication=(await db.prepare('SELECT * FROM publication_outbox WHERE intent_id=?').bind(control.publication.intentId).all<Record<string,unknown>>()).results[0];
       const b=control.build,p=control.publication;
       let originalClaim=false;
-      if(reviewed.approval.schemaVersion===4){
+      if(reviewed.approval.schemaVersion===4||reviewed.approval.schemaVersion===5){
         originalClaim=!!buildRow&&buildRow.operator_recovery_json===null&&Number.isInteger(buildRow.attempts)
           &&Number(buildRow.attempts)>=1&&Number(buildRow.attempts)<=3;
       }else{
@@ -658,7 +667,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       await permanentProof();
       // The original live prior must still be active BEFORE the retry upload,
       // not merely when the final atomic activation is considered.
-      if(reviewed.approval.schemaVersion===4)await readPrior(AbortSignal.timeout(30_000));
+      if(reviewed.approval.schemaVersion===4||reviewed.approval.schemaVersion===5)await readPrior(AbortSignal.timeout(30_000));
       const exactRow=(table:string,row:Record<string,unknown>)=>{
         const keys=Object.keys(row).sort();if(keys.some(k=>!/^[_a-z][_a-z0-9]*$/.test(k)))throw new Error('publication_upload_retry_fenced');
         return db.prepare(`SELECT json(CASE WHEN EXISTS(SELECT 1 FROM ${table} WHERE ${keys.map(k=>`${k} IS ?`).join(' AND ')})
@@ -668,7 +677,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       await db.batch([mutationAssertion(db,owner,['freezing']),exactRow('catalog_build_requests',build),exactRow('publication_outbox',publication),mutationAssertion(db,owner,['freezing'])]);
       const current=await workspace.readCheckpoint();if(current?.sha256!==reviewed.approval.checkpointSha256)throw new Error('publication_upload_retry_fenced');
       assertBuildSource(config.sourceRoot,config.codeSha);
-      if(reviewed.approval.schemaVersion===4){
+      if(reviewed.approval.schemaVersion===4||reviewed.approval.schemaVersion===5){
         await fs.mkdir(path.join(runtime,'tmp'),{recursive:true,mode:0o700});
         await privateDirectories(path.join(runtime,'tmp'),workspace.directory);
       }
@@ -918,9 +927,10 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       await save({stage:'built',packageSha256});
     }
     const sealed=await loadPackage(directory,config,control.packageSha256!,now());
-    // The independently verified private package is sufficient for upload and
-    // restart. Drop owned source intermediates now so tomorrow's run can build.
-    await workspace.cleanPublicationBuild(config.releaseId);
+    // Source intermediates are regenerable. Cleanup runs AFTER acceptance, not
+    // between a successful build and its time-sensitive upload/activation.
+    // Legacy migration/recovery contracts keep their original cleanup behavior.
+    if(!options.routineCare)await workspace.cleanPublicationBuild(config.releaseId);
     // A large static build/guarded cleanup may outlive its original lease.
     // Re-enter the existing capped, fenced built-stage reclaim BEFORE upload.
     if(control.stage==='built'&&control.build.leaseUntil<=now().toISOString())
@@ -942,7 +952,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         if(error instanceof PublicationUploadCommandError){
           const current=await workspace.readCheckpoint();if(!current)throw new Error('publication_checkpoint_missing');
           const review=await workspace.putArtifact({schemaVersion:1,code:error.code,releaseId:config.releaseId,
-            requestId:options.requestId,configSha256},{kind:'publication',observedAt:now().toISOString()});
+            requestId:options.requestId,configSha256,...(error.detail?{detail:error.detail}:{})},{kind:'publication',observedAt:now().toISOString()});
           await workspace.writeCheckpoint(current.sha256,{...current.checkpoint,phase:'attention',owner,
             pins:{...current.checkpoint.pins,publicationUploadReview:review}});
           throw error;
