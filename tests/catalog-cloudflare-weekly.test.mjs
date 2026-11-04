@@ -842,6 +842,8 @@ test('per-run cadence is bound to the exact configured run and ignores historica
   f.config.cadence={day:'2026-10-20',featuredIds:[ID],runKey:f.config.runId};
   f.config.backfillLimit=0;delete f.config.credentials.openai;
   assert.doesNotThrow(()=>validateCloudflareWeeklyConfig(f.config));
+  assert.doesNotThrow(()=>validateCloudflareWeeklyConfig({...f.config,cadence:{...f.config.cadence,photosOnly:true}}));
+  assert.throws(()=>validateCloudflareWeeklyConfig({...f.config,cadence:{...f.config.cadence,photosOnly:false}}),/weekly_cadence_invalid/);
   for(const runKey of ['../escape','another-run',null])assert.throws(()=>validateCloudflareWeeklyConfig({
     ...f.config,cadence:{...f.config.cadence,runKey},
   }),/weekly_cadence_invalid/);

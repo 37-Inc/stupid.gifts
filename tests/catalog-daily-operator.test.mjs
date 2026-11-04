@@ -12,6 +12,15 @@ test('scheduled identity prevents duplicate invocations while named runs can rep
     ['prepare','--run','one','--run','two'],['publish'],['unknown']])assert.throws(()=>operatorInvocation(args,calendar),/routine_command/);
 });
 
+test('photo-only preparation requires an explicit stable label; later commands use the saved config',()=>{
+  const calendar={day:'2026-11-03'};
+  assert.deepEqual(operatorInvocation(['prepare','--run','photos-2026-11-03','--photos-only'],calendar),
+    {command:'prepare',approvalSha:undefined,runKey:'photos-2026-11-03',photosOnly:true});
+  for(const args of [['prepare','--photos-only'],['start','--photos-only','--run','photos'],
+    ['prepare','--run','photos','--photos-only','--photos-only']])assert.throws(()=>operatorInvocation(args,calendar),/routine_command/);
+  assert.equal(operatorInvocation(['start','--run','photos-2026-11-03'],calendar).runKey,'photos-2026-11-03');
+});
+
 const usage = (rowsRead, rowsWritten) => async url => {
   assert.equal(url, 'https://api.cloudflare.com/client/v4/graphql');
   return Response.json({data:{viewer:{accounts:[{d1AnalyticsAdaptiveGroups:[{sum:{rowsRead,rowsWritten}}]}]}}});

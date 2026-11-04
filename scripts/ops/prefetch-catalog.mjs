@@ -1367,7 +1367,8 @@ async function revalidateCatalog(options, telemetry, store, evidence) {
     ? { mismatched: 0, repaired: 0, skipped: true }
     : await auditAndRepairAmazonAffiliateUrls(options, store);
   const existing = options.dailyRefresh
-    ? await store.getProductsForRevalidation({ daily: true, limit: options.revalidateLimit, featuredIds: options.featuredIds || [] })
+    ? await store.getProductsForRevalidation({ daily: true, limit: options.revalidateLimit, featuredIds: options.featuredIds || [],
+      ...(options.photosOnly ? {photosOnly:true} : {}) })
     : await getProductsForRevalidation(options.revalidateLimit, options.staleDays, store);
   existing.forEach((product) => recordExistingSelection(telemetry, product, 'revalidation'));
   await telemetry.items.flush();

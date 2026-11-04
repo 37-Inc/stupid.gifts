@@ -75,6 +75,15 @@ test('photo validation fails closed across release drift, unavailable fallback a
   assert.throws(() => photoVersion('https://example.invalid/catalog/' + photos.index.version + '/photos.json'));
 });
 
+test('one expired photo cannot disable a different freshly refreshed photo',()=>{
+  const input=structuredClone(snapshot(2)),fresh=new Date(at+2*86400000).toISOString();input.products[1].eligibleUntil=fresh;
+  const photos=createPhotoRelease(input),old=photos.index.products[input.products[0].id],current=photos.index.products[input.products[1].id];
+  assert.notEqual(old.shard,current.shard);assert.equal(photos.shards.length,2);
+  assert.equal(validatePhotoIndex(photos.index,photos.index.version).products[input.products[1].id].eligibleUntil,fresh);
+  assert.throws(()=>validatePhotoShard(photos.shards[old.shard-1].payload,photos.index.version,Date.parse(deadline)),/unavailable/);
+  assert.equal(validatePhotoShard(photos.shards[current.shard-1].payload,photos.index.version,Date.parse(deadline)).eligibleUntil,fresh);
+});
+
 test('only photo JSON expires; full rendered page/HTML/RSC policies remain permanent and nonindexable short copy stays noindex', () => {
   const input = snapshot(1), view = catalogDisplayView(input), photos = createPhotoRelease(input), browse = createBrowseRelease(view);
   const og = createOgRelease(view, siteIdentity);

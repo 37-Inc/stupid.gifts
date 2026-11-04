@@ -11,7 +11,7 @@ import { mergeCatalogMaintenanceUpsert } from '../ops/catalog-maintenance-merge.
 import { editorialSourceHash } from '../ops/catalog-editorial-core.mjs';
 import { explicitMaintenanceTime, maintenanceDigest, maintenanceEmbeddingText, maintenanceProjection,
   maintenanceRow, maintenanceSlugs, maintenanceState, publishedMaintenanceProduct, snake } from './maintenance-state.ts';
-import { maintenanceTimeOrder } from './maintenance-state.ts';
+import { maintenanceTimeOrder, refreshPhotoRights } from './maintenance-state.ts';
 import type { Row, SemanticProduct } from './maintenance-state.ts';
 
 export interface MaintenanceIntent {
@@ -41,6 +41,8 @@ const HASH = /^[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const KEY = /^[a-zA-Z0-9._:/-]{1,200}$/;
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+export const PHOTO_EXPIRY_SQL = `CASE WHEN json_extract(p.rights_json,'$.persistent.imageUrl.value')='/images/gift-placeholder.svg'
+  AND json_extract(p.rights_json,'$.imageUrl.basis')='merchant' THEN json_extract(p.rights_json,'$.imageUrl.expiresAt') END`;
 const UPSERT_INPUT = ['id','title','price','currency','imageUrl','affiliateUrl','source','sourceQuery','humorTags','punnyTitle',
   'wittyDescription','qualityScore','rating','reviewCount','isActive','embedding','remotelyVerified','editorialWriteup','sourceFacts',
   'editorialSourceHash','availabilityStatus','editorialStatus','editorialQualityScore','editorialModel','editorialPromptVersion',
@@ -149,6 +151,7 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
     const data = `json_object(${typed.map(key => `'${key}',p.${key}`).join(',')},
       'preferredTitle',${preferBase&&options.preservePermanentListings?`CASE WHEN json_type(p.public_display_json,'$.eligibleUntil')='null'
         THEN json_extract(p.public_display_json,'$.title') ELSE json_extract(p.public_display_json,'$.persistent.title') END`:'NULL'},
+      'photoExpiresAt',${publicOnly?PHOTO_EXPIRY_SQL:'NULL'},
       'archive',json(CASE WHEN s.semantic_json IS NULL THEN ${project('p.source_record_json',archive)} ELSE NULL END),
       'semantic',json(CASE WHEN s.semantic_json IS NULL THEN NULL ELSE ${project('s.semantic_json',semantic)} END),
       'invalidSemantic',s.semantic_json IS NOT NULL AND (${semantic.map(key => `json_type(s.semantic_json,'$.${key}') IS NULL`).join(' OR ')}))`;
@@ -182,6 +185,7 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
         // Discovery identity/family dedup only; never overwrite semantic source
         // fields or use this read-only label as public clearance.
         if(preferBase&&options.preservePermanentListings&&typeof view.preferredTitle==='string'&&view.preferredTitle.trim())product.title=view.preferredTitle;
+        if(typeof view.photoExpiresAt==='string')product.photoExpiresAt=view.photoExpiresAt;
         values.push(product);
       }
       after = String(values.at(-1)!.id);
@@ -267,7 +271,9 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
     const observation = intent.verificationById?.[product.id];
     if (observation && (!observation.reference?.trim() || observation.sourceFactsHash !== product.sourceFactsHash
       || !observation.observedAt.endsWith('Z') || explicitMaintenanceTime(observation.observedAt) > explicitMaintenanceTime(now))) throw new Error('maintenance_verification_proof');
-    const rights = intent.rightsById?.[product.id] ?? (old ? JSON.parse(String(old.row.rights_json)) : {});
+    let rights = intent.rightsById?.[product.id] ?? (old ? JSON.parse(String(old.row.rights_json)) : {});
+    if(old&&observation&&options.preservePermanentListings&&!intent.rightsById?.[product.id])
+      rights=refreshPhotoRights(product,rights,observation,now,old);
     const timeProof = old ? JSON.parse(String(old.row.timestamp_provenance_json)) : { schemaVersion:1,fields:{} };
     timeProof.fields ||= {};
     for (const key of ['availabilityCheckedAt','lastVerifiedAt','updatedAt','createdAt']) {
@@ -450,7 +456,7 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
     updateAmazonAffiliateUrl: (id: string,url: string) => serialize(async () => (await change('updateAmazonAffiliateUrl',[[id],url],(p,now) => {
       p.affiliateUrl=url; p.updatedAt=now; return true;
     }) as string[]).length),
-    getProductsForRevalidation: (selection: {limit:number;daily:true;featuredIds?:string[]}
+    getProductsForRevalidation: (selection: {limit:number;daily:true;featuredIds?:string[];photosOnly?:true}
       | {limit:number;staleDays:number;publishedStaleDays:number;publishedSlots:number;legacySlots:number;daily?:never}) => serialize(async () => {
       if(selection.daily){
         const {limit,featuredIds=[]}=selection;
@@ -464,8 +470,13 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
           .sort((a,b)=>maintenanceTimeOrder(a.availabilityCheckedAt||a.lastVerifiedAt,b.availabilityCheckedAt||b.lastVerifiedAt,true)
             ||maintenanceTimeOrder(a.updatedAt,b.updatedAt,false)||compare(a.id,b.id));
         const featuredProducts=publicProducts.filter(p=>featured.has(p.id)),others=publicProducts.filter(p=>!featured.has(p.id));
-        const selected=[...featuredProducts.slice(0,featuredSlots),...others.slice(0,otherSlots),
-          ...featuredProducts.slice(featuredSlots),...others.slice(otherSlots)].slice(0,limit);
+        const now=Date.parse(String((await all<{now:string}>(`SELECT ${NOW} now`))[0].now));
+        const urgent=publicProducts.filter(p=>typeof p.photoExpiresAt==='string'&&Date.parse(p.photoExpiresAt)<=now+36*3600000)
+          .sort((a,b)=>maintenanceTimeOrder(a.photoExpiresAt,b.photoExpiresAt,false)||compare(a.id,b.id));
+        const seen=new Set<string>();
+        const selected=[...urgent,...(selection.photosOnly?[]:[...featuredProducts.slice(0,featuredSlots),...others.slice(0,otherSlots),
+          ...featuredProducts.slice(featuredSlots),...others.slice(otherSlots)])]
+          .filter(p=>!seen.has(p.id)&&Boolean(seen.add(p.id))).slice(0,limit);
         const rows=[];
         for(const p of selected){const full=await load(p.id);if(!full)throw new Error('maintenance_current_state_drift');
           rows.push({...maintenanceRow(full.product),has_embedding:full.present});}

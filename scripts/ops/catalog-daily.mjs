@@ -107,14 +107,14 @@ export async function withCatalogCadence({ workspace, repository, now = clock, d
   }
 }
 
-export async function dailyCatalogPhases(cadence, featuredIds = []) {
+export async function dailyCatalogPhases(cadence, featuredIds = [], photosOnly = false) {
   if (!Array.isArray(featuredIds) || featuredIds.length > 100 || new Set(featuredIds).size !== featuredIds.length || featuredIds.some(id => !ASIN.test(id)))
     throw new Error('daily_featured_ids_invalid');
   const plan = await cadence.plan(), phases = [];
   if (plan.daily) phases.push({ ...parseArgs(['--revalidate', '--revalidate-limit', '10', '--backfill-limit', '0', '--skip-enrichment']),
-    dailyRefresh: true, enrichSelectedExisting: cadence.calendar.monday,
+    dailyRefresh: true, ...(photosOnly ? { photosOnly: true } : {}), enrichSelectedExisting: !photosOnly && cadence.calendar.monday,
     discoveryNewOnly: false, featuredIds, assertRefreshDay: cadence.assertDay });
-  if (plan.discovery) phases.push({ ...parseArgs(['--theme-limit', '6', '--per-theme', '10', '--max-new', '20', '--min-quality-score', '0.65', '--backfill-limit', '0']),
+  if (plan.discovery && !photosOnly) phases.push({ ...parseArgs(['--theme-limit', '6', '--per-theme', '10', '--max-new', '20', '--min-quality-score', '0.65', '--backfill-limit', '0']),
     discoveryNewOnly: true, enrichSelectedExisting: false, discoveryRunKey: cadence.runKey });
   return phases;
 }
@@ -156,8 +156,8 @@ export function dailyCatalogExecutor(cadence, execute = executeCatalog) {
 }
 
 export async function runDailyCatalogWithBackend({ cadence, featuredIds = /** @type {string[]} */ ([]), execute = executeCatalog,
-  preservePermanentListings = false, ...backend }) {
-  const phases = (await dailyCatalogPhases(cadence, featuredIds)).map(phase => preservePermanentListings
+  preservePermanentListings = false, photosOnly = false, ...backend }) {
+  const phases = (await dailyCatalogPhases(cadence, featuredIds, photosOnly)).map(phase => preservePermanentListings
     ? { ...phase,deactivateMissing:false } : phase);
   if (!phases.length) return { state: 'skipped', reason: 'cadence_already_reserved' };
   return runCatalogWithBackend(phases, { ...backend, mode: 'daily', trigger: 'scheduled', execute: dailyCatalogExecutor(cadence, execute) });
