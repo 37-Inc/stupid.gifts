@@ -111,6 +111,7 @@ export async function recoverMarkedReviewedActivation(options:{db:CatalogD1;work
   const record=await workspace.readArtifact(pending) as {original:unknown};
   const input={claim:c.build,publication:c.publication,versionReference:c.versionReference,owner:cp.owner,
     approval:retry!.approval,original:record.original,
+    ...(retry.approval.schemaVersion===5&&config.servingPrior?{servingPrior:config.servingPrior}:{}),
     ...(retry!.priorApproval?{priorApproval:retry!.priorApproval}:{}),
     ...(options.finishAuthorization?{finishAuthorization:options.finishAuthorization}:{})};
   const expected={schemaVersion:1,input,retryPending:pending,retryAcknowledged:acknowledged,configSha256:sha256(canonicalJson(config))};

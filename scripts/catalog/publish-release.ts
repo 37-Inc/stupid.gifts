@@ -1001,6 +1001,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         if(!retryRecord)throw new Error('publication_upload_retry_fenced');
         const input:ReviewedUploadActivationInput={claim:control.build,publication:control.publication!,versionReference:control.versionReference!,
           owner:retryRecord.owner,approval:reviewed.approval,original:retryRecord.original,
+          ...(reviewed.approval.schemaVersion===5&&config.servingPrior?{servingPrior:config.servingPrior}:{}),
           ...(options.finishAuthorization?{finishAuthorization:options.finishAuthorization}:{}),
           ...(retryRecord.priorApproval?{priorApproval:retryRecord.priorApproval}:{})};
         const pins=checkpoint!.checkpoint.pins,expected={schemaVersion:1,input,retryPending:pins[pendingLabel],
