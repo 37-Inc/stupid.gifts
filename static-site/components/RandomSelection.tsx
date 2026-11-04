@@ -5,6 +5,7 @@ import type { CatalogCard } from "../lib/card-shard";
 import { fetchCardShard } from "../lib/card-shard";
 import { eligiblePool, initialRandomIndex, nextRandomIndex } from "../lib/selection";
 import { ProductCard } from "./ProductCard";
+import { Icon } from "./Icon";
 import { captureRenderedLists, captureStaticRandomSpin } from "../lib/analytics";
 import { catalogDeadline } from "../../lib/catalog/display";
 
@@ -33,8 +34,9 @@ export function RandomSelection({
   const [index, setIndex] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(poolSize > 1);
+  const choosingInitial = loading && !loaded;
   const pending = useRef<AbortController | null>(null);
-  useEffect(() => captureRenderedLists(), [pool, index]);
+  useEffect(() => captureRenderedLists(), [pool, index, choosingInitial]);
   useEffect(() => {
     if (poolSize < 2) return;
     const abort = new AbortController();
@@ -128,7 +130,20 @@ export function RandomSelection({
   const product = pool[index];
   return (
     <section className="random-selection">
-      {product ? (
+      {choosingInitial ? (
+        <>
+          <div className="random-loading" role="status" aria-live="polite">
+            <div className="skeleton-art" aria-hidden="true" />
+            <p className="quiet">Choosing a gift…</p>
+          </div>
+          {initial && (
+            <noscript>
+              <style>{".random-selection .random-loading{display:none}"}</style>
+              <ProductCard product={initial} lead context="random_gift" />
+            </noscript>
+          )}
+        </>
+      ) : product ? (
         <>
           <ProductCard product={product} lead context="random_gift" />
           <button
@@ -137,11 +152,9 @@ export function RandomSelection({
             disabled={poolSize < 2 || loading}
             onClick={spin}
           >
+            <Icon name="dice" />
             {loading ? "Choosing another…" : "Show me another gift"}
           </button>
-          <p className="quiet" role="status" aria-live="polite">
-            {poolSize > 1 && "No repeat on the next spin."}
-          </p>
         </>
       ) : (
         <div className="empty-state">
