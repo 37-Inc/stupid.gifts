@@ -1,5 +1,15 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-05 — Search telemetry deployed and verified
+
+[owner+codex] PR351 merged; additive D1 migration0017 and the code-only
+`search-demand-live-20261105-b0a9812bf811` release are live. A browser search
+and first selection were read back through D1 and the aggregate report; the
+synthetic row was removed. QA, DNT and GPC suppression passed. Catalog,
+homepage edition, images, native vectors and genuine publication receipt are
+unchanged. The existing daily task retains the reviewed telemetry source.
+See `SEARCH_DEMAND.md` and `evidence/2026-11-05-search-demand-accepted.json`.
+
 ## 2026-11-05 — Foundational settled-search telemetry (PR, not live)
 
 [owner+codex] Add a best-effort first-party observation for settled topics,
