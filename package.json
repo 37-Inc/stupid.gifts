@@ -17,6 +17,8 @@
     "test:robots": "node --test tests/robots.test.mjs",
     "test:public-contact": "node --experimental-strip-types --test tests/public-contact.test.mjs",
     "test:analytics": "node --experimental-strip-types --test tests/analytics-contract.test.mjs",
+    "test:search-demand": "node --import tsx --test tests/static-site-search-demand*.test.mjs",
+    "searches:report": "node scripts/ops/search-demand-report.mjs",
     "analytics:snapshot": "node scripts/ops/analytics-snapshot.mjs",
     "analytics:ga4": "bash scripts/ops/ga4.sh",
     "indexnow:submit": "node scripts/ops/indexnow-submit.mjs",

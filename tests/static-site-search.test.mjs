@@ -6,12 +6,13 @@ import vm from "node:vm";
 import ts from "typescript";
 
 const require = createRequire(import.meta.url);
-function search(href, query = "desk", resultState) {
+function search(href, query = "desk", resultState, fetchOverride) {
   const effects = [];
   const events = new Map();
   const pushed = [];
   const requests = [];
   const dispatched = [];
+  const telemetry = [];
   const timers = new Map();
   let nextTimer = 0;
   const location = { href, pathname: new URL(href).pathname, search: new URL(href).search };
@@ -35,9 +36,15 @@ function search(href, query = "desk", resultState) {
       };
       if (name === "./ProductCard") return { ProductCard: () => null };
       if (name === "../lib/analytics") return { captureRenderedLists() {}, captureStaticSearch() {} };
+      if (name === "../lib/search-demand") return { createBrowserSearchDemand: () => ({
+        begin(...args) { telemetry.push(['begin', ...args]); }, edit() { telemetry.push(['edit']); },
+        complete(...args) { telemetry.push(['complete', ...args]); },
+        select(...args) { telemetry.push(['select', ...args]); }, dispose() { telemetry.push(['dispose']); },
+      }) };
       return name.startsWith(".") ? createRequire(new URL("../static-site/components/Search.tsx", import.meta.url))(name) : require(name);
     },
     fetch: async (url, options) => { requests.push({ url, signal: options.signal });
+      if (fetchOverride) return fetchOverride(url, options);
       return { ok: true, json: async () => ({ results: [] }) }; },
     document: { getElementById: () => ({ scrollIntoView() { scrolls++; } }) },
     window: {
@@ -51,8 +58,34 @@ function search(href, query = "desk", resultState) {
     },
   });
   const view = commonJs.exports.Search({ children: "NORMAL BROWSE" });
-  return { view, effects, events, pushed, requests, dispatched, timers, location, scrolls: () => scrolls };
+  return { view, effects, events, pushed, requests, dispatched, timers, location, telemetry, scrolls: () => scrolls };
 }
+
+test("search telemetry observes only accepted current responses, cancels edits/unmount and follows history", async () => {
+  let resolve;
+  const ui = search('https://example.invalid/?q=desk', 'desk', undefined,
+    () => new Promise(done => { resolve = done; }));
+  const cleanup = ui.effects[0]();
+  assert.deepEqual(ui.telemetry.map(row => [...row]), [['begin', 'desk', false]]);
+  const input = ui.view.props.children[0].props.children[1];
+  input.props.onChange({ target: { value: 'cat' } });
+  assert.equal(ui.requests[0].signal.aborted, true);
+  resolve({ ok: true, json: async () => ({ results: [] }) });
+  await new Promise(setImmediate);
+  assert.equal(ui.telemetry.some(row => row[0] === 'complete'), false, 'stale response cannot log a different query');
+  ui.location.search = '?q=pickle';
+  void ui.events.get('popstate')();
+  resolve({ ok: true, json: async () => ({ results: [] }) });
+  await new Promise(setImmediate);
+  assert.deepEqual([...ui.telemetry.at(-1)], ['complete', 0]);
+  cleanup(); assert.deepEqual([...ui.telemetry.at(-1)], ['dispose']);
+});
+
+test("unavailable searches are reported distinctly, not as zero matches", async () => {
+  const ui = search('https://example.invalid/?q=desk', 'desk', undefined, async () => ({ ok: false }));
+  const cleanup = ui.effects[0](); await new Promise(setImmediate);
+  assert.deepEqual([...ui.telemetry.at(-1)], ['complete', null]); cleanup();
+});
 
 test("bookmarked queries and history reveal search; short queries do not move the product-first homepage", async () => {
   for (const query of ["desk", "d", ""]) {

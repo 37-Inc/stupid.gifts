@@ -7,6 +7,23 @@ import * as contract from "../lib/analytics-contract.ts";
 
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test("first-party search demand shares privacy/host gates and excludes QA attribution across navigation", () => {
+  const env = environment();
+  assert.equal(env.analytics.isSearchDemandAllowed(), false, "catalog must initialize first");
+  env.analytics.startStaticAnalytics(true);
+  assert.equal(env.analytics.isSearchDemandAllowed(), true);
+  env.navigator.doNotTrack = '1'; assert.equal(env.analytics.isSearchDemandAllowed(), false);
+  delete env.navigator.doNotTrack;
+  env.navigator.globalPrivacyControl = true; assert.equal(env.analytics.isSearchDemandAllowed(), false);
+  delete env.navigator.globalPrivacyControl;
+  env.window.location.search = '?utm_source=codex&utm_medium=qa';
+  assert.equal(env.analytics.isSearchDemandAllowed(), false);
+  env.window.location.search = '';
+  assert.equal(env.analytics.isSearchDemandAllowed(), false, "QA carries across internal navigation");
+  const local = environment('localhost'); local.analytics.startStaticAnalytics(true);
+  assert.equal(local.analytics.isSearchDemandAllowed(), false);
+});
 function load(relative, globals, require) {
   const source = fs.readFileSync(new URL(relative, import.meta.url), "utf8");
   const { outputText } = ts.transpileModule(source, {

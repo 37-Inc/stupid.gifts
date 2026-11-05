@@ -18,6 +18,27 @@ settled-search first-party aggregates preserve the no-query-text-to-GA4/PostHog
 contract; no new collection, campaign acceptance, ranking change or deployment.
 See `CREATOR_CONNECTIONS_PILOT.md` and `SEARCH_HEALTH_2026-11-05.md`.
 
+## 2026-11-05 — Search telemetry deployed and verified
+
+[owner+codex] PR351 merged; additive D1 migration0017 and the code-only
+`search-demand-live-20261105-b0a9812bf811` release are live. A browser search
+and first selection were read back through D1 and the aggregate report; the
+synthetic row was removed. QA, DNT and GPC suppression passed. Catalog,
+homepage edition, images, native vectors and genuine publication receipt are
+unchanged. The existing daily task retains the reviewed telemetry source.
+See `SEARCH_DEMAND.md` and `evidence/2026-11-05-search-demand-accepted.json`.
+
+## 2026-11-05 — Foundational settled-search telemetry (PR, not live)
+
+[owner+codex] Add a best-effort first-party observation for settled topics,
+displayed result counts, unavailable searches and first result selection/rank.
+Per-search random nonces deduplicate delivery without visitor profiling; DNT/GPC,
+QA/local/fixture exclusions and query-free GA4/PostHog payloads remain intact.
+Includes additive D1 migration, expiring observations, read-only topic report,
+privacy wording and cancellation/storage-failure regressions. No production
+migration, campaign action, supplier/model batch or deployment. Operating details:
+`SEARCH_DEMAND.md`.
+
 ## 2026-11-03 — Editorial homepage editions in existing daily care
 
 [owner+codex] Replace the69-product title/category allowlist and fixed24-favorite

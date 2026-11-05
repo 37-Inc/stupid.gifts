@@ -6,6 +6,21 @@ latest protected receipt take precedence over historical journal entries.
 
 ## Current state
 
+November5 telemetry acceptance supersedes the serving-code/operator references
+in the historical November4 paragraphs below. PR351 merged as
+`d523580f3081b343d7c42337ae010e4457bcce64`; its clean maintained runtime is
+`/Users/cameronehrlich/.codex/worktrees/stupid-search-demand/stupid.gifts`
+at `b0a9812bf811535b57a6defbb4f714811959dc08`.
+The CODE-ONLY release `search-demand-live-20261105-b0a9812bf811` is live on
+version `083cd6d6-268d-4332-964c-0a830aa177be`, deployment
+`9e34b906-f4e7-45b3-adec-153582c141dc`. It preserves the accepted November5
+catalog, genuine D1 receipt, resolved build, idle owner and last-success pointer;
+no supplier/model phase, catalog/native write or extra maintenance run occurred.
+Migration0017 and browser-to-report ingestion/selection readback passed; the
+synthetic observation was removed. See `SEARCH_DEMAND.md` and
+`evidence/2026-11-05-search-demand-accepted.json`. Existing care must preserve
+this implementation; do not redeploy the historical76fa operator over it.
+
 Read the actual public release identity AND protected
 `daily-catalog-care/last-success.json` for the current accepted catalog.
 November 4's saved run `daily-2026-11-04-45544019-00659e77` is **COMPLETE**:
