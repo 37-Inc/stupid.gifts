@@ -1,6 +1,7 @@
 import type { PublicCatalogProduct } from '../../lib/catalog/types.ts';
 import type { SearchDiagnostic } from '../../lib/catalog/storage/d1.ts';
 import type { DerivedSearchProfile } from '../../lib/catalog/semantic-profile.ts';
+import type { CatalogD1 } from '../../lib/catalog/storage/d1.ts';
 
 /** Small structural interfaces: no Node runtime or generated provider types. */
 export interface AssetBinding {
@@ -31,6 +32,8 @@ export interface SemanticBudgetScope { environment: 'staging' | 'production'; in
 
 export interface SiteEnv {
   ASSETS: AssetBinding;
+  /** Optional first-party search observations; absent DB never prevents search. */
+  DB?: CatalogD1;
   VECTORIZE?: VectorBinding;
   /** Optional derived index, never a replacement/relabel of the original native index. */
   SEMANTIC_VECTORIZE?: VectorBinding;

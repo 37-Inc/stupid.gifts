@@ -137,7 +137,11 @@ test("shared policy discloses functional search separately from analytics; favic
   assert.match(search.body.join(' '), /Cloudflare Vectorize/);
   assert.match(search.body.join(' '), /separate from analytics/);
   assert.match(search.body.join(' '), /keyword search instead/);
-  assert.equal(privacyPolicyUpdated, "October 26, 2026");
+  assert.equal(privacyPolicyUpdated, "November 5, 2026");
+  assert.doesNotMatch(search.body.join(' '), /daily limit/);
+  const analytics = privacyPolicySections.find(section => section.title === 'Analytics').body.join(' ');
+  assert.match(analytics, /random identifier for each search, not a visitor identifier/);
+  assert.match(analytics, /not sent to Google Analytics or PostHog/);
   assert.equal(privacyPolicyIntro, "This policy explains how goose.gifts handles information for visitors using the site.");
   assert.deepEqual(fs.readFileSync(new URL("../static-site/public/favicon.ico", import.meta.url)), fs.readFileSync(new URL("../public/favicon.ico", import.meta.url)));
 });

@@ -33,6 +33,25 @@ function setup(overrides = {}) {
   return { env, calls, worker, manifest, snapshot, releaseIdentity, advance(ms) { clock += ms; }, request: (path, init) => worker.fetch(new Request(`https://preview.example${path}`, init), env) };
 }
 
+test('first-party telemetry is reachable only on the real production catalog, never a public read API', async () => {
+  const f = setup({ canonicalOrigin: 'https://stupid.gifts' });
+  let batches = 0;
+  f.env.DB = { prepare(sql) { assert.doesNotMatch(sql, /\bproducts\b/); return { bind() { return this; } }; },
+    async batch() { batches++; } };
+  const payload = { schemaVersion: 1, id: '7a2262dc-ac57-42a7-970f-611cf880234c',
+    topic: 'cat gifts', resultCount: 2, outcome: 'results', selectedRank: null };
+  const post = () => f.worker.fetch(new Request('https://stupid.gifts/api/search-demand', { method: 'POST',
+    headers: { Origin: 'https://stupid.gifts', 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }), f.env);
+  assert.equal((await post()).status, 403, 'fixture catalog cannot collect');
+  assert.equal(batches, 0);
+  f.manifest.dataKind = 'catalog'; f.snapshot.dataKind = 'catalog';
+  const response = await post(); assert.equal(response.status, 204); assert.equal(batches, 1);
+  assert.equal(response.headers.get('X-Robots-Tag'), 'noindex, nofollow');
+  const read = await f.worker.fetch(new Request('https://stupid.gifts/api/search-demand'), f.env);
+  assert.equal(read.status, 405); assert.equal(await read.text(), '');
+  assert.equal(batches, 1);
+});
+
 test('explicit persistent safe routes remain useful and indexable while legacy/photo fallbacks stay noindex',async()=>{
   const f=setup();f.manifest.routes['/gifts/fart-button'].persistentIndexable=true;
   f.manifest.routes['/gifts/fart-button.txt'].persistentIndexable=false;

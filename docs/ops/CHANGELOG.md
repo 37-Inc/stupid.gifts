@@ -1,5 +1,16 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-05 — Foundational settled-search telemetry (PR, not live)
+
+[owner+codex] Add a best-effort first-party observation for settled topics,
+displayed result counts, unavailable searches and first result selection/rank.
+Per-search random nonces deduplicate delivery without visitor profiling; DNT/GPC,
+QA/local/fixture exclusions and query-free GA4/PostHog payloads remain intact.
+Includes additive D1 migration, expiring observations, read-only topic report,
+privacy wording and cancellation/storage-failure regressions. No production
+migration, campaign action, supplier/model batch or deployment. Operating details:
+`SEARCH_DEMAND.md`.
+
 ## 2026-11-03 — Editorial homepage editions in existing daily care
 
 [owner+codex] Replace the69-product title/category allowlist and fixed24-favorite
