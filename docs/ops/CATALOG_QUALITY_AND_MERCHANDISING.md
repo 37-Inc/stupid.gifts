@@ -1,0 +1,63 @@
+# Stupid Gifts — One product view, better discovery
+
+Proposal for owner review, November 5, 2026. This extends the campaign pilot in PR350; it does not implement a new ranker, change jobs, accept campaigns or alter production. The independently proposed telemetry implementation is [PR351](https://github.com/37-Inc/stupid.gifts/pull/351), not a live source of search phrases yet.
+
+## Recommendation
+
+- **A focused refactor, not another service:** one reviewed product presentation, one small merchandising record, and one pure search-ranking function. Reuse the current catalog care, homepage editor and publication/index pipeline.
+- **Match the request first; prefer better gag gifts next; use verified commission last.** Commission cannot make an irrelevant product relevant or make an ordinary item funny. No influencer-video/sales/payback calculator, category quotas, keyword admission gates or model call for every visitor.
+- Keep the existing six weekly highlights, eighteen daily discoveries and whole-catalog load-more. Do not reserve sponsored slots: campaign products compete on merit. Leave `/h` exactly as approved.
+
+## What is actually wrong
+
+- `B0BYJ6QF8S` has an insect-net title but Mickey/plush copy/tags in the October30, November4 and November5 accepted packages. This proves retained inconsistency, **not its original cause**. Confirm archived identity/offer history before deciding which source was wrong; preserve ID, URL and original history.
+- Snapshot copy, global `homepage.json` overrides and title-checked `catalog-card-descriptions.json` fallbacks coexist. November5 has **990 applicable factual notes**, 24 description and 27 card-note overrides—overlapping counts, not counts of bad products.
+- Keyword search includes factual notes; semantic inputs use title/punny title/witty description/tags plus retained context, not those notes. The UI and indexes can therefore describe different things. Preserving a valid old embedding proves provenance, not that its content still describes today's item.
+- Refresh can retain old copy/tags/vectors while changing merchant facts and marking editorial stale. Preservation is not a consistency check; legacy `qualityScore` (0.78 for the net) is not a current gag-appeal judgment.
+- Semantic candidates currently get selected first; keyword matches are appended only if there is space. The persistent catalog intentionally does not apply broad fuzzy-family suppression. These preserve coverage but can bury literal matches and crowd an interest search with similar ordinary products.
+
+## One reviewed product view
+
+- Extend existing `catalog_maintenance_products` with **one optional, versioned `presentation_review_json`**, not a second catalog. Store a review-input hash, factual short title/description, appeal (`standout`, `giftable`, `ordinary`, `unreviewed`), optional verified variant/design group, brief reason and review time. Keep merchant records, original supplier receipt hashes and historical editorial untouched.
+- One resolver supplies cards, details, metadata/JSON-LD, guides, keyword text and semantic inputs. Fold correct existing overrides/notes into it in cohorts. Keep the prank-box disclosure separate rather than repeating it in the description. Preserve price-free pages, photos/fallbacks and canonical links.
+- Bind reuse to **meaningful identity/copy inputs**, not volatile price, stock, photo URLs or campaign fields. Cosmetic/offer-only changes reuse copy/vectors; material object/variant contradictions require copy/tag repair. Hash changes flag review, not automatic deletion or permission to invent replacement facts.
+- Reuse good copy; correct only inconsistent current fields from confirmed facts, preserving originals privately. Ambiguous identity gets specific review, not silent item substitution or a whole-site release gate. Ordinary/unreviewed gifts stay accessible; labels affect merchandising, not existence.
+
+## Search and homepage policy
+
+- **Search:** retrieve lexical and semantic candidates independently, merge by identity and rank once *before* truncating. Reserve lexical coverage even when ANN fills a page. Fuse ranks, not incomparable lexical/cosine scores. Preserve bounded retrieval, caching, timeouts and keyword fallback.
+- Protect exact product/variant matches. Among comparably relevant candidates, prefer reviewed gag appeal, then usable commission, then stable relevance/order. Calibrate relevance bands with the fixtures below—not per-query exceptions or a mysterious weighted “funny” score. Unreviewed appeal is neutral.
+- Spread **verified near-identical variants/designs**, not whole categories such as mitts or blankets. No invented family relationships from title similarity. Keep distinct jokes/siblings discoverable and honor explicit `cat blanket`/variant searches. Don't pad weak matches with unrelated gifts to reach 36.
+- **Homepage:** the existing Codex editor uses the same copy/appeal/groups plus photo inspection. Add eligible reviewed campaign candidates to its newest/previous/fair-sweep pool. Prefer funny variety and underexposed finds; commission breaks worthwhile ties, not guaranteed positions. Missing reviews/imports reuse the last good edition.
+- Compile only optional appeal/group/commission-priority/expiry metadata for in-memory ranking; keep private rates/terms out of public artifacts and embeddings. Missing metadata is neutral. Search checks expiry on cache hits; a static edition can keep a still-good gift until next publication, without a current-bonus claim or a new expiry/rebuild timer.
+
+## Campaigns: opportunities are not earned bonuses
+
+- Reuse complete account-scoped campaign facts from Creator Research, not its qualified-only list or video calculator. A worthwhile gag gift + attractive rate + a joinable campaign is a **research/enrollment candidate**; sales/video estimates and purchase economics are irrelevant to this selection.
+- Public bonus preference requires fresh **accepted, active, website-account/channel-qualified** participation. Open is not joined; full to newcomers does not disqualify an existing participant. Verify ASIN/variation, seller, funding, dates and links. Unknown/stale evidence removes preference—not the gift or website. V1 compares rates, not invented conversion/EPC forecasts or a new price/payback calculator.
+- Keep canonical tag/account/disclosures. Enrollment remains owner-approved. Account-side research stays in Creator Research with a small normalized handoff; publishing never waits for its browser. No credential copying, other-account changes or public rate/price claims.
+- Amazon documents qualifying sales and campaign-specific content requirements: [program overview](https://advertising.amazon.com/help/GPARAL6JVGFEJKG2), [campaign guidance](https://advertising.amazon.com/help/GMANECFAFD49W23Y). This does not establish any particular website campaign as accepted.
+
+## Existing jobs, clearer responsibilities
+
+- **One-time cleanup:** scan the accepted catalog offline for contradictions, duplicate presentation and low-fit repetition; prioritize the net, first-page gifts and search fixtures. Mechanically reuse already-approved, title-matching factual notes rather than generating them again. No new supplier fetch is needed to review cleared content. A scan alone does not establish every item's semantic correctness.
+- **Morning care:** extend the homepage-editor draft with product corrections/appeal/group decisions using existing Codex judgment. Persist through normal care review/publication, not daily source-file commits or owner approvals. Work through flagged/unreviewed cohorts; optional work falls back to last-good state.
+- **Monday discovery:** the runner currently bundles selection and enrichment before final agent review. Split those into **internal stages of the same saved run**: fetch/dedup → Codex shortlist/appeal decision → enrich/index/publish admitted gifts. Reuse the captured response; don't introduce another supplier batch or owner approval. Use underserved topics alongside rotating themes. Evening care stays photo-only; no forced long articles or cadence expansion.
+- **Indexing:** changed approved text gets one native1536 embedding and its derived1024 projection through existing delivery. Unchanged text or appeal/commission-only changes need no embedding. Version the corrected-text recipe; keep supported legacy entries and migrate changed cohorts, not all 3,355 products. Never relabel old bytes as corrected content. If optional coverage isn't ready, publish correct keyword content for that item rather than stale ANN results or a whole-site hold. This never bypasses uncertain writes, ownership or provenance checks.
+- **Explicit proposed policy change:** keep Tuesday–Sunday free of generative copy API calls, but allow embeddings of reviewed corrections any day; otherwise repairs wait for Monday. This is for approval, **not already enabled**, and implies no additional supplier batch.
+- **Feedback after PR351 deployment:** topic volume, zero/sparse results and first-selection rate/rank prioritize review/discovery. Show sample sizes; no click isn't proof of poor results and advertised commission isn't revenue. Use actual bonus reports when attributable. No automatic popularity-feedback loop in V1. Copy repair and offline ranking tests need not wait for telemetry data.
+
+## Implement in this order
+
+- **1 — Correctness:** confirm the net identity/history, fix its current copy/tags and the prank-box repetition; add the shared resolver and content-change reuse rules. Prove consistent card/detail/keyword/semantic/metadata text; preserve catalog IDs, slugs, images and history. Do not call the whole cleanup done after two edits.
+- **2 — Shared merchandising:** add review metadata, one fused relevance-first ranker, controlled variant spreading and the homepage candidate lane. Test exact `raw chicken vase`, broad `fishing`, natural-language cat gifts, explicit `cat blanket`, named variants and nonsense. Relevant funny gifts beat ordinary equivalents; unrelated high-commission items never displace correct results. Test mixed legacy/corrected recipe coverage and automatic native/derived updates. Missing metadata/provider failure retains working search.
+- **3 — Small revenue pilot:** verify/enroll a few worthy campaigns in the right account, consume their metadata in the same pipeline, and observe actual outcomes. Test wrong account, open-but-not-joined, joined-but-full, end/exhaustion/stale verification, unchanged-text metadata updates and expiry across a cached response. No fixed campaign slots or inference from the influencer calculator.
+- Review, test, merge and deploy implementation PRs separately after this plan is approved. Keep the product-quality and campaign Beads open until actual production evidence; PR350 itself remains documentation-only. PR351 remains the separate telemetry foundation.
+
+## Research and implementation touchpoints
+
+- Relevance-first business tie-breaking and variant grouping are established patterns: [Algolia custom ranking](https://www.algolia.com/doc/guides/managing-results/must-do/custom-ranking), [grouping variants](https://www.algolia.com/doc/guides/managing-results/refine-results/grouping). [Microsoft's RRF explanation](https://learn.microsoft.com/en-us/azure/search/hybrid-search-ranking) describes merging ranked lexical/vector lists without pretending their raw scores are comparable. Adopt these principles in our Worker, **not either hosted service**. Fusion parameters/relevance bands still require fixture evaluation.
+- `scripts/ops/prefetch-catalog.mjs` (`revalidatedProduct`, `enrichRevalidatedSelection`), `catalog-maintenance-merge.mjs`, `scripts/catalog/maintenance-state.ts`: current reuse/preservation path.
+- `CatalogPhotos.tsx`, `content/homepage.json`, `card-description.ts`, `snapshotKeywordSearch`, `semanticPublicFields` / `semanticProductInput`: current copy divergence and canonical-view refactor.
+- `workers/site/search.ts`, `derived-search.ts`, `sync-semantic-delta.ts`: fusion, ranking and same-input native/derived updates. Preserve original provenance and keyword fallback.
+- `homepage-editor.mjs`, `HOMEPAGE_EDITOR.md`, `merchandisedBrowseProducts`: current live homepage path. `rankedBrowseProducts` is a compatibility/helper path, not the current editorial homepage; avoid reviving its category/type heuristics as a new fallback.
