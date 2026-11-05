@@ -15,6 +15,7 @@ Proposal for owner review, November 5, 2026. The authoritative combined rollout 
 - The research account differs from the website account. Verify website-account eligibility, ASIN/variation, seller, dates/funding and content/link requirements; get owner approval before enrollment. An open campaign is not accepted participation, and full enrollment does not necessarily disqualify an existing participant.
 - Retain the canonical website tag and disclosures. Review any explicitly required campaign link/tag change; never silently substitute the research account's tag. No public prices or commission claims in this work.
 - An ended/exhausted/unverified campaign loses its ranking preference, not its listing. No guaranteed campaign slots. Measure actual bonus earnings, not an influencer-video forecast; mixed-channel, lagged and suppressed reports remain unknown where attribution is unavailable.
+- Maintain a saved pending-join queue and notify Cameron of new/changed actionable offers through the existing daily task's Slack digest (thread fallback if unavailable). Include the exact campaign link, product, rate, deadline and account scope; deduplicate unchanged notices. Cameron joins manually. Verify accepted participation afterward before awarding ranking preference; never treat notification/acknowledgement as enrollment. No new timer, automatic joining or callback server is needed.
 
 ## Evidence and boundaries
 
