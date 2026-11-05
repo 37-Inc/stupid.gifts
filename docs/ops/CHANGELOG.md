@@ -1,5 +1,16 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-05 — Campaign-selection proposal and search-health audit
+
+[owner+codex] PR350 remains documentation-only for owner review. Website
+campaign selection explicitly bypasses influencer-video/sales/payback calculator
+filters and reads campaign facts instead. Live homepage/mobile/search/guide/Random
+QA and 23 focused tests passed; actual demand has zero/sparse-result searches,
+with specific catalog-copy and relevance issues retained in Beads. Proposed
+settled-search first-party aggregates preserve the no-query-text-to-GA4/PostHog
+contract; no new collection, campaign acceptance, ranking change or deployment.
+See `CREATOR_CONNECTIONS_PILOT.md` and `SEARCH_HEALTH_2026-11-05.md`.
+
 ## 2026-11-03 — Editorial homepage editions in existing daily care
 
 [owner+codex] Replace the69-product title/category allowlist and fixed24-favorite
