@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import type { PublicCatalogProduct } from "../../lib/catalog/types";
 import { ProductCard } from "./ProductCard";
 import { captureRenderedLists, captureStaticSearch } from "../lib/analytics";
 import { catalogDeadline, persistentPublicProduct, resolvePublicProduct } from "../../lib/catalog/display";
 import { validatePublicCatalogProduct } from "../../lib/catalog/snapshot";
+import { createBrowserSearchDemand } from "../lib/search-demand";
 
 type SearchState = {
   status: "idle" | "loading" | "ready" | "unavailable";
@@ -23,14 +24,18 @@ export function Search({ children }: { children?: ReactNode } = {}) {
   const sequence = useRef(0);
   const debounce = useRef<number | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
+  const demand = useRef<ReturnType<typeof createBrowserSearchDemand> | null>(null);
+  const submitted = useRef(false);
 
   function clear() {
+    demand.current?.edit();
     setQuery("");
     navigate("");
     input.current?.focus();
   }
 
   function navigate(value: string, replace = false) {
+    submitted.current = !replace;
     if (debounce.current !== null) window.clearTimeout(debounce.current);
     debounce.current = null;
     const q = value.trim().slice(0, 200);
@@ -52,6 +57,7 @@ export function Search({ children }: { children?: ReactNode } = {}) {
 
   useEffect(() => {
     let active = true;
+    demand.current = createBrowserSearchDemand();
     const search = async () => {
       if (debounce.current !== null) window.clearTimeout(debounce.current);
       debounce.current = null;
@@ -62,9 +68,12 @@ export function Search({ children }: { children?: ReactNode } = {}) {
       controller.current?.abort();
       const request = ++sequence.current;
       if (q.length < 2) {
+        demand.current?.edit();
         setState({ status: "idle", products: [] });
         return;
       }
+      demand.current?.begin(q, submitted.current);
+      submitted.current = false;
       // Bookmarked queries and history navigation should reveal the search,
       // not leave mobile visitors above the complete curated opening set.
       document.getElementById("catalog-search")?.scrollIntoView({ behavior: "instant", block: "start" });
@@ -95,10 +104,13 @@ export function Search({ children }: { children?: ReactNode } = {}) {
         if (active && !abort.signal.aborted && request === sequence.current) {
           setState({ status: "ready", products });
           captureStaticSearch(products.length);
+          demand.current?.complete(products.length);
         }
       } catch {
-        if (active && !abort.signal.aborted && request === sequence.current)
+        if (active && !abort.signal.aborted && request === sequence.current) {
           setState({ status: "unavailable", products: [] });
+          demand.current?.complete(null);
+        }
       }
     };
     void search();
@@ -107,6 +119,8 @@ export function Search({ children }: { children?: ReactNode } = {}) {
     return () => {
       active = false;
       controller.current?.abort();
+      demand.current?.dispose();
+      demand.current = null;
       if (debounce.current !== null) window.clearTimeout(debounce.current);
       window.removeEventListener("popstate", search);
       window.removeEventListener("catalog-search", search);
@@ -135,6 +149,13 @@ export function Search({ children }: { children?: ReactNode } = {}) {
   }, [state.products]);
 
   const hasQuery = query.trim().length >= 2;
+  function selectResult(event: MouseEvent<HTMLDivElement>) {
+    if (event.defaultPrevented || ![0, 1].includes(event.button) || !(event.target instanceof Element)) return;
+    const card = event.target.closest('a[data-analytics-product-link]')?.closest('[data-analytics-card]');
+    if (!card) return;
+    const index = [...event.currentTarget.querySelectorAll('[data-analytics-card]')].indexOf(card);
+    if (index >= 0) demand.current?.select(index + 1);
+  }
   return (
     <section
       className="search-section"
@@ -163,6 +184,7 @@ export function Search({ children }: { children?: ReactNode } = {}) {
           minLength={2}
           maxLength={200}
           onChange={(event) => {
+            demand.current?.edit();
             const value = event.target.value;
             setQuery(value);
             controller.current?.abort();
@@ -209,7 +231,7 @@ export function Search({ children }: { children?: ReactNode } = {}) {
         </div>
       )}
       {state.status === "ready" && state.products.length > 0 && (
-        <div className="catalog-grid">
+        <div className="catalog-grid" onClickCapture={selectResult} onAuxClickCapture={selectResult}>
           <h2 className="sr-only">Search results</h2>
           {state.products.map((product) => (
             <ProductCard key={product.id} product={product} context="catalog_search" />

@@ -25,6 +25,11 @@ export function isStaticAnalyticsAllowed(): boolean {
     && navigator.globalPrivacyControl !== true;
 }
 
+/** First-party search demand shares opt-out/host gates, never provider payloads. */
+export function isSearchDemandAllowed(): boolean {
+  return isStaticAnalyticsAllowed() && getAttribution().utmMedium?.toLowerCase() !== 'qa';
+}
+
 function withAnalytics(send: (analytics: Analytics) => void) {
   if (!isStaticAnalyticsAllowed()) return;
   // The compile-time branch also keeps provider chunks out of default builds.

@@ -6,6 +6,7 @@ import { createSearchHandler, json, sha256 } from './search.ts';
 import { snapshotKeywordSearch } from './snapshot-search.ts';
 import { createDerivedSemanticSearch } from './derived-search.ts';
 import type { DerivedSemanticSearch } from './derived-search.ts';
+import { recordSearchDemand } from './search-demand.ts';
 
 export type { SiteEnv, SearchAdapters, SearchStorage, SemanticBudgetScope } from './bindings.ts';
 export interface SiteReleaseIdentity {
@@ -310,6 +311,8 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
           return respond(json(releaseIdentity));
         }
         if (path === '/api/search-products') return respond(search ? await search(request, env) : json({ error: 'Search unavailable' }, 503));
+        if (path === '/api/search-demand') return respond(productionOrigin === 'https://stupid.gifts' && manifest.dataKind === 'catalog'
+          ? await recordSearchDemand(request, env, now()) : new Response(null, { status: 403 }));
         if (path === '/api/catalog-feed') return respond(await feed(request));
         if (RETIRED_ROUTE.test(path) || path.startsWith('/api/')) return respond(json({ error: 'Not found' }, 404));
         if (!['GET', 'HEAD'].includes(request.method)) return respond(json({ error: 'Method not allowed' }, 405, { Allow: 'GET, HEAD' }));
