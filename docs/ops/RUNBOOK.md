@@ -335,11 +335,13 @@ delivery from creating another batch. Legacy day/week receipts remain untouched.
 Owner-picked exact new products use `prepare --run <unique-label> --admit-asins
 ASIN1,ASIN2`. Later start/review/publish commands use only the SAME saved run
 label. This pins up to ten exact ASINs, gets only those products, and reuses
-normal quality/family/catalog deduplication, short-copy review, embeddings and
+source readiness/family/catalog deduplication, short-copy review, embeddings and
 publication. It cannot update existing identities or join campaigns. It performs
 no unrelated searches or refresh batch, and does not change scheduled cadence.
 This explicit admission may use the existing product model outside Monday;
 ordinary Tuesday–Sunday maintenance remains model-free.
+Exact owner picks carry a reviewed editorial-fit score of0.8 instead of the
+automatic keyword taste heuristic; supplier ratings/facts are never altered.
 
 ### Supplier-dependent photos
 

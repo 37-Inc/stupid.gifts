@@ -3,7 +3,7 @@ import test from 'node:test';
 import amazon from '../lib/amazon-creators.js';
 import {dailyCatalogPhases,dailyCatalogExecutor} from '../scripts/ops/catalog-daily.mjs';
 import {operatorInvocation} from '../scripts/catalog/daily-operator.mjs';
-import {executeCatalog} from '../scripts/ops/prefetch-catalog.mjs';
+import {executeCatalog,discoveryCandidateBlockReason} from '../scripts/ops/prefetch-catalog.mjs';
 
 const ids=['B0HJTJQ9VS','B0H6QDN85V'];
 const cadence={calendar:{monday:false},assertDay(){},async plan(){return{daily:true,discovery:false};},async reserve(){}};
@@ -37,7 +37,8 @@ test('exact discovery fetches only the requested ASINs and still deduplicates ag
   try{
     amazon.searchItems=async()=>{throw Error('must_not_search');};
     amazon.getItems=async selected=>{assert.deepEqual(selected,ids);fetched++;return[{
-      id:ids[0],title:'TEST ONLY ridiculous brass lobster desk bell',price:20,currency:'USD',
+      id:ids[0],title:'TEST ONLY Coral Turtle Toilet Bolt Covers',price:20,currency:'USD',
+      affiliateUrl:'https://www.amazon.com/dp/'+ids[0]+'?tag=fixture-20',
       imageUrl:'https://example.invalid/lobster.jpg',source:'amazon',availabilityStatus:'IN_STOCK',
       sourceFacts:{material:'brass'},remotelyVerified:true,
     }];};
@@ -49,4 +50,11 @@ test('exact discovery fetches only the requested ASINs and still deduplicates ag
     assert.equal(fetched,1);
     assert.equal(allIdentities,true);
   }finally{Object.assign(amazon,original);}
+});
+test('owner-selected taste review does not bypass source readiness or copy review',()=>{
+  const product={imageUrl:'/owned.jpg',affiliateUrl:'https://example.com',isActive:true,qualityScore:.8,title:'Turtle toilet bolt covers'};
+  assert.equal(discoveryCandidateBlockReason(product,.65),'off_brand');
+  assert.equal(discoveryCandidateBlockReason(product,.65,true),undefined);
+  assert.equal(discoveryCandidateBlockReason({...product,isActive:false},.65,true),'inactive_candidate');
+  assert.equal(discoveryCandidateBlockReason({...product,imageUrl:''},.65,true),'missing_image');
 });
