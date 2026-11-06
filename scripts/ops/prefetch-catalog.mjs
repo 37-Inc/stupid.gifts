@@ -1803,7 +1803,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
     .map((theme) => theme.trim())
     .filter(Boolean);
   const themePool = options.themes || envThemes || DEFAULT_THEMES;
-  const themes = options.themes
+  const themes = options.admitAsins ? ['owner-selected campaign gifts'] : options.themes
     ? themePool.slice(0, options.themeLimit)
     : selectRotatingThemes(themePool, options.themeLimit, new Date(), options.discoveryRunKey);
   const seen = new Map();
@@ -1954,7 +1954,10 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   for (const theme of themes) {
     let found = [];
     try {
-      found = await searchAmazonCandidates(theme, options, evidence);
+      found = options.admitAsins
+        ? finalizeProducts((await observedAmazon('getItems', options.admitAsins, evidence))
+          .filter(product => options.admitAsins.includes(product.id)), theme, options)
+        : await searchAmazonCandidates(theme, options, evidence);
       console.log(`${theme}: ${found.length} candidate discoveries`);
       discoveredCandidates += found.length;
     } catch (error) {

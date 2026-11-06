@@ -143,7 +143,7 @@ export async function assertNoUnsealedMaintenance(db,seal,scope=SCOPE){
   if(rows.length)refuse('unsealed_maintenance');
 }
 function options(config,configPath,configSha256){return{config,driver:{configPath,configSha256,workspace:WORKSPACE,cadenceOnly:true},workspace:{directory:WORKSPACE,repository:ROOT,mode:'resume',runId:config.runId,codeSha:SOURCE,configSha256,scope:SCOPE,retention:config.retention,budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe'}};}
-async function prepare(directory,calendar,photosOnly=false){
+async function prepare(directory,calendar,photosOnly=false,admitAsins){
   const old=await optional(directory+'/operator.json');
   if(old&&await optional(directory+'/success.json'))return{state:'skipped',reason:'run_already_completed',runId:old.runId};
   if(old?.source===SOURCE&&old.helperSha256===self)return old;
@@ -178,7 +178,7 @@ async function prepare(directory,calendar,photosOnly=false){
   const homepageEdition=await routineHomepageEdition(calendar.day,prior.control.path);
   const semanticSearch=routineSearchPolicy(await optional(CARE+'/semantic-search.json'));
   const merchandising=await routineMerchandising();
-  const config=validateCloudflareWeeklyConfig({schemaVersion:1,runId,catalogRevision:runId,codeSha:SOURCE,environment:SCOPE.environment,accountId:SCOPE.accountId,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},vectorIndex:{name:SCOPE.indexName,dimensions:1536,metric:'cosine'},catalog:{associateTag:'goose-gifts-37-20',marketplace:'www.amazon.com'},backfillLimit:0,cadence:{day:calendar.day,featuredIds:[...homepageEdition.anchors,...homepageEdition.rotation],runKey:runId,...(photosOnly?{photosOnly:true}:{})},credentials:{cloudflare:{type:'wrangler_oauth'},amazonId:key('AMAZON_CREATORS_CREDENTIAL_ID'),amazonSecret:key('AMAZON_CREATORS_CREDENTIAL_SECRET'),amazonVersion:'3.1',...(calendar.monday&&!photosOnly?{openai:key('OPENAI_API_KEY')}:{})},limits,retention:{reviewReference:'owner/2026-11-02/per-run-catalog-bounds',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint'].map(k=>[k,{maxAgeMs:86400000,notAfter}]))},inputs,
+  const config=validateCloudflareWeeklyConfig({schemaVersion:1,runId,catalogRevision:runId,codeSha:SOURCE,environment:SCOPE.environment,accountId:SCOPE.accountId,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},vectorIndex:{name:SCOPE.indexName,dimensions:1536,metric:'cosine'},catalog:{associateTag:'goose-gifts-37-20',marketplace:'www.amazon.com'},backfillLimit:0,cadence:{day:calendar.day,featuredIds:[...homepageEdition.anchors,...homepageEdition.rotation],runKey:runId,...(photosOnly?{photosOnly:true}:{}),...(admitAsins?{admitAsins}:{})},credentials:{cloudflare:{type:'wrangler_oauth'},amazonId:key('AMAZON_CREATORS_CREDENTIAL_ID'),amazonSecret:key('AMAZON_CREATORS_CREDENTIAL_SECRET'),amazonVersion:'3.1',...((calendar.monday&&!photosOnly)||admitAsins?{openai:key('OPENAI_API_KEY')}:{})},limits,retention:{reviewReference:'owner/2026-11-02/per-run-catalog-bounds',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint'].map(k=>[k,{maxAgeMs:86400000,notAfter}]))},inputs,
     publication:{schemaVersion:1,environment:SCOPE.environment,accountId:SCOPE.accountId,workerName:SCOPE.workerName,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},indexName:SCOPE.indexName,codeSha:SOURCE,sourceMode:'stupid-production',sourceRoot:ROOT,releaseId:runId,identityOrigin:'https://stupid.gifts',compatibilityDate:'2026-10-19',prior:{directory:null,releaseId:seal.publication.releaseId,manifestSha256:prior.manifestSha256,versionReference:prior.versionReference},servingPrior,semanticSearch,homepage:homepageEdition,merchandising,publicAnalytics:{enabled:true,posthogHost:'https://us.i.posthog.com',posthogKey:'phc_ATVKSPwDYTRfX9qDtDVLzZuXQcNdV9d55SjC8bHtuU8w'}}});
   const configPath=directory+'/config.json',configSha256=await put(configPath,config),record={source:SOURCE,helperSha256:self,configPath,configSha256,runId,capacity};await put(directory+'/operator.json',record);return record;
 }
@@ -229,18 +229,23 @@ export async function remember(result,entry,config,directory){
 export function operatorInvocation(argv,calendar){
   const args=[...argv],photoFlag=args.indexOf('--photos-only'),photosOnly=photoFlag>=0;
   if(photosOnly)args.splice(photoFlag,1);
+  const admitFlag=args.indexOf('--admit-asins');
+  const admitAsins=admitFlag>=0?args[admitFlag+1]?.split(','):undefined;
+  if(admitFlag>=0)args.splice(admitFlag,2);
   const flag=args.indexOf('--run');
   let runKey='scheduled-'+calendar.day;
   if(flag>=0){runKey=args[flag+1];args.splice(flag,2);}
   const [command,approvalSha]=args;
   if(!validCatalogRunKey(runKey)
     ||!['prepare','review','start','publish','recover','status'].includes(command)
-    ||args.length!==(['publish','recover'].includes(command)?2:1)||photosOnly&&command!=='prepare'||photosOnly&&flag<0)refuse('command');
-  return{command,approvalSha,runKey,...(photosOnly?{photosOnly:true}:{})};
+    ||args.length!==(['publish','recover'].includes(command)?2:1)||photosOnly&&command!=='prepare'||photosOnly&&flag<0
+    ||admitFlag>=0&&(command!=='prepare'||flag<0||photosOnly||!admitAsins?.length||admitAsins.length>10
+      ||new Set(admitAsins).size!==admitAsins.length||admitAsins.some(id=>! /^[A-Z0-9]{10}$/.test(id))))refuse('command');
+  return{command,approvalSha,runKey,...(photosOnly?{photosOnly:true}:{}),...(admitAsins?{admitAsins}:{})};
 }
 export async function main(){
-source();const calendar=pacificCatalogCalendar(),{command,approvalSha,runKey,photosOnly}=operatorInvocation(process.argv.slice(2),calendar),directory=CARE+'/runs/'+runKey;
-if(command==='prepare'){console.log(JSON.stringify(await prepare(directory,calendar,photosOnly)));}
+source();const calendar=pacificCatalogCalendar(),{command,approvalSha,runKey,photosOnly,admitAsins}=operatorInvocation(process.argv.slice(2),calendar),directory=CARE+'/runs/'+runKey;
+if(command==='prepare'){console.log(JSON.stringify(await prepare(directory,calendar,photosOnly,admitAsins)));}
 else{
   const record=await json(directory+'/operator.json'),recovering=command==='recover';
   if(!recovering&&(record.helperSha256!==self||record.source!==SOURCE))refuse('operator_changed');

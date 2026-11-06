@@ -14,7 +14,9 @@ type SearchState = {
   products: PublicCatalogProduct[];
 };
 
-export function Search({ children }: { children?: ReactNode } = {}) {
+export function Search({ children, action = "/", autoSearch = true }: {
+  children?: ReactNode; action?: "/" | "/h"; autoSearch?: boolean;
+} = {}) {
   const [query, setQuery] = useState("");
   const [state, setState] = useState<SearchState>({
     status: "idle",
@@ -41,7 +43,7 @@ export function Search({ children }: { children?: ReactNode } = {}) {
     const q = value.trim().slice(0, 200);
     const url = new URL(window.location.href);
     const hadQuery = url.searchParams.has("q");
-    url.pathname = "/";
+    url.pathname = action;
     if (q.length >= 2) url.searchParams.set("q", q);
     else url.searchParams.delete("q");
     if (`${url.pathname}${url.search}` !== `${window.location.pathname}${window.location.search}`)
@@ -148,7 +150,7 @@ export function Search({ children }: { children?: ReactNode } = {}) {
     return () => window.clearTimeout(timer);
   }, [state.products]);
 
-  const hasQuery = query.trim().length >= 2;
+  const hasQuery = state.status !== "idle" || (autoSearch && query.trim().length >= 2);
   function selectResult(event: MouseEvent<HTMLDivElement>) {
     if (event.defaultPrevented || ![0, 1].includes(event.button) || !(event.target instanceof Element)) return;
     const card = event.target.closest('a[data-analytics-product-link]')?.closest('[data-analytics-card]');
@@ -164,7 +166,7 @@ export function Search({ children }: { children?: ReactNode } = {}) {
     >
       <form
         className="search-form"
-        action="/"
+        action={action}
         method="get"
         onSubmit={(event) => {
           event.preventDefault();
@@ -190,7 +192,7 @@ export function Search({ children }: { children?: ReactNode } = {}) {
             controller.current?.abort();
             sequence.current++;
             if (debounce.current !== null) window.clearTimeout(debounce.current);
-            debounce.current = window.setTimeout(() => navigate(value, true), 400);
+            if (autoSearch) debounce.current = window.setTimeout(() => navigate(value, true), 400);
           }}
         />
         <button type="submit">

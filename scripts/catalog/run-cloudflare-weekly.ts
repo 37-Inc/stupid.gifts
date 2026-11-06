@@ -46,7 +46,7 @@ export interface CloudflareWeeklyConfig {
   schemaVersion:1;runId:string;catalogRevision:string;codeSha:string;environment:'staging'|'production';accountId:string;
   database:{id:string;name:string};vectorIndex:{name:string;dimensions:1536;metric:'cosine'};
   catalog:{associateTag:string;marketplace:'www.amazon.com'};backfillLimit:number;
-  cadence?:{day:string;featuredIds:string[];runKey?:string;photosOnly?:true};
+  cadence?:{day:string;featuredIds:string[];runKey?:string;photosOnly?:true;admitAsins?:string[]};
   credentials:{cloudflare:CloudflareCredentialReference;amazonId:KeychainRef;amazonSecret:KeychainRef;amazonVersion:string;openai?:KeychainRef;stagingAuthSecret?:KeychainRef};
   limits:{requests:number;statements:number;reportedRowsRead?:number;reportedRowsWritten?:number};retention:RetentionPolicy;
   inputs:{previous:InputRef;context:InputRef;rights:InputRef;originalVectors?:InputRef};publication:PublicationConfig;
@@ -144,7 +144,10 @@ export function validateCloudflareWeeklyConfig(input:unknown):CloudflareWeeklyCo
     ||c.limits.reportedRowsRead!==undefined&&(!Number.isInteger(c.limits.reportedRowsRead)||c.limits.reportedRowsRead<1||c.limits.reportedRowsRead>3_000_000)
     ||c.limits.reportedRowsWritten!==undefined&&(!Number.isInteger(c.limits.reportedRowsWritten)||c.limits.reportedRowsWritten<1||c.limits.reportedRowsWritten>50_000)
     ||!exact(c.inputs,c.inputs?.originalVectors?'context,originalVectors,previous,rights':'context,previous,rights'))throw new Error('weekly_configuration_invalid');
-  if(c.cadence&&(!exact(c.cadence,`day,featuredIds${Object.hasOwn(c.cadence,'photosOnly')?',photosOnly':''}${c.cadence.runKey===undefined?'':',runKey'}`)
+  if(c.cadence&&(!exact(c.cadence,`${Object.hasOwn(c.cadence,'admitAsins')?'admitAsins,':''}day,featuredIds${Object.hasOwn(c.cadence,'photosOnly')?',photosOnly':''}${c.cadence.runKey===undefined?'':',runKey'}`)
+    ||c.cadence.admitAsins!==undefined&&(c.cadence.photosOnly||!c.cadence.runKey||!Array.isArray(c.cadence.admitAsins)
+      ||!c.cadence.admitAsins.length||c.cadence.admitAsins.length>10||new Set(c.cadence.admitAsins).size!==c.cadence.admitAsins.length
+      ||c.cadence.admitAsins.some(id=>! /^[A-Z0-9]{10}$/.test(id)))
     ||Object.hasOwn(c.cadence,'photosOnly')&&c.cadence.photosOnly!==true
     ||c.cadence.runKey!==undefined&&(!validCatalogRunKey(c.cadence.runKey)||c.cadence.runKey!==c.runId)
     ||!/^\d{4}-\d{2}-\d{2}$/.test(c.cadence.day)
@@ -476,7 +479,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       let needsModel=!config.cadence;
       if(config.cadence){
         if(pacificCatalogCalendar(now()).day!==config.cadence.day)throw new Error('weekly_cadence_day_changed');
-        const phases=await dailyCatalogPhases(dependencies.cadence!,config.cadence.featuredIds,config.cadence.photosOnly);
+        const phases=await dailyCatalogPhases(dependencies.cadence!,config.cadence.featuredIds,config.cadence.photosOnly,config.cadence.admitAsins);
         if(!phases.length)return{state:'skipped',reason:'cadence_already_reserved'};
         needsModel=phases.some(p=>p.discoveryNewOnly||p.enrichSelectedExisting);
         if(needsModel&&!config.credentials.openai)throw new Error('weekly_model_credentials_missing');
@@ -503,7 +506,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
             await write({phase:'phases_complete',owner:cursor.current,phaseComplete});return{status:'pending'};
           },async finalizeRun(id:string,input:Record<string,unknown>){await telemetry.finishCatalogRun(id,input);return telemetry.loadCatalogRun(id);}};
         if(config.cadence)await runDailyCatalogWithBackend({...backend,cadence:dependencies.cadence!,featuredIds:config.cadence.featuredIds,
-          photosOnly:config.cadence.photosOnly,preservePermanentListings:true});
+          photosOnly:config.cadence.photosOnly,admitAsins:config.cadence.admitAsins,preservePermanentListings:true});
         else await runWeeklyCatalogWithBackend(backend);
       });}catch(error){
         const durable=await ws.readCheckpoint();if(durable){saved=durable;cp=durable.checkpoint;}
