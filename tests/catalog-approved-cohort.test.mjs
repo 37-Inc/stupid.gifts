@@ -5,6 +5,8 @@ import { readFile, readdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvedCohortOperationKey, approvedCohortVectorPlan, prepareApprovedCohort, settleApprovedCohort } from '../lib/catalog/freeze-approved-cohort.ts';
+import {approvedRequestControl,hydrateApprovedRequest} from '../scripts/catalog/approved-catalog-seal.ts';
+import {recoverProjectionSeal} from '../scripts/catalog/recover-projection-seal.ts';
 import { claimMutationOwnership, readMutationOwner, releaseMutationOwnership,mutationAssertion } from '../lib/catalog/mutation-fence.ts';
 import {permanentSourceRows,permanentSourceInventory} from '../lib/catalog/freeze-permanent-catalog.ts';
 import { createProjectionPacket, projectionQueries, getRevisionProductsByPublicIds } from '../lib/catalog/d1.ts';
@@ -131,7 +133,7 @@ async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListi
     useDb(value){db=value;f.db=value;},
     owner:()=>cursor.current,now:()=>new Date(clock),advance(ms){clock+=ms;},calls:()=>calls,setIntent(fn){intentOverride=fn;},
     before(fn){before=fn;},after(fn){after=fn;},lose(fn){lost=fn;},uncertain(value){unknown=value;},
-    async freeze(ids=[],publicationRevision){
+    async freeze(ids=[],publicationRevision,ownerReference='approved-build'){
       const changes=ids.map(publicId=>{
         const row={...sql.prepare('SELECT * FROM products WHERE public_id=?').get(publicId)};
         const operation=sql.prepare(`SELECT * FROM catalog_maintenance_operations WHERE run_id='weekly-run' AND EXISTS(
@@ -141,7 +143,7 @@ async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListi
       const approval={schemaVersion:1,...mode,changes};const request={previous,context,scope,codeSha:'e'.repeat(40),approval,approvalSha256:sha256(canonicalJson(approval))};
       if(publicationRevision)request.publicationRevision=publicationRevision;
       await releaseMutationOwnership(db,cursor.current);
-      const owner=await claimMutationOwnership(db,scope,{phase:'freezing',ownerReference:'approved-build',operationKey:approvedCohortOperationKey(request)});
+      const owner=await claimMutationOwnership(db,scope,{phase:'freezing',ownerReference,operationKey:approvedCohortOperationKey(request)});
       return{owner,request};
     },
     async promote(prepared){let owner=prepared.owner;const revision=prepared.revision;const plan=approvedCohortVectorPlan(revision);
@@ -154,6 +156,33 @@ async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListi
       }return owner;
     }};return f;
 }
+test('committed projection seal recovers the exact owner before stale checkpoint hydration, without writes or dispatch',async t=>{
+  const f=await setup(t);await f.upsert(product(1,{sourceFacts:{fresh:true}}));await f.drain();
+  const claim=await f.freeze([uuid(1)],undefined,'weekly-run:freeze');
+  const control=approvedRequestControl(claim.request),prepared=await prepareApprovedCohort(f.db,claim.owner,claim.request);
+  await assert.rejects(hydrateApprovedRequest(f.db,claim.owner,control),/read_bounds/);
+  const before=f.sql.prepare('SELECT total_changes() n').get().n,calls=f.calls();
+  const recovered=await recoverProjectionSeal(f.db,claim.owner,control);
+  assert.deepEqual(recovered,{owner:prepared.owner,request:claim.request});
+  assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);assert.equal(f.calls(),calls);
+  assert.deepEqual(await recoverProjectionSeal(f.db,recovered.owner,control),recovered);
+});
+test('projection recovery rejects a different owner, extra epoch, changed receipt and source drift',async t=>{
+  for(const fault of ['owner','epoch','receipt','source'])await t.test(fault,async t=>{
+    const f=await setup(t);await f.upsert(product(1,{sourceFacts:{fresh:true}}));await f.drain();const claim=await f.freeze([uuid(1)],undefined,'weekly-run:freeze');
+    const control=approvedRequestControl(claim.request);await prepareApprovedCohort(f.db,claim.owner,claim.request);
+    if(fault==='owner')f.sql.prepare('UPDATE catalog_mutation_scopes SET owner_token=?').run('other-owner');
+    if(fault==='epoch')f.sql.exec('UPDATE catalog_mutation_scopes SET mutation_epoch=mutation_epoch+1');
+    if(fault==='receipt')f.useDb({...f.local,prepare(query){const statement=f.local.prepare(query);return{...statement,
+      bind(...args){statement.bind(...args);return this;},async all(...args){const result=await statement.all(...args);
+        if(query==='SELECT * FROM catalog_projection_receipts WHERE catalog_revision=?')for(const row of result.results)row.projection_sha256='0'.repeat(64);
+        return result;}};}});
+    if(fault==='source')f.sql.prepare('UPDATE products SET description=? WHERE public_id=?').run('Changed source',uuid(1));
+    const before=f.sql.prepare('SELECT total_changes() n').get().n,calls=f.calls();
+    await assert.rejects(recoverProjectionSeal(f.db,claim.owner,control));
+    assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);assert.equal(f.calls(),calls);
+  });
+});
 test('multiple approved changes use one bounded receipt read without weakening per-change checks',async t=>{
   const f=await setup(t,{initial:3});
   for(let n=1;n<=3;n++)await f.upsert(product(n,{sourceFacts:{fixture:n,revision:'fresh'}}));

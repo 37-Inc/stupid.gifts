@@ -22,6 +22,7 @@ import { accountedPublicationUploadCommand, isAccountedPublicationUploadCommand 
 import { approvedRequestControl, hydrateApprovedRequest, approvedRevisionControl, hydrateApprovedRevision,
   approvedArtifactObservedAt, readApprovedPrior, createPublishedApprovedCatalogSeal, createPublishedApprovedCatalogSealFromControl } from './approved-catalog-seal.ts';
 import {isPersistentCatalogSeal,reconstructPermanentSnapshot} from './permanent-catalog-seal.ts';
+import {recoverProjectionSeal} from './recover-projection-seal.ts';
 import type {PermanentCatalogSeal} from './permanent-catalog-seal.ts';
 import type { ApprovedCatalogSeal } from './approved-catalog-seal.ts';
 import type { PublicationConfig } from './publish-release.ts';
@@ -565,7 +566,10 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     let revision:ApprovedCohortRevision|undefined;
     if(cp.phase==='freezing'){
       const stored=await readOrdered<ReturnType<typeof approvedRequestControl>>(ws,cp.pins.request);
-      const request=stored.kind==='approved-request-control'?await hydrateApprovedRequest(db,cp.owner!,stored):stored as unknown as ApprovedCohortRequest;
+      const recovered=stored.kind==='approved-request-control'&&!cp.pins.preparedRevision&&cp.owner?.phase==='freezing'
+        ?await recoverProjectionSeal(db,cp.owner,stored):null;
+      if(recovered&&canonicalJson(recovered.owner)!==canonicalJson(cp.owner))await write({owner:recovered.owner});
+      const request=recovered?.request??(stored.kind==='approved-request-control'?await hydrateApprovedRequest(db,cp.owner!,stored):stored as unknown as ApprovedCohortRequest);
       if(cp.pins.preparedRevision)revision=await hydrateApprovedRevision(db,cp.owner!,
         await readOrdered<ReturnType<typeof approvedRevisionControl>>(ws,cp.pins.preparedRevision));
       else{
