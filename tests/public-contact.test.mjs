@@ -19,7 +19,7 @@ function textFiles(directory) {
 }
 
 test('public surfaces use the product contact instead of a personal address', () => {
-  assert.equal(PUBLIC_CONTACT_EMAIL, 'goosegifts@37.technology');
+  assert.equal(PUBLIC_CONTACT_EMAIL, 'stupidgifts@37.technology');
 
   const forbiddenAddresses = /\b(?:cam|cameron)@37\.technology\b/gi;
   const leaks = publicSourceRoots.flatMap((sourceRoot) =>

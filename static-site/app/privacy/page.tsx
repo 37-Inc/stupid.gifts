@@ -2,6 +2,7 @@ import { previewMetadata } from "../../lib/metadata";
 import { isSitePreview, siteIdentity } from "../../lib/site-identity";
 import { isFixtureRelease } from "../../lib/catalog";
 import { privacyPolicySections, privacyPolicyIntro, privacyPolicyUpdated } from "../../../lib/privacy-policy";
+import { PUBLIC_CONTACT_EMAIL } from "../../../lib/site";
 const preview = isSitePreview || isFixtureRelease;
 const brand = (text: string) => text.replaceAll("goose.gifts", siteIdentity.wordmark);
 export const metadata = previewMetadata(
@@ -39,7 +40,7 @@ export default function Privacy() {
       </p>
       <p>
         Questions:{" "}
-        <a href="mailto:goosegifts@37.technology">goosegifts@37.technology</a>.
+        <a href={`mailto:${PUBLIC_CONTACT_EMAIL}`}>{PUBLIC_CONTACT_EMAIL}</a>.
       </p>
     </main>
   );
