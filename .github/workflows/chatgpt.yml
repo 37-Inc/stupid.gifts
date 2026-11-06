@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'prototypes/chatgpt/**'
+      - 'wrangler.chatgpt.jsonc'
       - 'workers/site/**'
       - 'lib/catalog/**'
       - 'lib/db/product-scoring.ts'
@@ -19,6 +20,7 @@ on:
     branches: [main]
     paths:
       - 'prototypes/chatgpt/**'
+      - 'wrangler.chatgpt.jsonc'
       - 'workers/site/**'
       - 'lib/catalog/**'
       - 'lib/db/product-scoring.ts'
