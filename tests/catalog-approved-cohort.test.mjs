@@ -48,7 +48,7 @@ function product(n, overrides={}) {
 const rights = p => Object.fromEntries(Object.entries({title:p.title,description:p.wittyDescription,imageUrl:p.imageUrl,
   affiliateUrl:p.affiliateUrl,wittyDescription:p.wittyDescription,editorialWriteup:p.editorialWriteup,humorTags:JSON.stringify(p.humorTags)})
   .map(([field,value])=>[field,{basis:'owned',reference:`test-only-owned/${p.id}/${field}`,value}]));
-async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListings=false,earlyExpiry=[]}={}) {
+async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListings=false,earlyExpiry=[],stockHeld=[]}={}) {
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());sql.exec('PRAGMA foreign_keys=ON');
   for(const name of (await readdir(new URL('../migrations/d1/',import.meta.url))).filter(name=>/^\d{4}.*\.sql$/.test(name)).sort())
     sql.exec(await readFile(new URL(`../migrations/d1/${name}`,import.meta.url),'utf8'));
@@ -110,6 +110,9 @@ async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListi
     heldProducts:rows.filter(row=>!row.public_display_json).map(row=>({id:row.id,publicId:row.public_id,slug:row.slug,path:`/gifts/${row.slug}`,
       title:'Gift currently unavailable',description:'This gift is not currently available in the curated catalog. Browse other gifts instead.',reason:'inactive'})),
     slugHistory:[{slug:'older-lobster',canonicalSlug:rows[0].slug,publicId:rows[0].public_id}]},new Date(AT)));
+  for(const n of stockHeld){const p=previous.products.find(p=>p.id===id(n));assert.ok(p);
+    previous.products=previous.products.filter(value=>value!==p);previous.heldProducts.push({id:p.id,publicId:p.publicId,slug:p.slug,path:`/gifts/${p.slug}`,
+      title:'Gift currently unavailable',description:'This gift is not currently available in the curated catalog. Browse other gifts instead.',reason:'unavailable'});}
   const packet=await createProjectionPacket(previous,Object.fromEntries(rows.map(row=>[row.public_id,row.source_facts_hash])),source,new Date(AT));
   sql.prepare('INSERT INTO catalog_revisions(revision,created_at,source_export_sha256,status) VALUES(?,?,?,?)').run(previous.catalogRevision,at(0),source,'published');
   for(const q of projectionQueries(packet))sql.prepare(q.sql).run(...q.params);
@@ -130,6 +133,7 @@ async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListi
   cursor={current:await claimMutationOwnership(db,scope,{phase:'writing',ownerReference:'weekly-run',operationKey:'d'.repeat(64)})};
   mode={runId:'weekly-run',catalogRevision:'approved-revision'};
   const f={sql,db,local:db,adapters,index,sent,previous,packet,context,priorIntent,originals,upsert,drain,
+    markUnavailable:ids=>store().markConfirmedMissingUnavailable(ids),
     useDb(value){db=value;f.db=value;},
     owner:()=>cursor.current,now:()=>new Date(clock),advance(ms){clock+=ms;},calls:()=>calls,setIntent(fn){intentOverride=fn;},
     before(fn){before=fn;},after(fn){after=fn;},lose(fn){lost=fn;},uncertain(value){unknown=value;},
@@ -156,6 +160,30 @@ async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListi
       }return owner;
     }};return f;
 }
+test('confirmed unavailable cleared listing leaves every public projection but preserves its source and native history',async t=>{
+  const f=await setup(t,{permanent:1,preservePermanentListings:true});
+  const original=f.sql.prepare('SELECT * FROM products WHERE id=?').get(id(100));
+  await f.markUnavailable([id(100)]);const row=f.sql.prepare('SELECT * FROM products WHERE id=?').get(id(100));
+  assert.equal(row.is_active,1);assert.equal(row.slug,original.slug);assert.equal(row.source_record_json,original.source_record_json);
+  assert.ok(row.public_display_json);const writes=f.calls();
+  const input=await f.freeze([uuid(100)]),result=await prepareApprovedCohort(f.db,input.owner,input.request);
+  assert.ok(!result.revision.snapshot.products.some(p=>p.id===id(100)));
+  assert.equal(result.revision.snapshot.heldProducts.find(p=>p.id===id(100)).reason,'unavailable');
+  assert.ok(!approvedCohortVectorPlan(result.revision).absentIds.includes(uuid(100)));
+  assert.equal(f.calls(),writes);
+});
+test('stock-held cleared identity returns at the same URL only after a real positive retailer observation',async t=>{
+  for(const status of ['UNKNOWN','IN_STOCK']){
+    const f=await setup(t,{permanent:1,preservePermanentListings:true,stockHeld:[100]});
+    const before=f.sql.prepare('SELECT * FROM products WHERE id=?').get(id(100));
+    await f.upsert(product(100,{availabilityStatus:status,embedding:undefined}));await f.drain();
+    const input=await f.freeze([uuid(100)]),result=await prepareApprovedCohort(f.db,input.owner,input.request);
+    const restored=result.revision.snapshot.products.find(p=>p.id===id(100));
+    if(status==='UNKNOWN')assert.equal(result.revision.snapshot.heldProducts.find(p=>p.id===id(100)).reason,'unavailable');
+    else{assert.ok(restored);assert.equal(restored.slug,before.slug);assert.equal(restored.publicId,before.public_id);}
+    assert.equal(f.sql.prepare('SELECT count(*) n FROM products').get().n,4);
+  }
+});
 test('committed projection seal recovers the exact owner before stale checkpoint hydration, without writes or dispatch',async t=>{
   const f=await setup(t);await f.upsert(product(1,{sourceFacts:{fresh:true}}));await f.drain();
   const claim=await f.freeze([uuid(1)],undefined,'weekly-run:freeze');
@@ -251,7 +279,7 @@ test('daily+Monday approval bound admits30 exact identities but never31, duplica
   request.approval.changes.pop();request.approval.changes[1]=request.approval.changes[0];request.approvalSha256=sha256(canonicalJson(request.approval));
   assert.throws(()=>approvedCohortOperationKey(request),/approval_invalid/);
 });
-test('Monday ten refreshes plus twenty independently cleared additions preserve all2359 prior bases and full order',async t=>{
+test('Monday admission preserves all identities and order while confirmed unavailable bases become held',async t=>{
   const f=await setup(t,{initial:0,permanent:2359,extraHeld:1023,preservePermanentListings:true});
   f.advance(36*3600000);f.context.cutoff=new Date(f.now().getTime()+3600000).toISOString();
   f.setIntent((p,hash)=>{
@@ -274,9 +302,11 @@ test('Monday ten refreshes plus twenty independently cleared additions preserve 
   await f.drain();const claim=await f.freeze(ids);
   const prepared=await prepareOwnedApprovedCohortPlan({db:f.db,...claim,adapters:f.adapters});
   assert.equal(prepared.revision.request.approval.changes.length,30);
-  assert.equal(prepared.revision.snapshot.products.length,2379);
-  assert.deepEqual(prepared.revision.snapshot.products.slice(0,2359).map(p=>p.publicId),f.previous.products.map(p=>p.publicId));
-  assert.deepEqual(prepared.revision.snapshot.products.slice(2359).map(p=>p.publicId),ids.slice(10));
+  const unavailable=new Set([101,103,105,107,109].map(uuid));
+  assert.equal(prepared.revision.snapshot.products.length,2374);
+  assert.deepEqual(prepared.revision.snapshot.products.slice(0,2354).map(p=>p.publicId),f.previous.products.filter(p=>!unavailable.has(p.publicId)).map(p=>p.publicId));
+  assert.deepEqual(prepared.revision.snapshot.products.slice(2354).map(p=>p.publicId),ids.slice(10));
+  assert.equal(prepared.revision.snapshot.heldProducts.filter(p=>p.reason==='unavailable').length,5);
   assert.ok(prepared.revision.snapshot.products.every(p=>p.eligibleUntil===null));
   assert.deepEqual(prepared.reusedIds,[]);assert.deepEqual(prepared.remainingIds,[]);
   const queued=await settleOwnedApprovedCohortVectorProof({db:f.db,...prepared,adapters:f.adapters});
@@ -574,7 +604,7 @@ test('2361 listed products with no changes keep stable permanent membership and 
   const dispatches=f.calls();assert.equal((await readActivatedCatalogVectors(f.db,permit,control,f.adapters)).settled,true);
   assert.equal(f.calls(),dispatches);assert.equal(f.index.size,2);
 });
-test('all2359 permanent identities/order survive ten D1 stockout/title/facts/price refreshes and photo expiry; weak new discovery stays held',async t=>{
+test('stockout hides confirmed unavailable bases, while unknown stock and photo expiry preserve remaining cleared listings',async t=>{
   const f=await setup(t,{initial:0,permanent:2359,extraHeld:1023,preservePermanentListings:true}),before=f.previous.products;
   assert.equal(before.length,2359);assert.equal(f.previous.heldProducts.length,1024);
   f.advance(36*3600000);f.context.cutoff=new Date(f.now().getTime()+3600000).toISOString();
@@ -582,8 +612,10 @@ test('all2359 permanent identities/order survive ten D1 stockout/title/facts/pri
     availabilityStatus:n%2?'UNAVAILABLE':'UNKNOWN',price:n%2?999999:19.99,embedding:null,editorialStatus:'pending'}));
   await f.upsert(product(9999,{title:'Uncleared weak discovery',qualityScore:.3,isActive:false,embedding:null}));await f.drain();
   const changed=Array.from({length:10},(_,n)=>uuid(n+100)),claim=await f.freeze([...changed,uuid(10000)]),prepared=await prepareApprovedCohort(f.db,claim.owner,claim.request);
-  assert.deepEqual(prepared.revision.snapshot.products.map(p=>p.publicId),before.map(p=>p.publicId));
-  assert.deepEqual(prepared.revision.snapshot.products.map(p=>p.title),before.map(p=>p.title));
+  const unavailable=new Set([101,103,105,107,109].map(uuid)),remaining=before.filter(p=>!unavailable.has(p.publicId));
+  assert.deepEqual(prepared.revision.snapshot.products.map(p=>p.publicId),remaining.map(p=>p.publicId));
+  assert.deepEqual(prepared.revision.snapshot.products.map(p=>p.title),remaining.map(p=>p.title));
+  assert.equal(prepared.revision.snapshot.heldProducts.filter(p=>p.reason==='unavailable').length,5);
   assert.ok(prepared.revision.snapshot.products.every(p=>p.eligibleUntil===null));
   assert.ok(prepared.revision.snapshot.heldProducts.some(p=>p.publicId===uuid(10000)));
   assert.equal(f.sql.prepare('SELECT count(*) n FROM products').get().n,3384);

@@ -6,6 +6,26 @@ latest protected receipt take precedence over historical journal entries.
 
 ## Current state
 
+November6 availability correction: confirmed retailer `OUT_OF_STOCK` or
+`UNAVAILABLE` observations now withhold a gift from public browsing, search,
+sitemap and buying links. Permanent clearance preserves the internal identity,
+slug, images/copy and native history; it does not assert that a merchant still
+sells the product. An API timeout, unknown stock, old undated imported label or
+expired photo alone never unlists a gift. Only a real positive purchasable
+observation can restore an availability-held gift at its existing URL.
+Morning care gives one weekly-due unavailable record a recheck slot after urgent
+photos, within the existing ten-item batch. No extra scheduler or model call.
+
+For an owner-requested policy-only publication of already saved facts, use
+`npm run catalog:care -- reconcile-availability --run <unique-label>`, then
+normal `review --run <same-label>` and `publish <actual-reviewed-SHA> --run
+<same-label>`. This skips supplier/model phases entirely and uses the normal
+ownership, freeze, build, receipt and accepted-successor path. Never invoke
+`start` for that run or replay completed publication. Interrupted initialization
+resumes only the same label/source; after `phases_complete`, use normal review
+and publication. See `CATALOG_LIFECYCLE.md` for current cadence and proposed
+follow-up changes; those proposals do not authorize increased discovery.
+
 November6 owner refinement: `/h` immediately shows eight fresh picks with the
 normal search bar and no guest label. Search is submit-only and real; Clear
 restores its picks. Read `HOWIE_SHORTLIST.md`; do not restore already-shown

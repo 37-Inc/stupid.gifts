@@ -186,7 +186,7 @@ export function validateCatalogSnapshot(input: unknown, now: Date = new Date()):
   for (const raw of value.heldProducts) {
     const p = record(raw); exactKeys(p, HELD_FIELDS);
     if (p.path !== getGiftPath(String(p.slug)) || p.title !== HELD_TITLE || p.description !== HELD_DESCRIPTION
-      || !['inactive', 'duplicate', 'editorial_hold', 'expired', 'rights_unverified'].includes(String(p.reason))
+      || !['inactive', 'duplicate', 'editorial_hold', 'expired', 'rights_unverified', 'unavailable'].includes(String(p.reason))
       || ('affiliateUrl' in p && !httpsUrl(p.affiliateUrl, fixture))) fail('held product');
     if (!fixture && 'affiliateUrl' in p && !retailerIdentityUrl(String(p.affiliateUrl), String(p.id))) fail('held retailer identity');
   }

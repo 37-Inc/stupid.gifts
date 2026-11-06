@@ -251,6 +251,9 @@ test('supplier title/photo churn and dimensional unit casing preserve sealed art
       const p={...f.p,...patch,embedding:undefined,editorialStatus:'stale'},hash=editorialSourceHash(p);
       assert.notEqual(hash,f.hash);await f.store.upsertProduct(p,hash);
       const expected={...f.base,indexable:false};
+      // The shared-copy projection deliberately omits historical display aliases;
+      // those original fields still remain in persistentBase below.
+      if(patch.title){delete expected.punnyTitle;delete expected.wittyDescription;delete expected.humorTags;}
       assert.deepEqual(JSON.parse(f.row(1).public_display_json),expected);
       assert.deepEqual(f.state(1).product.persistentBase,f.base);
       assert.equal(f.row(1).source_facts_hash,hash);assert.equal(f.row(1).editorial_source_hash,f.hash);
@@ -263,7 +266,8 @@ test('supplier title/photo churn and dimensional unit casing preserve sealed art
       const epoch=f.epoch();await f.store.upsertProduct(p,hash);assert.equal(f.epoch(),epoch);
       f.setClock('2026-10-21T07:00:00.123Z');
       const next={...p,title:'Yet another supplier title'};await f.store.upsertProduct(next,editorialSourceHash(next));
-      assert.deepEqual(JSON.parse(f.row(1).public_display_json),expected);
+      const nextExpected={...expected};delete nextExpected.punnyTitle;delete nextExpected.wittyDescription;delete nextExpected.humorTags;
+      assert.deepEqual(JSON.parse(f.row(1).public_display_json),nextExpected);
     }finally{f.close();}
   }
 });
@@ -310,7 +314,8 @@ test('retained article approval cannot promote a previously nonindexable base',a
     f.sqlite.prepare('UPDATE products SET public_display_json=? WHERE id=?').run(canonicalJson(base),f.p.id);
     const p={...f.p,title:'Different retailer title',editorialStatus:'stale',embedding:undefined};
     await f.store.upsertProduct(p,editorialSourceHash(p));
-    assert.deepEqual(JSON.parse(f.row(1).public_display_json),base);
+    const expected={...base};delete expected.punnyTitle;delete expected.wittyDescription;delete expected.humorTags;
+    assert.deepEqual(JSON.parse(f.row(1).public_display_json),expected);
     assert.equal(f.row(1).editorial_status,'stale');
   }finally{f.close();}
 });
@@ -636,6 +641,23 @@ test('daily selection refreshes expired/imminent supplier-only photos before per
     const photos=await f.store.getProductsForRevalidation({daily:true,limit:10,photosOnly:true});
     assert.deepEqual(photos.map(p=>p.id),[id(18),id(19),id(20)],'photo-only care must not fill with permanent images');
     const before=f.epoch();assert.deepEqual(await f.store.getProductsForRevalidation({daily:true,limit:2,featuredIds:[]}),rows.slice(0,2));
+    assert.equal(f.epoch(),before);
+  }finally{f.close();}
+});
+
+test('one weekly-due unavailable listing gets a stock recheck without enlarging or duplicating the daily batch',async()=>{
+  const products=Array.from({length:20},(_,n)=>rawProduct(n+1));
+  const f=await setup({products});
+  try{
+    markPublic(f,products);
+    for(const n of [18,19])f.sqlite.prepare('UPDATE products SET availability_status=?,availability_checked_at=? WHERE id=?')
+      .run('OUT_OF_STOCK',OLD,id(n));
+    f.sqlite.prepare('UPDATE products SET availability_status=?,availability_checked_at=? WHERE id=?').run('UNAVAILABLE',NOW,id(20));
+    const before=f.epoch(),selection={daily:true,limit:10,featuredIds:products.slice(0,8).map(p=>p.id)};
+    const rows=await f.store.getProductsForRevalidation(selection);
+    assert.equal(rows[0].id,id(18));assert.equal(rows.length,10);assert.equal(new Set(rows.map(p=>p.id)).size,10);
+    assert.equal(rows.some(p=>p.id===id(19)||p.id===id(20)),false);
+    assert.deepEqual(await f.store.getProductsForRevalidation({...selection,photosOnly:true}),[]);
     assert.equal(f.epoch(),before);
   }finally{f.close();}
 });

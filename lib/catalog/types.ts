@@ -26,7 +26,7 @@ export interface PublicCatalogProduct extends Pick<Product,
 export type PersistentCatalogProduct = Omit<PublicCatalogProduct, 'eligibleUntil' | 'persistent'>
   & { eligibleUntil: null; indexable: boolean };
 
-export type HeldReason = 'inactive' | 'duplicate' | 'editorial_hold' | 'expired' | 'rights_unverified';
+export type HeldReason = 'inactive' | 'duplicate' | 'editorial_hold' | 'expired' | 'rights_unverified' | 'unavailable';
 export interface SafeHeldProduct {
   id: string;
   publicId: string;

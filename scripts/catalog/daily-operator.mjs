@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import {constants} from 'node:fs';
+import {constants,existsSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {pathToFileURL,fileURLToPath} from 'node:url';
@@ -237,7 +237,7 @@ export function operatorInvocation(argv,calendar){
   if(flag>=0){runKey=args[flag+1];args.splice(flag,2);}
   const [command,approvalSha]=args;
   if(!validCatalogRunKey(runKey)
-    ||!['prepare','review','start','publish','recover','status'].includes(command)
+    ||!['prepare','review','start','publish','recover','status','reconcile-availability'].includes(command)
     ||args.length!==(['publish','recover'].includes(command)?2:1)||photosOnly&&command!=='prepare'||photosOnly&&flag<0
     ||admitFlag>=0&&(command!=='prepare'||flag<0||photosOnly||!admitAsins?.length||admitAsins.length>10
       ||new Set(admitAsins).size!==admitAsins.length||admitAsins.some(id=>! /^[A-Z0-9]{10}$/.test(id))))refuse('command');
@@ -245,7 +245,21 @@ export function operatorInvocation(argv,calendar){
 }
 export async function main(){
 source();const calendar=pacificCatalogCalendar(),{command,approvalSha,runKey,photosOnly,admitAsins}=operatorInvocation(process.argv.slice(2),calendar),directory=CARE+'/runs/'+runKey;
-if(command==='prepare'){console.log(JSON.stringify(await prepare(directory,calendar,photosOnly,admitAsins)));}
+if(command==='prepare'||command==='reconcile-availability'){
+  if(command==='reconcile-availability'&&(!process.argv.includes('--run')||photosOnly||admitAsins))refuse('availability_command');
+  const record=await prepare(directory,calendar,photosOnly,admitAsins);
+  if(command==='prepare'||record.state==='skipped')console.log(JSON.stringify(record));
+  else{
+    const config=validateCloudflareWeeklyConfig(await json(record.configPath,record.configSha256)),entry=options(config,record.configPath,record.configSha256);
+    const w=await openRunWorkspace({...entry.workspace,mode:existsSync(WORKSPACE+'/runs/'+config.runId+'/manifest.json')?'resume':'create'});
+    try{const token=await resolveWranglerOAuth(),db=await (await load('scripts/catalog/d1-write-rest.ts')).createCatalogD1Rest({
+      accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,limits:config.limits,requestLimit:'observe',
+      accounting:{scope:{accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName},initial:await w.budget(),reserve:r=>w.reserveBudget(r),settle:(id,s)=>w.settleBudget(id,s)}});
+      await (await load('scripts/catalog/availability-publication.ts')).beginAvailabilityPublication({workspace:w,db,config,configSha256:record.configSha256});
+      console.log(JSON.stringify({state:'requires_agent_review',runId:config.runId,supplierRequests:0,modelRequests:0,productMutations:0}));
+    }finally{await w.close();}
+  }
+}
 else{
   const record=await json(directory+'/operator.json'),recovering=command==='recover';
   if(!recovering&&(record.helperSha256!==self||record.source!==SOURCE))refuse('operator_changed');
