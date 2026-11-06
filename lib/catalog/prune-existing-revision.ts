@@ -222,6 +222,8 @@ export function prunedVectorPlan(revision: PrunedRevision): PrunedVectorPlan {
     products:[],absentIds:[],preserved:structuredClone(revision.nativePreservation)};
   const rows = new Map(revision.sourceRows.map(row => [row.public_id, row]));
   const ready = new Set(revision.snapshot.products.map(product => product.publicId));
+  const cleared=new Set(revision.request.previous.products.filter(persistentPublicProduct).map(p=>p.publicId));
+  const unavailable=new Set(revision.snapshot.heldProducts.filter(p=>p.reason==='unavailable'&&cleared.has(p.publicId)).map(p=>p.publicId));
   // Permanent keyword/listing clearance is not an embedding-input or supplier
   // observation grant. Only the finite semantic lane needs revision promotion.
   const historical=new Set((revision.nativeHistory??[]).flatMap(group=>group.ids));
@@ -229,7 +231,7 @@ export function prunedVectorPlan(revision: PrunedRevision): PrunedVectorPlan {
     && (!revision.request.context||Date.parse(product.eligibleUntil)>Date.parse(revision.request.context.cutoff)));
   const duplicate=ownerBasePublicDuplicate((revision.request as PruneRequest&{ownerBaseReview?:OwnerBaseCatalogReview}).ownerBaseReview,revision.request.previous);
   if(duplicate&&revision.additionalAbsentIds?.includes(duplicate.publicId))throw Error('prune_duplicate_native_change');
-  const absent = revision.request.previous.products.filter(product => !ready.has(product.publicId)&&product.publicId!==duplicate?.publicId).map(product => product.publicId);
+  const absent = revision.request.previous.products.filter(product => !ready.has(product.publicId)&&product.publicId!==duplicate?.publicId&&!unavailable.has(product.publicId)).map(product => product.publicId);
   if (semantic.some(product => {
     const value = rows.get(product.publicId)?.embedding_text_hash;
     return value !== null && (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value));

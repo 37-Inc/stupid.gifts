@@ -9,6 +9,7 @@ test('scheduled identity prevents duplicate invocations while named runs can rep
   assert.equal(operatorInvocation(['prepare','--run','fresh-discovery'],calendar).runKey,'fresh-discovery');
   assert.equal(operatorInvocation(['--run','fresh-discovery','publish','a'.repeat(64)],calendar).approvalSha,'a'.repeat(64));
   assert.equal(operatorInvocation(['recover','a'.repeat(64),'--run','scheduled-2026-11-02'],calendar).command,'recover');
+  assert.equal(operatorInvocation(['reconcile-availability','--run','availability-2026-11-02'],calendar).command,'reconcile-availability');
   for(const args of [['prepare','--run'],['prepare','--run','../escape'],['start','extra'],
     ['prepare','--run','one','--run','two'],['publish'],['unknown']])assert.throws(()=>operatorInvocation(args,calendar),/routine_command/);
 });

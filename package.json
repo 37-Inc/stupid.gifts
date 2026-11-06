@@ -53,6 +53,7 @@
     "catalog:purge": "node --import tsx scripts/catalog/purge-workspaces.ts",
     "catalog:cloudflare": "node --import tsx scripts/catalog/run-cloudflare-weekly.ts",
     "catalog:care": "node --import tsx scripts/catalog/daily-operator.mjs",
+    "test:catalog-availability": "node --import tsx --test tests/catalog-retail-availability.test.mjs tests/catalog-availability-publication.test.mjs",
     "catalog:homepage": "node --import tsx scripts/catalog/homepage-editor.mjs",
     "catalog:campaigns": "node --import tsx scripts/catalog/campaign-operator.mjs",
     "test:homepage": "node --import tsx --test tests/homepage-editor.test.mjs tests/static-site-merchandising.test.mjs",

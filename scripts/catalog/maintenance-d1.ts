@@ -475,8 +475,13 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
         const now=Date.parse(String((await all<{now:string}>(`SELECT ${NOW} now`))[0].now));
         const urgent=publicProducts.filter(p=>typeof p.photoExpiresAt==='string'&&Date.parse(p.photoExpiresAt)<=now+36*3600000)
           .sort((a,b)=>maintenanceTimeOrder(a.photoExpiresAt,b.photoExpiresAt,false)||compare(a.id,b.id));
+        // Cleared unavailable records remain in this private source pool. Give
+        // one weekly-due stock recheck a slot; a real positive response can
+        // restore its stable page without re-admission or new copy generation.
+        const rechecks=publicProducts.filter(p=>['OUT_OF_STOCK','UNAVAILABLE'].includes(String(p.availabilityStatus))
+          &&p.availabilityCheckedAt!==null&&Date.parse(p.availabilityCheckedAt)<=now-7*86400000);
         const seen=new Set<string>();
-        const selected=[...urgent,...(selection.photosOnly?[]:[...featuredProducts.slice(0,featuredSlots),...others.slice(0,otherSlots),
+        const selected=[...urgent,...(selection.photosOnly?[]:[...rechecks.slice(0,1),...featuredProducts.slice(0,featuredSlots),...others.slice(0,otherSlots),
           ...featuredProducts.slice(featuredSlots),...others.slice(otherSlots)])]
           .filter(p=>!seen.has(p.id)&&Boolean(seen.add(p.id))).slice(0,limit);
         const rows=[];
