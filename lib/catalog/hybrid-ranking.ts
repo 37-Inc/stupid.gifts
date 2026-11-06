@@ -30,11 +30,9 @@ export function rankHybridResults<T extends RankedProduct>(query:string,lexical:
     const fullCoverage=terms.every(t=>title.includes(t)||description.includes(t));
     // Literal objects/variants cannot be displaced by an unrelated campaign.
     const exact=title===needle || terms.length>1&&title.includes(needle);
-    // A single retrieval lane stays in one coarse band regardless of an old
-    // catalog-ID tie-break. Agreement between both lanes can strengthen it.
-    const agreement=Math.floor(entry.rrf/0.02);
-    const relevance=exact?100:fullCoverage?30+agreement
-      :titleCoverage>=.5?20+agreement:10+agreement;
+    // Retrieval agreement breaks ties after the approved business tiers. It
+    // must not elevate an ordinary object above an equally relevant gag gift.
+    const relevance=exact?100:fullCoverage?30:titleCoverage>=.5?20:10;
     const signal=merchandisingForProduct(entry.product,merchandising);
     return{...entry,exact,relevance,appeal:appealPriority(signal?.appeal),
       commission:usableCommissionPriority(signal,now),group:signal?.variantGroup};

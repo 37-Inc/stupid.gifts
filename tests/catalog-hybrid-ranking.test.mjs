@@ -21,6 +21,13 @@ test('expired commission loses preference on the same cached candidate set',()=>
   assert.equal(rankHybridResults('fishing',[a,b],[],signals,Date.parse('2026-11-05T11:00:00Z'))[0].id,'b');
   assert.equal(rankHybridResults('fishing',[a,b],[],signals,Date.parse('2026-11-05T13:00:00Z'))[0].id,'a');
 });
+test('retrieval-lane agreement does not override gag appeal within equal literal relevance',()=>{
+  const ordinary=p('net','Fishing net'),funny=p('funny','Fishing joke toy');
+  assert.equal(rankHybridResults('fishing',[ordinary,funny],[ordinary],
+    {net:{appeal:'ordinary'},funny:{appeal:'standout'}})[0].id,'funny');
+  assert.equal(rankHybridResults('fishing net',[ordinary,funny],[ordinary],
+    {net:{appeal:'ordinary'},funny:{appeal:'standout'}})[0].id,'net');
+});
 test('bounded lexical retrieval does not discard a reviewed gag gift behind ordinary ASIN ties',async()=>{
   const products=Array.from({length:200},(_,i)=>({...p(String(i).padStart(4,'0'),'Cat object','A cat object.'),source:'amazon',eligibleUntil:null}));
   const snapshot={catalogRevision:'fixture',products},keyword=snapshotKeywordSearch(snapshot,{'0199':{appeal:'standout'}});
