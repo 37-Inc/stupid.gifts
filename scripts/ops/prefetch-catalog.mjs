@@ -432,7 +432,7 @@ function isGenericSloganMug(title) {
   return isMug && !includesTitleTerm(title, DISCOVERY_MUG_PHYSICAL_NOVELTY_TERMS);
 }
 
-function discoveryCandidateBlockReason(product, minQualityScore = 0.65) {
+function discoveryCandidateBlockReason(product, minQualityScore = 0.65, ownerSelected = false) {
   if (!product.imageUrl) return 'missing_image';
   if (!product.affiliateUrl) return 'missing_destination';
   if (!product.isActive) {
@@ -440,6 +440,9 @@ function discoveryCandidateBlockReason(product, minQualityScore = 0.65) {
     return availability && availability !== 'UNKNOWN' ? 'unavailable' : 'inactive_candidate';
   }
   if (product.qualityScore < minQualityScore) return 'low_quality_score';
+  // Exact owner picks have already had their gag appeal judged. Keep source
+  // readiness/dedup/copy review, not the automatic keyword taste heuristic.
+  if (ownerSelected) return undefined;
   if (includesTitleTerm(product.title, DISCOVERY_TASTE_EXCLUSIONS)) return 'taste_exclusion';
   if (isGenericSloganMug(product.title)) return 'generic_format';
   const hasFormatException = includesTitleTerm(product.title, DISCOVERY_FORMAT_EXCEPTIONS);
@@ -450,8 +453,8 @@ function discoveryCandidateBlockReason(product, minQualityScore = 0.65) {
   return undefined;
 }
 
-function isHighQualityDiscoveryCandidate(product, minQualityScore = 0.65) {
-  return discoveryCandidateBlockReason(product, minQualityScore) === undefined;
+function isHighQualityDiscoveryCandidate(product, minQualityScore = 0.65, ownerSelected = false) {
+  return discoveryCandidateBlockReason(product, minQualityScore, ownerSelected) === undefined;
 }
 
 function deduplicateCandidates(products, threshold = 0.8) {
@@ -1180,7 +1183,8 @@ function finalizeProducts(products, theme, options) {
     .filter(Boolean)
     .map((product) => ({
       ...product,
-      qualityScore: scoreCandidate(product),
+      // This score is editorial fit, not a supplier rating or factual claim.
+      qualityScore: options.admitAsins ? 0.8 : scoreCandidate(product),
     }));
 }
 
@@ -1803,7 +1807,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
     .map((theme) => theme.trim())
     .filter(Boolean);
   const themePool = options.themes || envThemes || DEFAULT_THEMES;
-  const themes = options.themes
+  const themes = options.admitAsins ? ['owner-selected campaign gifts'] : options.themes
     ? themePool.slice(0, options.themeLimit)
     : selectRotatingThemes(themePool, options.themeLimit, new Date(), options.discoveryRunKey);
   const seen = new Map();
@@ -1954,7 +1958,10 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   for (const theme of themes) {
     let found = [];
     try {
-      found = await searchAmazonCandidates(theme, options, evidence);
+      found = options.admitAsins
+        ? finalizeProducts((await observedAmazon('getItems', options.admitAsins, evidence))
+          .filter(product => options.admitAsins.includes(product.id)), theme, options)
+        : await searchAmazonCandidates(theme, options, evidence);
       console.log(`${theme}: ${found.length} candidate discoveries`);
       discoveredCandidates += found.length;
     } catch (error) {
@@ -1995,7 +2002,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   candidates.sort((a, b) => b.qualityScore - a.qualityScore || a.id.localeCompare(b.id));
   const rawCandidates = candidates.length;
   const rejectedByQuality = candidates
-    .map((product) => ({ product, reasonCode: discoveryCandidateBlockReason(product, options.minQualityScore) }))
+    .map((product) => ({ product, reasonCode: discoveryCandidateBlockReason(product, options.minQualityScore, Boolean(options.admitAsins)) }))
     .filter(({ reasonCode }) => reasonCode);
   rejectedByQuality.forEach(({ product, reasonCode }) => telemetry.items.record(product, {
     phase: 'discovery',
@@ -2006,7 +2013,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
     details: { qualityScore: product.qualityScore, minimumQualityScore: options.minQualityScore },
   }));
   const qualityCandidates = candidates.filter((product) => (
-    isHighQualityDiscoveryCandidate(product, options.minQualityScore)
+    isHighQualityDiscoveryCandidate(product, options.minQualityScore, Boolean(options.admitAsins))
   ));
   const qualityRejected = rejectedByQuality.length;
   candidates.splice(0, candidates.length, ...qualityCandidates);

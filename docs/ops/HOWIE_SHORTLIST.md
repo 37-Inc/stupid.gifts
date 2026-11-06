@@ -1,9 +1,11 @@
 # Stupid Gifts — Instant show shortlist
 
 Owner direction, November 6: Howie opens `/h` on his phone, chooses a gift and
-shows its photo to the camera. The page now renders the actual curated gifts
-immediately, including without JavaScript. No typing, fake search match, reveal
-button, unrelated opening assortment or client state is needed.
+shows its photo to the camera. The page renders the actual curated gifts
+immediately, including without JavaScript. It looks like the regular storefront:
+same heading, search bar and shared cards, with no guest-specific label. Search
+runs only on Search/Enter; Clear and Back restore the shortlist on `/h`.
+There is no fake search match or reveal gate.
 
 The current Billy Ray assortment, in order:
 
@@ -11,15 +13,16 @@ The current Billy Ray assortment, in order:
 - Chicken-leg socks — a visual alternative to cowboy boots.
 - Guitar cutting board — an instrument for the kitchen.
 - Drinking rooster wine holder — a bird holding a bottle upside down.
-- Screaming goat — a tiny, loud backup singer.
-- Fortune-telling pickle — an absurd conversation starter.
-- Raw chicken vase — the strong visual fallback from the existing catalog.
+- Tortilla blanket — wrap yourself into a burrito.
+- Raccoon dumpster-fire desk organizer — a very small workplace disaster.
+- Desktop boxing set — a miniature punching bag and tiny gloves.
 - Lobster claw oven mitts — another immediately recognizable visual joke.
 
 These are editorial rationales, not claims about the guest's interests,
 purchases, endorsement or a confirmed appearance. The private rehearsal stays
 unlisted/noindex; it is not an episode archive or an acquisition search page.
-Previous guest selections remain in Git history.
+The goat, fortune-telling pickle and raw chicken vase were already shown and
+are intentionally absent from this edition. Previous picks remain in Git history.
 
 `static-site/lib/show-rehearsal.ts` owns only ordered canonical slugs. Resolve
 against the current public catalog. Never silently substitute unreviewed gifts.

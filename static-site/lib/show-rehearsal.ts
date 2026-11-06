@@ -8,9 +8,9 @@ export const SHOW_PICK_SLUGS = [
   "cluck-yeah-chicken-leg-socks-for-poultry-lovers",
   "guitar-shaped-cutting-board-wood-for-kitchen",
   "rooster-but-not-a-roost-wine-bottle-holder",
-  "screaming-goat-a-desk-toy-for-loud-laughter",
-  "pickle-your-problems-away-mystic-pickle-fortune-teller",
-  "poultry-in-motion-the-raw-chicken-vase-surprise",
+  "wrap-it-up-tortilla-blanket-for-foodies",
+  "trash-talk-with-the-raccoon-desk-buddy",
+  "desktop-boxing-knock-out-stress-in-style",
   "lobster-claw-oven-mitts-quilted-cotton-lining-design-heat-resistant-crab-claw-gloves-microwave-oven-gloves-lobster-oven",
 ] as const;
 

@@ -14,7 +14,7 @@ const product = (slug, id, overrides = {}) => ({
 test("Billy Ray shortlist is distinct, visually relevant and excludes retired gags", () => {
   assert.equal(SHOW_PICK_SLUGS.length, 8);
   assert.equal(new Set(SHOW_PICK_SLUGS).size, SHOW_PICK_SLUGS.length);
-  for (const slug of SHOW_PICK_SLUGS) assert.doesNotMatch(slug, /wiener|belly-fanny|farting-ring/);
+  for (const slug of SHOW_PICK_SLUGS) assert.doesNotMatch(slug, /wiener|belly-fanny|farting-ring|screaming-goat|mystic-pickle|raw-chicken-vase/);
   assert.equal(SHOW_PICK_SLUGS[0], "country-cat-cowboy-decor-for-cat-lovers");
   assert.ok(SHOW_PICK_SLUGS.includes("guitar-shaped-cutting-board-wood-for-kitchen"));
 });
@@ -30,10 +30,12 @@ test("show picks preserve fixed order and exact shared product copy", () => {
   assert.deepEqual(selected, products);
 });
 
-test("show page renders picks directly without a search, reveal gate or per-page copy", () => {
+test("show page renders fresh picks immediately with ordinary storefront search and no guest label", () => {
   const page = fs.readFileSync(new URL("../static-site/app/h/page.tsx", import.meta.url), "utf8");
   assert.match(page, /picks\.map/);
   assert.match(page, /indexable: false/);
+  assert.match(page, /<Search action="\/h" autoSearch=\{false\}>/);
+  assert.doesNotMatch(page, /Hand-picked for|show-intro|Billy Ray/);
   assert.doesNotMatch(page, /ShowRehearsal|selectShowOpening|SHOW_PICK_COPY|presentation=|hidden=|<form|<input/);
 });
 

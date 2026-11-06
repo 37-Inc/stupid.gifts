@@ -107,10 +107,18 @@ export async function withCatalogCadence({ workspace, repository, now = clock, d
   }
 }
 
-export async function dailyCatalogPhases(cadence, featuredIds = [], photosOnly = false) {
+export async function dailyCatalogPhases(cadence, featuredIds = [], photosOnly = false, admitAsins) {
   if (!Array.isArray(featuredIds) || featuredIds.length > 100 || new Set(featuredIds).size !== featuredIds.length || featuredIds.some(id => !ASIN.test(id)))
     throw new Error('daily_featured_ids_invalid');
   const plan = await cadence.plan(), phases = [];
+  // Explicit owner-picked admissions reuse the normal new-only review/delivery
+  // pipeline, without unrelated searches or an existing-product refresh batch.
+  if (admitAsins !== undefined) {
+    if (photosOnly || !Array.isArray(admitAsins) || !admitAsins.length || admitAsins.length > 10
+      || new Set(admitAsins).size !== admitAsins.length || admitAsins.some(id => !ASIN.test(id))) throw new Error('admission_asins_invalid');
+    return plan.daily ? [{ ...parseArgs(['--max-new', String(admitAsins.length), '--backfill-limit', '0']),
+      admitAsins, discoveryNewOnly: true, enrichSelectedExisting: false }] : [];
+  }
   if (plan.daily) phases.push({ ...parseArgs(['--revalidate', '--revalidate-limit', '10', '--backfill-limit', '0', '--skip-enrichment']),
     dailyRefresh: true, ...(photosOnly ? { photosOnly: true } : {}), enrichSelectedExisting: !photosOnly && cadence.calendar.monday,
     discoveryNewOnly: false, featuredIds, assertRefreshDay: cadence.assertDay });
@@ -127,7 +135,7 @@ export function dailyCatalogExecutor(cadence, execute = executeCatalog) {
   return async (options, seed, telemetry, store, evidence) => {
     const daily = options.dailyRefresh === true;
     if (options.enrichSelectedExisting && (!daily || !cadence.calendar.monday)) throw new Error('daily_enrichment_monday_only');
-    await cadence.reserve(daily ? 'daily' : 'discovery', telemetry.runId);
+    await cadence.reserve(daily || options.admitAsins ? 'daily' : 'discovery', telemetry.runId);
     cadence.assertDay();
     const selected = new Set(), existing = daily ? null : new Set((await store.getActiveCatalogIdentities({ includeInactive: true })).map(p => p.id));
     let inserts = 0;
@@ -140,7 +148,8 @@ export function dailyCatalogExecutor(cadence, execute = executeCatalog) {
       },
       async upsertProduct(product, hash) {
         if (daily) allowed([product.id]);
-        else if (existing.has(product.id) || inserts >= 20) throw new Error('discovery_existing_mutation_forbidden');
+        else if (existing.has(product.id) || inserts >= (options.admitAsins?.length ?? 20)
+          || options.admitAsins && !options.admitAsins.includes(product.id)) throw new Error('discovery_existing_mutation_forbidden');
         const result = await store.upsertProduct(product, hash);
         if (!daily) { existing.add(product.id); inserts++; if (!result.inserted) throw new Error('discovery_insert_not_new'); }
         return result;
@@ -156,8 +165,8 @@ export function dailyCatalogExecutor(cadence, execute = executeCatalog) {
 }
 
 export async function runDailyCatalogWithBackend({ cadence, featuredIds = /** @type {string[]} */ ([]), execute = executeCatalog,
-  preservePermanentListings = false, photosOnly = false, ...backend }) {
-  const phases = (await dailyCatalogPhases(cadence, featuredIds, photosOnly)).map(phase => preservePermanentListings
+  preservePermanentListings = false, photosOnly = false, admitAsins, ...backend }) {
+  const phases = (await dailyCatalogPhases(cadence, featuredIds, photosOnly, admitAsins)).map(phase => preservePermanentListings
     ? { ...phase,deactivateMissing:false } : phase);
   if (!phases.length) return { state: 'skipped', reason: 'cadence_already_reserved' };
   return runCatalogWithBackend(phases, { ...backend, mode: 'daily', trigger: 'scheduled', execute: dailyCatalogExecutor(cadence, execute) });

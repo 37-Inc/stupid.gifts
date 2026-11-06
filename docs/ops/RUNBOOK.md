@@ -6,9 +6,10 @@ latest protected receipt take precedence over historical journal entries.
 
 ## Current state
 
-November6 owner update: `/h` is now an instant, fixed Billy Ray shortlist, not
-a search/reveal interaction. Read `HOWIE_SHORTLIST.md`. Preserve its eight
-canonical picks and shared copy; do not restore the older opening/reveal sets.
+November6 owner refinement: `/h` immediately shows eight fresh picks with the
+normal search bar and no guest label. Search is submit-only and real; Clear
+restores its picks. Read `HOWIE_SHORTLIST.md`; do not restore already-shown
+goat/pickle/vase or older opening/reveal sets.
 This serving change does not alter catalog membership, supplier observations,
 homepage editorial or campaign participation.
 
@@ -254,8 +255,8 @@ aggregate usage estimates are now advisory, as described below.
   `docs/ops/HOMEPAGE_EDITOR.md`; failed optional curation reuses the last good
   edition rather than blocking catalog care.
 - Directory `/gifts` and Weird Gift Index stay404; individual `/gifts/[slug]`
-  pages remain canonical. The unlisted `/h` rehearsal stays noindex and keeps
-  its separate opening assortment and seven approved reveal products.
+  pages remain canonical. The unlisted `/h` page stays noindex with its current
+  eight immediate picks and submit-only search; see `HOWIE_SHORTLIST.md`.
 - No social/Pinterest/Slack posts, new timer/hosted Cron, paid service,
   quota-consuming load test, blanket enrichment or Creator Product Research.
 
@@ -330,6 +331,17 @@ label resumes the same run; choosing another label starts a separate batch only
 after prior publication/ownership checks pass. Scheduled invocations omit it
 and share the stable `scheduled-YYYY-MM-DD` identity, preventing duplicate timer
 delivery from creating another batch. Legacy day/week receipts remain untouched.
+
+Owner-picked exact new products use `prepare --run <unique-label> --admit-asins
+ASIN1,ASIN2`. Later start/review/publish commands use only the SAME saved run
+label. This pins up to ten exact ASINs, gets only those products, and reuses
+source readiness/family/catalog deduplication, short-copy review, embeddings and
+publication. It cannot update existing identities or join campaigns. It performs
+no unrelated searches or refresh batch, and does not change scheduled cadence.
+This explicit admission may use the existing product model outside Monday;
+ordinary Tuesday–Sunday maintenance remains model-free.
+Exact owner picks carry a reviewed editorial-fit score of0.8 instead of the
+automatic keyword taste heuristic; supplier ratings/facts are never altered.
 
 ### Supplier-dependent photos
 
