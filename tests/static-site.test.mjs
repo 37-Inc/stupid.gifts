@@ -10,7 +10,7 @@ import { createBrowseRelease } from "../static-site/lib/browse.ts";
 import { createOgRelease } from "../static-site/lib/og.ts";
 import { siteIdentity } from "../static-site/lib/site-identity.ts";
 import { assertOwnedCodeSafe } from "../static-site/lib/retention.ts";
-import { exportedRoutes, exportSourceMode, exportGeneratedAt } from "./helpers/static-export.mjs";
+import { exportedRoutes, exportSourceMode, exportGeneratedAt, exportHomepage } from "./helpers/static-export.mjs";
 import { guides, selectGuideProducts } from "../static-site/lib/guides.ts";
 import {
   eligiblePool,
@@ -209,7 +209,7 @@ test(
   "initial browse/Random payloads stay small and their public JSON matches the release",
   { skip: !fs.existsSync(new URL("out/index.html", root)) },
   () => {
-    const release = createBrowseRelease(exportSnapshot, exportGeneratedAt);
+    const release = createBrowseRelease(exportSnapshot, exportGeneratedAt, exportHomepage);
     const home = fs.readFileSync(new URL("out/index.html", root), "utf8");
     const random = fs.readFileSync(
       new URL("out/random-gift.html", root),
@@ -322,9 +322,12 @@ test(
       if (readyProduct.punnyTitle)
         assert.match(detail, /Retailer listing name/);
       assert.doesNotMatch(detail, /"@type":"Offer"|\$0\.00/);
-      const pool=createBrowseRelease(exportSnapshot, exportGeneratedAt).random;
+      const pool=createBrowseRelease(exportSnapshot, exportGeneratedAt, exportHomepage).random;
       assert.ok(pool.poolSize>0&&pool.poolSize<=48);
-      assert.match(random,/<button\b[^>]*type="button"/);
+      if(pool.poolSize>1){
+        assert.match(random,/class="random-loading" role="status"/);
+        assert.match(random,/Choosing a gift/);
+      }else assert.match(random,/<button\b[^>]*type="button"/);
       assert.match(random,/aria-live="polite"/);
       for (const guide of guides) {
         const html = fs.readFileSync(

@@ -10,9 +10,10 @@ const manifest=fs.existsSync(manifestPath)?JSON.parse(fs.readFileSync(manifestPa
 export const exportSourceMode=manifest?.sourceMode??siteSourceMode;
 export const exportIdentity=manifest?siteIdentityFor(exportSourceMode):siteIdentity;
 export const exportGeneratedAt=manifest?.generatedAt;
+export const exportHomepage=manifest?.homepage;
 export function exportedRoutes(snapshot,inventory){
   // Validate one-hop target/path membership without loading every PNG body.
   const empty=new Uint8Array();
   const logical=[...expandRscAssets(new Map(inventory.map(name=>[name,empty])),manifest?.assetAliases).keys()].sort();
-  return createStaticRoutes(snapshot,logical,undefined,exportIdentity,exportGeneratedAt??snapshot.generatedAt);
+  return createStaticRoutes(snapshot,logical,undefined,exportIdentity,exportGeneratedAt??snapshot.generatedAt,exportHomepage);
 }
