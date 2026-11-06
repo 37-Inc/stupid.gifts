@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Stupid Gifts — ChatGPT prototype</title>
+<style>*{box-sizing:border-box}body{margin:0;background:#fafafa;color:#242424;font:14px/1.5 system-ui}main{max-width:800px;margin:36px auto;padding:0 20px}.eyebrow{color:#666;font-weight:600;font-size:11px;letter-spacing:1px}h1{font-size:25px;letter-spacing:-.7px;margin:8px 0}p{color:#666;margin:6px 0}form{display:flex;gap:8px;margin:20px 0 12px}input,button{font:inherit;border-radius:8px;border:1px solid #ddd;padding:10px}input{flex:1;min-width:0;background:white}button{background:#242424;color:white;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.examples{display:flex;gap:6px;flex-wrap:wrap}.examples button{background:white;color:#444;font-size:12px;padding:6px 10px}small{display:block;color:#666;margin:12px 0}.turn{margin:28px 0}.prompt{display:block;width:fit-content;max-width:85%;margin-left:auto;background:#eee;color:#242424;padding:10px 16px;border-radius:18px}.app-label{font-weight:600;font-size:13px;margin:18px 0 8px}.response{font-size:13px;margin-top:8px}.empty{padding:16px;border:1px solid #ddd;border-radius:12px}iframe{display:block;width:100%;height:350px;border:0;background:transparent}.boundary{font-size:11px;color:#777}input:focus-visible,button:focus-visible{outline:2px solid #242424;outline-offset:2px}@media(max-width:440px){main{padding:0 12px;margin-top:20px}h1{font-size:22px}form button{font-size:12px}}
+[data-preview-theme=dark] body{background:#171717;color:#ececec}[data-preview-theme=dark] p,[data-preview-theme=dark] small,[data-preview-theme=dark] .eyebrow{color:#b4b4b4}[data-preview-theme=dark] input,[data-preview-theme=dark] .examples button{background:#242424;color:#ececec;border-color:#414141}[data-preview-theme=dark] .prompt{background:#303030;color:#ececec}</style></head><body><main>
+<div class="eyebrow">LOCAL HOST SIMULATION</div><h1>Gift ideas from a prompt.</h1><p>The framed carousel is the app. This surrounding page simulates a conversation; use the private ChatGPT conversation for real host evidence.</p>
+<form id="search"><input name="query" value="I'm looking for a gift for my dad who loves cats" aria-label="Gift request" required minlength="2" maxlength="240"><button>Find gifts</button></form>
+<div class="examples"><button data-query="I'm looking for a gift for my dad who loves cats">Dad who loves cats</button><button data-query="I'm looking for a gift for my sister who loves barbecuing">Sister who barbecues</button><button data-query="A gift for someone who loves gardening">Gardening gifts</button></div>
+<small id="status" role="status">Loading gift catalog…</small>
+<div id="conversation"></div>
+</main><script>
+const form=document.getElementById('search');const frames=new Map();const conversation=document.getElementById('conversation');
+let catalogMode='fixture';
+const options=new URLSearchParams(location.search);const theme=options.get('theme')==='dark'?'dark':'light';
+const selectedIds=options.get('ids')?.split(',').map(id=>id.trim()).filter(Boolean);
+document.documentElement.dataset.previewTheme=theme;document.documentElement.style.colorScheme=theme;
+if(options.has('query'))form.elements.query.value=options.get('query');
+const catalogNotice=()=>catalogMode==='fixture'?'Imaginary sample gifts. No AI calls. Each prompt creates a new carousel.':'Real Stupid Gifts catalog · local preview. No AI calls. Each prompt creates a new carousel.';
+async function call(params){const response=await fetch('/preview/call',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(params)});if(!response.ok)throw new Error('Tool call failed');return response.json()}
+function post(frame,data){frame.contentWindow.postMessage({jsonrpc:'2.0',...data},location.origin)}
+async function search(){
+  const prompt=form.elements.query.value.trim();const button=form.querySelector('button');button.disabled=true;document.getElementById('status').textContent='Finding gift ideas…';
+  try{
+    // The harness displays the first matches; ChatGPT curates IDs in the real app.
+    let candidates,result;
+    if(selectedIds?.length){result=await call({name:'render_gifts',arguments:{ids:selectedIds}});candidates=result.structuredContent}
+    else{candidates=(await call({name:'search_gifts',arguments:{query:prompt}})).structuredContent;result=candidates.gifts.length?await call({name:'render_gifts',arguments:{ids:candidates.gifts.slice(0,6).map(g=>g.id)}}):{structuredContent:candidates}}
+    catalogMode=candidates.mode;
+    const qa=options.get('state');
+    if(['empty','unavailable','not_found'].includes(qa))result={structuredContent:{...candidates,status:qa,gifts:[],message:qa==='empty'?'No matching gifts were found. Try different interests.':qa==='not_found'?'A gift is no longer in the catalog. Search again.':'The catalog is unavailable. Try again later.'}};
+    if(qa==='broken-image'&&result.structuredContent.gifts.length)result.structuredContent.gifts[0].imageUrl='https://stupid.gifts/__qa-missing-image.jpg';
+    const turn=document.createElement('section');turn.className='turn';const request=document.createElement('p');request.className='prompt';request.textContent=prompt;turn.append(request);
+    const label=document.createElement('div');label.className='app-label';label.textContent='Stupid Gifts';turn.append(label);
+    {const frame=document.createElement('iframe');frame.title='Gift carousel';frames.set(frame,{result});frame.src='/widget';turn.append(frame)}
+    
+    if(result.structuredContent.gifts.length){const response=document.createElement('p');response.className='response';response.textContent=catalogMode==='fixture'?'Sample gift ideas matched to those interests.':'Gift ideas from the Stupid Gifts catalog.';turn.append(response)}
+    conversation.append(turn);document.getElementById('status').textContent=(qa?'Synthetic UI QA state: '+qa+' · ':'')+(selectedIds?.length?'Exact selected cards · local QA · ':'')+catalogNotice();
+  }catch{document.getElementById('status').textContent='Search failed. Try again.'}finally{button.disabled=false}
+}
+window.addEventListener('message',async(event)=>{
+  const frame=[...frames.keys()].find(f=>f.contentWindow===event.source);if(!frame||event.origin!==location.origin||event.data?.jsonrpc!=='2.0')return;
+  const {id,method,params}=event.data;try{
+    if(method==='ui/initialize')post(frame,{id,result:{protocolVersion:'2026-01-26',hostInfo:{name:'Stupid Gifts local preview',version:'0.1.0'},hostCapabilities:{openLinks:{}},hostContext:{theme,displayMode:'inline'}}});
+    else if(method==='ui/notifications/initialized'){if(options.get('state')==='loading')return;if(options.get('state')==='cancelled')post(frame,{method:'ui/notifications/tool-cancelled',params:{}});else post(frame,{method:'ui/notifications/tool-result',params:frames.get(frame).result});}
+    else if(method==='ui/open-link'){const url=new URL(params.url);if(url.protocol!=='https:'||url.hostname!=='stupid.gifts'||!url.pathname.startsWith('/gifts/'))throw new Error('Unsupported link');window.open(url.href,'_blank','noopener');post(frame,{id,result:{}})}
+    else if(method==='ui/notifications/size-changed')frame.style.height=Math.max(120,Math.min(1000,params.height+2))+'px';
+    else if(id!==undefined)post(frame,{id,error:{code:-32601,message:'Unsupported preview capability'}});
+  }catch{post(frame,{id,error:{code:-32000,message:'Preview request failed'}})}
+});
+form.onsubmit=e=>{e.preventDefault();void search()};for(const button of document.querySelectorAll('[data-query]'))button.onclick=()=>{form.elements.query.value=button.dataset.query;void search()};void search();
+</script></body></html>

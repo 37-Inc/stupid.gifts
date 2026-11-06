@@ -1,0 +1,237 @@
+[
+  {
+    "id": "sample-spreadsheet-cup",
+    "title": "Spreadsheet Survivor Cup",
+    "description": "An imaginary coffee cup for the person whose tabs have tabs.",
+    "tags": [
+      "office",
+      "coffee",
+      "coworker",
+      "desk",
+      "funny"
+    ],
+    "illustration": "cup"
+  },
+  {
+    "id": "sample-meeting-sign",
+    "title": "This Meeting Could Be a Nap",
+    "description": "An imaginary desk sign with a very reasonable proposal.",
+    "tags": [
+      "office",
+      "coworker",
+      "desk",
+      "funny"
+    ],
+    "illustration": "desk"
+  },
+  {
+    "id": "sample-office-socks",
+    "title": "Out of Office Socks",
+    "description": "Imaginary socks for a coworker mentally on vacation.",
+    "tags": [
+      "office",
+      "coworker",
+      "socks",
+      "funny"
+    ],
+    "illustration": "sock"
+  },
+  {
+    "id": "sample-plant-cup",
+    "title": "Powered by Coffee and Photosynthesis",
+    "description": "An imaginary mug for a gardener with a caffeine habit.",
+    "tags": [
+      "garden",
+      "gardening",
+      "plant",
+      "coffee",
+      "dad",
+      "mug"
+    ],
+    "illustration": "cup"
+  },
+  {
+    "id": "sample-plant-stakes",
+    "title": "Dramatic Plant Nameplates",
+    "description": "Imaginary garden stakes that let each plant announce its demands.",
+    "tags": [
+      "garden",
+      "gardening",
+      "plant",
+      "dad",
+      "funny"
+    ],
+    "illustration": "plant"
+  },
+  {
+    "id": "sample-planter",
+    "title": "Tiny Desk Jungle Planter",
+    "description": "An imaginary planter that makes an office feel slightly less like an office.",
+    "tags": [
+      "garden",
+      "plant",
+      "office",
+      "coworker",
+      "weird"
+    ],
+    "illustration": "plant"
+  },
+  {
+    "id": "sample-cat-cup",
+    "title": "My Cat Is My Manager",
+    "description": "An imaginary mug for someone supervised by a very small boss.",
+    "tags": [
+      "cat",
+      "cats",
+      "coffee",
+      "office",
+      "coworker",
+      "mug"
+    ],
+    "illustration": "cup"
+  },
+  {
+    "id": "sample-cat-socks",
+    "title": "Cat Hair Is an Accessory",
+    "description": "Imaginary socks for the cat person who has accepted their fate.",
+    "tags": [
+      "cat",
+      "cats",
+      "socks",
+      "funny"
+    ],
+    "illustration": "sock"
+  },
+  {
+    "id": "sample-cat-desk",
+    "title": "Keyboard Quality Inspector",
+    "description": "An imaginary little cat-shaped desk ornament, finally off the keyboard.",
+    "tags": [
+      "cat",
+      "cats",
+      "desk",
+      "office",
+      "weird"
+    ],
+    "illustration": "cat"
+  },
+  {
+    "id": "sample-dad-apron",
+    "title": "Licensed to Grill",
+    "description": "An imaginary apron for the barbecue chef who considers recipes optional.",
+    "tags": [
+      "dad",
+      "cooking",
+      "kitchen",
+      "grill",
+      "funny",
+      "barbecue"
+    ],
+    "illustration": "kitchen"
+  },
+  {
+    "id": "sample-spatula",
+    "title": "Chief Flipping Officer",
+    "description": "An imaginary spatula for someone taking grilling much too seriously.",
+    "tags": [
+      "dad",
+      "cooking",
+      "kitchen",
+      "grill",
+      "office",
+      "barbecue"
+    ],
+    "illustration": "kitchen"
+  },
+  {
+    "id": "sample-dad-socks",
+    "title": "Professional Lawn Critic",
+    "description": "Imaginary socks for a dad with strong opinions about the garden.",
+    "tags": [
+      "dad",
+      "garden",
+      "gardening",
+      "socks",
+      "funny"
+    ],
+    "illustration": "sock"
+  },
+  {
+    "id": "sample-coffee-sign",
+    "title": "Before Coffee, No Questions",
+    "description": "An imaginary desk sign that sets healthy morning boundaries.",
+    "tags": [
+      "coffee",
+      "office",
+      "desk",
+      "coworker",
+      "funny"
+    ],
+    "illustration": "desk"
+  },
+  {
+    "id": "sample-coffee-spoon",
+    "title": "Emergency Coffee Coordinator",
+    "description": "An imaginary coffee scoop for the household caffeine department.",
+    "tags": [
+      "coffee",
+      "kitchen",
+      "cooking",
+      "funny"
+    ],
+    "illustration": "kitchen"
+  },
+  {
+    "id": "sample-odd-cat",
+    "title": "Tiny Cat, Enormous Opinions",
+    "description": "An imaginary shelf cat with the confidence of a much larger animal.",
+    "tags": [
+      "cat",
+      "cats",
+      "weird",
+      "funny",
+      "desk"
+    ],
+    "illustration": "cat"
+  },
+  {
+    "id": "sample-odd-plant",
+    "title": "The Dramatic Desk Cactus",
+    "description": "An imaginary sculptural planter with a flair for office drama.",
+    "tags": [
+      "plant",
+      "garden",
+      "office",
+      "weird",
+      "desk"
+    ],
+    "illustration": "plant"
+  },
+  {
+    "id": "sample-cooking-cup",
+    "title": "Recipe Says Wine, Chef Says Coffee",
+    "description": "An imaginary mug for the cook improvising the whole situation.",
+    "tags": [
+      "cooking",
+      "kitchen",
+      "coffee",
+      "mug",
+      "funny"
+    ],
+    "illustration": "cup"
+  },
+  {
+    "id": "sample-kitchen-sign",
+    "title": "Smoke Signals: Dinner Is Coming",
+    "description": "An imaginary sign for a barbecue chef taking the slow cooking very seriously.",
+    "tags": [
+      "cooking",
+      "kitchen",
+      "dad",
+      "desk",
+      "funny",
+      "barbecue"
+    ],
+    "illustration": "desk"
+  }
+]

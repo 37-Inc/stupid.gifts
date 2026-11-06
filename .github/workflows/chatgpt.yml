@@ -1,0 +1,63 @@
+name: Stupid Gifts ChatGPT
+
+on:
+  pull_request:
+    paths:
+      - 'prototypes/chatgpt/**'
+      - 'workers/site/**'
+      - 'lib/catalog/**'
+      - 'lib/db/product-scoring.ts'
+      - 'lib/search-demand.ts'
+      - 'lib/gift-slugs.ts'
+      - 'lib/image-utils.ts'
+      - 'lib/types.ts'
+      - 'content/catalog-presentation.json'
+      - 'tests/chatgpt-catalog-gifts.test.mjs'
+      - 'tests/site-worker*.test.mjs'
+      - '.github/workflows/chatgpt.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'prototypes/chatgpt/**'
+      - 'workers/site/**'
+      - 'lib/catalog/**'
+      - 'lib/db/product-scoring.ts'
+      - 'lib/search-demand.ts'
+      - 'lib/gift-slugs.ts'
+      - 'lib/image-utils.ts'
+      - 'lib/types.ts'
+      - 'content/catalog-presentation.json'
+      - 'tests/chatgpt-catalog-gifts.test.mjs'
+      - 'tests/site-worker*.test.mjs'
+      - '.github/workflows/chatgpt.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chatgpt-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: prototypes/chatgpt/package-lock.json
+      - name: Install isolated app dependencies
+        run: npm --prefix prototypes/chatgpt ci
+      - name: Build and test the MCP app
+        run: npm --prefix prototypes/chatgpt test
+      - name: Check edge compatibility
+        run: npm --prefix prototypes/chatgpt run check:edge
+      - name: Audit production dependencies
+        run: npm --prefix prototypes/chatgpt audit --omit=dev --audit-level=high
+      - name: Validate submission drafts
+        run: node prototypes/chatgpt/submission/validate-draft.mjs
+      - name: Verify the public catalog lookup and website boundaries
+        run: node --experimental-strip-types --test tests/chatgpt-catalog-gifts.test.mjs tests/site-worker.test.mjs tests/site-worker-feed.test.mjs tests/site-worker-search.test.mjs

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gift ideas</title>
+<style>
+:root{color-scheme:light dark;--fallback-bg:#fff;--fallback-text:#242424;--fallback-muted:#666;--fallback-subtle:#757575;--fallback-border:#e5e5e5;--fallback-hover:#f7f7f7;--card-width:228px;--space:12px}
+*{box-sizing:border-box}
+body{margin:0;color:var(--color-text-primary,var(--fallback-text));background:transparent;font:14px/1.45 var(--font-sans,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif)}
+p{margin:0}
+.cards{display:flex;gap:var(--space);overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;scrollbar-width:thin;scrollbar-color:var(--color-border-secondary,var(--fallback-border)) transparent;padding:0 0 8px}
+.cards:focus-visible{outline:2px solid var(--color-text-primary,var(--fallback-text));outline-offset:-2px;border-radius:16px}
+.card{flex:0 0 var(--card-width);min-width:0;display:flex;flex-direction:column;border:1px solid var(--color-border-secondary,var(--fallback-border));border-radius:16px;overflow:hidden;scroll-snap-align:start;background:var(--color-background-primary,var(--fallback-bg))}
+.card-link{display:flex;flex:1;flex-direction:column;min-width:0;color:inherit;text-decoration:none}
+.card-link:focus-visible{outline:2px solid var(--color-text-primary,var(--fallback-text));outline-offset:-2px;border-radius:15px}
+.art{aspect-ratio:1;flex-shrink:0;overflow:hidden;display:grid;place-items:center;background:#fff;padding:12px;position:relative;color:#666}
+.art img{display:block;width:100%;height:100%;min-height:0;min-width:0;object-fit:contain;opacity:0;transition:opacity .18s ease}
+.art[data-loaded] img{opacity:1}
+.art[data-shape=portrait]{padding:14px}
+.art[data-shape=landscape]{padding:10px}
+.art svg{width:120px;height:120px}
+.art[data-missing]{font-size:12px;gap:8px;align-content:center;background:var(--color-background-secondary,var(--fallback-hover));color:var(--color-text-secondary,var(--fallback-muted))}
+.body{padding:14px;display:flex;flex:1;flex-direction:column;gap:8px}
+.card h2{font-size:14px;font-weight:600;line-height:1.4;margin:0;min-height:3.9em;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.description{font-size:12px;line-height:1.5;color:var(--color-text-secondary,var(--fallback-muted));min-height:3em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.cta{display:flex;align-items:center;gap:4px;color:var(--color-text-secondary,var(--fallback-subtle));font-size:11px;font-weight:400;line-height:1.5;margin-top:auto;padding-top:4px}
+.cta-arrow{font-size:11px;line-height:1;opacity:.8;transition:transform .2s ease}
+.card-link:hover .cta-arrow,.card-link:focus-visible .cta-arrow{transform:translate(1px,-1px)}
+.notice:not(:empty){font-size:11px;color:var(--color-text-secondary,var(--fallback-muted));margin-top:4px}
+.status:not(:empty){font-size:13px;line-height:1.5;padding:16px;border:1px solid var(--color-border-secondary,var(--fallback-border));border-radius:12px;color:var(--color-text-secondary,var(--fallback-muted))}
+.status.loading{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+.skeleton .art,.skeleton-line{background:var(--color-background-secondary,var(--fallback-hover))}
+.skeleton-line{height:12px;border-radius:4px;width:90%;margin:4px 0}.skeleton-line.short{width:64%}.skeleton .cta{width:64px;height:14px;border-radius:3px;background:var(--color-background-secondary,var(--fallback-hover))}
+[hidden]{display:none!important}
+@media(prefers-color-scheme:dark){:root{--fallback-bg:#212121;--fallback-text:#ececec;--fallback-muted:#b4b4b4;--fallback-subtle:#a8a8a8;--fallback-border:#414141;--fallback-hover:#2c2c2c}}
+[data-theme=light]{--fallback-bg:#fff;--fallback-text:#242424;--fallback-muted:#666;--fallback-subtle:#757575;--fallback-border:#e5e5e5;--fallback-hover:#f7f7f7}
+[data-theme=dark]{--fallback-bg:#212121;--fallback-text:#ececec;--fallback-muted:#b4b4b4;--fallback-subtle:#a8a8a8;--fallback-border:#414141;--fallback-hover:#2c2c2c}
+@media(max-width:420px){:root{--card-width:clamp(200px,76vw,240px)}}
+@media(prefers-reduced-motion:reduce){.art img,.cta-arrow{transition:none}}
+@media(forced-colors:active){.card{border-color:CanvasText}.card-link:focus-visible,.cards:focus-visible{outline-color:Highlight}.cta{color:LinkText}.cta-arrow{opacity:1}}
+</style></head><body>
+<p id="status" class="status loading" role="status" aria-atomic="true">Finding gift ideas…</p>
+<div id="cards" class="cards" role="region" aria-roledescription="carousel" aria-label="Gift ideas. Scroll for more gifts." aria-busy="true" tabindex="0">
+<article class="card skeleton" aria-hidden="true"><div class="art"></div><div class="body"><div class="skeleton-line"></div><div class="skeleton-line short"></div><div class="skeleton-line"></div><div class="cta"></div></div></article>
+<article class="card skeleton" aria-hidden="true"><div class="art"></div><div class="body"><div class="skeleton-line"></div><div class="skeleton-line short"></div><div class="skeleton-line"></div><div class="cta"></div></div></article>
+<article class="card skeleton" aria-hidden="true"><div class="art"></div><div class="body"><div class="skeleton-line"></div><div class="skeleton-line short"></div><div class="skeleton-line"></div><div class="cta"></div></div></article>
+</div>
+<p id="link-note" class="sr-only">Opens Stupid Gifts in a new tab.</p>
+<p id="disclosure" class="notice"></p>
+<!-- WIDGET_SCRIPT -->
+</body></html>

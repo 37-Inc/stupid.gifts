@@ -81,7 +81,9 @@
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:catalog-telemetry": "node scripts/ops/apply-catalog-telemetry-migration.mjs",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "chatgpt:dev": "npm --prefix prototypes/chatgpt start",
+    "test:chatgpt": "npm --prefix prototypes/chatgpt test"
   },
   "dependencies": {
     "@vercel/postgres": "^0.10.0",

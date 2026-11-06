@@ -9,6 +9,7 @@ import type { DerivedSemanticSearch } from './derived-search.ts';
 import { recordSearchDemand } from './search-demand.ts';
 import { productPresentation } from '../../lib/catalog/presentation.ts';
 import {readMerchandising} from '../../lib/catalog/merchandising.ts';
+import { createCatalogGiftsHandler } from './catalog-gifts.ts';
 
 export type { SiteEnv, SearchAdapters, SearchStorage, SemanticBudgetScope } from './bindings.ts';
 export interface SiteReleaseIdentity {
@@ -143,6 +144,7 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
   const productionHost = productionOrigin ? new URL(productionOrigin).hostname : undefined;
   const productionAlias = productionHost?.startsWith('www.') ? productionHost.slice(4) : productionHost ? `www.${productionHost}` : undefined;
   const merchandising=readMerchandising(manifest.merchandising)??{};
+  const catalogGifts = createCatalogGiftsHandler({ snapshot, manifest, now });
   const localKeyword = snapshotKeywordSearch(snapshot,merchandising);
   const adapters = options.searchAdapters;
   let derivedSemantic: DerivedSemanticSearch | null | undefined;
@@ -314,6 +316,7 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
           return respond(json(releaseIdentity));
         }
         if (path === '/api/search-products') return respond(search ? await search(request, env) : json({ error: 'Search unavailable' }, 503));
+        if (path === '/api/catalog-gifts') return respond(catalogGifts(request));
         if (path === '/api/search-demand') return respond(productionOrigin === 'https://stupid.gifts' && manifest.dataKind === 'catalog'
           ? await recordSearchDemand(request, env, now()) : new Response(null, { status: 403 }));
         if (path === '/api/catalog-feed') return respond(await feed(request));

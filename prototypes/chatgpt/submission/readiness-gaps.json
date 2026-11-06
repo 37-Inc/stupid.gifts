@@ -1,0 +1,87 @@
+{
+  "checkedAt": "2026-11-06",
+  "status": "DRAFT_NOT_SUBMITTABLE",
+  "sourceIdentity": {
+    "existingPrivateConnection": "Preserved; exact App/plugin/tunnel identifiers are excluded from public source."
+  },
+  "gaps": [
+    {
+      "id": "endpoint",
+      "owner": "engineering + owner deployment approval",
+      "state": "missing",
+      "detail": "No selected, deployed and verified production MCP endpoint is supplied. No mcp.json is generated; do not upload the draft as a skills-only plugin."
+    },
+    {
+      "id": "publisher",
+      "owner": "publisher",
+      "state": "unverified",
+      "detail": "Confirm the intended verified individual/business publisher, authorized submission organization/project and its verification state. Public site attribution alone does not prove Platform verification."
+    },
+    {
+      "id": "website-url-access",
+      "owner": "engineering + reviewer host access",
+      "state": "unverified",
+      "detail": "The known public homepage identifies Stupid Gifts, but a fresh direct unauthenticated HTTP probe returned 403 from this environment. Check actual reviewer/portal access before treating the URL as verified; do not infer the cause or change protections blindly."
+    },
+    {
+      "id": "support-url",
+      "owner": "engineering draft + publisher support commitments",
+      "state": "missing",
+      "detail": "A monitored support page must be hosted and inspected; the existing footer email is not a supportURL."
+    },
+    {
+      "id": "privacy-url",
+      "owner": "engineering facts + publisher policy approval",
+      "state": "incomplete",
+      "detail": "An existing /privacy route is known, but its source lacks explicit ChatGPT query/provider/retention/control coverage. Current unauthenticated direct HTTP retrieval was blocked; no fresh access/content approval is claimed."
+    },
+    {
+      "id": "terms-url",
+      "owner": "publisher policy/legal approval + engineering hosting",
+      "state": "missing",
+      "detail": "No verified applicable public terms page is supplied. Do not invent a URL or publish unapproved commitments."
+    },
+    {
+      "id": "countries",
+      "owner": "publisher",
+      "state": "unconfirmed",
+      "detail": "Choose supported countries or explicitly all available countries. Omit publication.countries until confirmed; do not insert [] to imply global availability."
+    },
+    {
+      "id": "content-rights",
+      "owner": "publisher/rights holder + engineering enforcement",
+      "state": "unresolved",
+      "detail": "Resolve per-item photo/copy provenance and ChatGPT/mobile use. Amazon Program Content linked to an intermediary Stupid Gifts page has a concrete license-scope concern. See docs/PUBLIC-DISTRIBUTION.md."
+    },
+    {
+      "id": "audience",
+      "owner": "engineering review + publisher content approval",
+      "state": "unverified",
+      "detail": "A general-audience physical-gift cohort must be reviewed and enforced; the broad gag catalog is not certified suitable for ages 13\u201317."
+    },
+    {
+      "id": "icon",
+      "owner": "publisher visual review",
+      "state": "proposed",
+      "detail": "New code-native typographic S icon is an actual owned-source proposal, not prior approved brand artwork."
+    },
+    {
+      "id": "host-cases",
+      "owner": "engineering + desktop/mobile host access",
+      "state": "not_run",
+      "detail": "Five positive and three negative cases are authored for the release candidate. Historical protocol checks are not these actual ChatGPT host runs."
+    },
+    {
+      "id": "demo",
+      "owner": "engineering walkthrough + recording access",
+      "state": "missing",
+      "detail": "A walkthrough script exists; no recording or reviewer-accessible video URL exists."
+    },
+    {
+      "id": "portal",
+      "owner": "engineering setup + publisher attestations",
+      "state": "not_started",
+      "detail": "Complete domain/developer verification, exact-version scans, secure reviewer access if later needed and final policy attestations only after package and endpoint readiness."
+    }
+  ]
+}
