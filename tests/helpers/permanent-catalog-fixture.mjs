@@ -18,7 +18,9 @@ const svg='<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h10"/></svg>';
 const grant=value=>({basis:'owned',value,reference:'ROOT approved exact synthetic value; no real rights claim'});
 
 export async function permanentCatalogFixture(t,{count=12,afterExpiry=false,merchant=false,publicCount=2361,initialTime,ownerHeld=0,ownerDuplicates=0,meter,publicDuplicate=false}={}){
-  const f=await setup(t,{providerIdentity:`cloudflare:${accountId}:${scope.indexName}`,merchant,...(initialTime===undefined?{}:{initialTime})});
+  // This fixture exercises the historical migration/capture schema, not the
+  // subsequently added operational search-telemetry table.
+  const f=await setup(t,{providerIdentity:`cloudflare:${accountId}:${scope.indexName}`,migrationThrough:16,merchant,...(initialTime===undefined?{}:{initialTime})});
   if(afterExpiry)f.advance(Date.parse(f.revision.snapshot.products[0].eligibleUntil)-f.now().getTime()+3600000);
   let statements=0,requests=0,maxRequest=0,maxResponse=0,loseSeal=false,inspect,lastFailure;const queryText=[],queryWire=[];
   const ledger={httpRequests:0,sqlStatements:0,knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:0},dbScope={accountId,databaseId,databaseName:'permanent-freeze'};

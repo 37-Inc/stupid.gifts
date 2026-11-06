@@ -80,8 +80,8 @@ test("every initial, load-more and search card renders its image, title and shor
   }
   const render = (id, curated) => renderToStaticMarkup(createElement(photos.CatalogPhotos,
     { indexPath: null, ...curated }, createElement(ProductCard, { product: { ...product, id } })));
-  assert.match(render(product.id, { descriptions: { unfeatured: "A factual curated description." } }), /A factual curated description\./);
-  assert.match(render(product.id, { cardNotes: { unfeatured: "A useful short note." }, descriptions: { unfeatured: "Longer detail lead." } }), /A useful short note\./);
+  assert.ok(render(product.id, { descriptions: { unfeatured: "Obsolete override." } }).includes(product.description));
+  assert.ok(render(product.id, { cardNotes: { unfeatured: "Obsolete note." } }).includes(product.description));
   assert.ok(render(product.id, { cardNotes: { unfeatured: " " }, descriptions: { unfeatured: " " } }).includes(product.description));
   assert.ok(render("toString", {}).includes(product.description));
   assert.equal(JSON.stringify(product), before);

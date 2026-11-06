@@ -1,19 +1,21 @@
 import type { CatalogSnapshot } from '../../lib/catalog/types.ts';
 import { persistentPublicProduct } from '../../lib/catalog/display.ts';
 import { catalogSearchTerms } from '../../lib/catalog/search-terms.ts';
-import { factualCardDescription } from '../../static-site/lib/card-description.ts';
+import { productPresentation } from '../../lib/catalog/presentation.ts';
 import type { SearchStorage } from './bindings.ts';
+import {appealPriority,usableCommissionPriority,merchandisingForProduct} from '../../lib/catalog/merchandising.ts';
+import type {Merchandising} from '../../lib/catalog/merchandising.ts';
 
 /** The deployed, independently cleared catalog is already in the Worker.
  * Search that immutable public view, not mutable/private D1 rows on each visit.
  * Mixed/finite catalogs retain the existing database adapter and expiry checks. */
-export function snapshotKeywordSearch(snapshot: CatalogSnapshot): SearchStorage['keyword'] | null {
-  const products = snapshot.products.map(persistentPublicProduct);
+export function snapshotKeywordSearch(snapshot: CatalogSnapshot,merchandising:Merchandising={}): SearchStorage['keyword'] | null {
+  const products = snapshot.products.map(p=>{const base=persistentPublicProduct(p);return base?productPresentation(base):null;});
   if (!products.length || products.some(p => !p)) return null;
   const index = new Map<string, Map<number, number>>();
   products.forEach((product, id) => {
     for (const [value, weight] of [[product!.title, 4], [product!.humorTags?.join(' ') || '', 2],
-      [[factualCardDescription(product!), product!.punnyTitle, product!.wittyDescription].filter(Boolean).join(' '), 1]] as const) {
+      [product!.description, 1]] as const) {
       for (const term of catalogSearchTerms(value)) {
         let matches = index.get(term);
         if (!matches) index.set(term, matches = new Map());
@@ -33,8 +35,13 @@ export function snapshotKeywordSearch(snapshot: CatalogSnapshot): SearchStorage[
         for (const [id, weight] of postings) matches.set(id, Math.max(weight, matches.get(id) || 0));
       for (const [id, weight] of matches) scores.set(id, (scores.get(id) || 0) + 10 + weight);
     }
-    return [...scores].map(([id, score]) => ({ product: products[id]!, score: score + products[id]!.qualityScore }))
-      .sort((a, b) => b.score - a.score || (a.product.id < b.product.id ? -1 : a.product.id > b.product.id ? 1 : 0))
+    return [...scores].map(([id, score]) => ({ product: products[id]!, score,
+      signal:merchandisingForProduct(products[id]!,merchandising) }))
+      // Do not lose reviewed gag gifts at the bounded retrieval cutoff merely
+      // because books/ordinary variants have alphabetically earlier ASINs.
+      .sort((a, b) => b.score - a.score || appealPriority(b.signal?.appeal)-appealPriority(a.signal?.appeal)
+        ||usableCommissionPriority(b.signal,_now.getTime())-usableCommissionPriority(a.signal,_now.getTime())
+        || (a.product.id < b.product.id ? -1 : a.product.id > b.product.id ? 1 : 0))
       .slice(0, limit).map(entry => entry.product);
   };
 }

@@ -9,7 +9,6 @@ import SafeCatalog from "./safe/catalog/page";
 import { show } from "../lib/show-data";
 import { isSitePreview, isSiteProduction, siteIdentity } from "../lib/site-identity";
 import "./styles.css";
-import homepage from "../../content/homepage.json";
 
 export const metadata: Metadata = {
   ...previewMetadata(
@@ -51,8 +50,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </nav>
         </header>
         <CatalogPhotos indexPath={photos.indexPath} photoSlots={Object.keys(photos.index.products)}
-          editorialDisclosures={siteEditorialDisclosures} cardTitles={homepage.cardTitles}
-          descriptions={homepage.descriptions} cardNotes={homepage.cardNotes}>
+          editorialDisclosures={siteEditorialDisclosures}>
           <StaticContentExpiry fallback={<SafeCatalog />}>{children}</StaticContentExpiry>
         </CatalogPhotos>
         <footer>

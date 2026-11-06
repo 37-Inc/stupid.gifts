@@ -7,6 +7,8 @@ import { snapshotKeywordSearch } from './snapshot-search.ts';
 import { createDerivedSemanticSearch } from './derived-search.ts';
 import type { DerivedSemanticSearch } from './derived-search.ts';
 import { recordSearchDemand } from './search-demand.ts';
+import { productPresentation } from '../../lib/catalog/presentation.ts';
+import {readMerchandising} from '../../lib/catalog/merchandising.ts';
 
 export type { SiteEnv, SearchAdapters, SearchStorage, SemanticBudgetScope } from './bindings.ts';
 export interface SiteReleaseIdentity {
@@ -140,7 +142,8 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
     || options.canonicalOrigin === 'https://www.goose.gifts' ? options.canonicalOrigin : undefined;
   const productionHost = productionOrigin ? new URL(productionOrigin).hostname : undefined;
   const productionAlias = productionHost?.startsWith('www.') ? productionHost.slice(4) : productionHost ? `www.${productionHost}` : undefined;
-  const localKeyword = snapshotKeywordSearch(snapshot);
+  const merchandising=readMerchandising(manifest.merchandising)??{};
+  const localKeyword = snapshotKeywordSearch(snapshot,merchandising);
   const adapters = options.searchAdapters;
   let derivedSemantic: DerivedSemanticSearch | null | undefined;
   if (Object.hasOwn(manifest, 'semanticCatalog')) {
@@ -153,7 +156,7 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
       // Explicit GA4/PostHog search events already cover the public interaction.
       // Do not write a redundant D1 diagnostic for immutable keyword results.
       diagnostic: undefined,
-    } : adapters, now, semanticBudgetScope: options.semanticBudgetScope, derivedSemantic,
+    } : adapters, now, semanticBudgetScope: options.semanticBudgetScope, derivedSemantic,merchandising,
   }) : undefined;
 
   function finish(response: Response, env: Env, request: Request): Response {
@@ -254,7 +257,7 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
     const selection = preparedFeed.select(seed, limit, excluded, now());
     if (!selection || !available()) return json({ error: 'Catalog temporarily unavailable' }, 503);
     const products = selection.products.flatMap(product => {
-      const resolved = resolvePublicProduct(product, now());return resolved ? [resolved] : [];
+      const resolved = resolvePublicProduct(product, now());return resolved ? [productPresentation(resolved)] : [];
     });
     if (selection.products.length&&!products.length) return json({ error: 'Catalog temporarily unavailable' }, 503);
     return json({ products, hasMore: selection.hasMore });

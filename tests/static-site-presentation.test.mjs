@@ -53,11 +53,7 @@ test("the curated opening is an explicit diverse batch, without dropping any sou
   const ranked = rankedBrowseProducts(snapshot);
   assert.deepEqual(ranked.map(p => p.id).sort(), snapshot.products.map(p => p.id).sort());
   assert.equal(new Set(homepage.featuredIds).size, 24);
-  for (const id of homepage.featuredIds) {
-    assert.ok(homepage.cardTitles[id]?.length < 76);
-    assert.ok(homepage.descriptions[id]);
-  }
-  for (const note of Object.values(homepage.cardNotes)) assert.ok(note.trim());
+  assert.deepEqual(Object.keys(homepage),['featuredIds'],'copy belongs to the canonical presentation, not a homepage override');
   assert.equal(JSON.stringify(snapshot), before);
 });
 

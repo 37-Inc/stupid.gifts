@@ -1,5 +1,23 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-05 — Campaign-selection proposal and search-health audit
+
+[owner+codex] Expand PR350 with a single-product-view refactor, confirmed retained
+net/Mickey inconsistency, shared relevance/gag-appeal/verified-commission policy,
+variant spreading and existing-task responsibilities. No new scheduler/service,
+campaign slots, runtime changes or production actions. The proposed any-day
+embedding allowance for real copy corrections is explicit, not already enabled.
+See `CATALOG_QUALITY_AND_MERCHANDISING.md`; telemetry remains separate PR351.
+
+[owner+codex] PR350 remains documentation-only for owner review. Website
+campaign selection explicitly bypasses influencer-video/sales/payback calculator
+filters and reads campaign facts instead. Live homepage/mobile/search/guide/Random
+QA and 23 focused tests passed; actual demand has zero/sparse-result searches,
+with specific catalog-copy and relevance issues retained in Beads. Proposed
+settled-search first-party aggregates preserve the no-query-text-to-GA4/PostHog
+contract; no new collection, campaign acceptance, ranking change or deployment.
+See `CREATOR_CONNECTIONS_PILOT.md` and `SEARCH_HEALTH_2026-11-05.md`.
+
 ## 2026-11-05 — Search telemetry deployed and verified
 
 [owner+codex] PR351 merged; additive D1 migration0017 and the code-only

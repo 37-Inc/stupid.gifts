@@ -5,6 +5,7 @@ import type { DisplayRights, PersistentCatalogProduct, ProductRights, SnapshotPr
 import { isPurchasableAvailability, hasReviewedGiftShortCopy } from '../../lib/gift-slugs.ts';
 import { editorialSourceHash } from '../ops/catalog-editorial-core.mjs';
 import { normalizedEditorialFacts, originalEditorialEquivalent } from '../../lib/catalog/editorial-equivalence.ts';
+import { canonicalDescriptionEmbeddingInput } from '../../lib/catalog/presentation.ts';
 
 export type Row = Record<string, unknown>;
 /** Exact existing guard, restored inside an unpublished-URL repair batch. */
@@ -112,7 +113,9 @@ export function maintenanceSlugs(product: SemanticProduct, publicId: string): st
 }
 
 /** Same five fields/order as the existing runner's buildProductEmbeddingText. */
-export function maintenanceEmbeddingText(p: SemanticProduct): string {
+export function maintenanceEmbeddingText(p: SemanticProduct, verifiedText?: string): string {
+  const canonical=canonicalDescriptionEmbeddingInput(p);
+  if(verifiedText===canonical)return canonical;
   return [p.punnyTitle,p.title,p.wittyDescription,p.sourceQuery,p.humorTags?.join(' ')].filter(Boolean).join('. ');
 }
 export function maintenanceRow(p: SemanticProduct): Row {

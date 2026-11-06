@@ -255,7 +255,9 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
     statements: D1Statement[], operationId: string, changes: Row[], replacedEmbedding = false) {
     cas(old,product.id,statements);
     const supplied = replacedEmbedding ? product.embedding as number[] : null;
-    const text = maintenanceEmbeddingText(product); const proof = intent.embeddingById?.[product.id];
+    const proof = intent.embeddingById?.[product.id];
+    const savedText=proof?.text ?? old?.provenance?.text;
+    const text = maintenanceEmbeddingText(product,typeof savedText==='string'?savedText:undefined);
     const factsMatch = HASH.test(product.sourceFactsHash || '') && editorialSourceHash(product) === product.sourceFactsHash;
     if (proof && (!proof.reference?.trim() || proof.reference.length>200 || proof.model !== EMBEDDING_MODEL || proof.text !== text
       || Buffer.byteLength(text)>64000

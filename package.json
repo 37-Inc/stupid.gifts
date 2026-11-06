@@ -54,6 +54,7 @@
     "catalog:cloudflare": "node --import tsx scripts/catalog/run-cloudflare-weekly.ts",
     "catalog:care": "node --import tsx scripts/catalog/daily-operator.mjs",
     "catalog:homepage": "node --import tsx scripts/catalog/homepage-editor.mjs",
+    "catalog:campaigns": "node --import tsx scripts/catalog/campaign-operator.mjs",
     "test:homepage": "node --import tsx --test tests/homepage-editor.test.mjs tests/static-site-merchandising.test.mjs",
     "catalog:keychain": "node --import tsx scripts/ops/bootstrap-catalog-keychain.mjs",
     "test:catalog-keychain": "node --import tsx --test tests/catalog-keychain-bootstrap.test.mjs",

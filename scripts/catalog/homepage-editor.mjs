@@ -10,7 +10,9 @@ import {pacificCatalogCalendar} from '../ops/catalog-daily.mjs';
 import {resolveWranglerOAuth} from './check-cloudflare-runner.ts';
 import {createCatalogD1ReadOnlyRest} from './d1-write-rest.ts';
 import {routineHomepageEdition} from './daily-operator.mjs';
-import copy from '../../content/homepage.json' with {type:'json'};
+import { productPresentation } from '../../lib/catalog/presentation.ts';
+import {routineMerchandising} from './campaign-operator.mjs';
+import {merchandisingForProduct} from '../../lib/catalog/merchandising.ts';
 
 const CARE=path.join(homedir(),'.codex/private/goose-gifts-migration/daily-catalog-care');
 const scope={accountId:'7f05a1dcb6e16f9c239564a0293bbe74',databaseId:'77b30f85-c57c-4acb-a0df-53368806c2a6',databaseName:'stupid-gifts-production'};
@@ -28,7 +30,7 @@ export function candidateSweep(ids,day,limit=72){
 
 /** Read accepted public presentation only. Newest, prior favorites and a
  * calendar-driven sweep cover the WHOLE catalog, without category keywords. */
-export async function homepageBrief(db,revision,prior,day,now=Date.now()){
+export async function homepageBrief(db,revision,prior,day,now=Date.now(),merchandising={}){
   const ids=(await db.prepare('SELECT product_id FROM catalog_public_products WHERE catalog_revision=?').bind(revision).all()).results.map(p=>p.product_id);
   const sample=candidateSweep(ids,day),count=ids.length;
   const query='SELECT v.public_display_json FROM catalog_public_products v';
@@ -37,15 +39,17 @@ export async function homepageBrief(db,revision,prior,day,now=Date.now()){
     db.prepare(query+' JOIN products p ON p.id=v.product_id WHERE v.catalog_revision=? AND p.created_at IS NOT NULL ORDER BY p.created_at DESC,v.product_id LIMIT 20').bind(revision),
     db.prepare(query+' WHERE v.catalog_revision=? AND v.product_id IN (SELECT value FROM json_each(?))').bind(revision,JSON.stringify(previous)),
     db.prepare(query+' WHERE v.catalog_revision=? AND v.product_id IN (SELECT value FROM json_each(?))').bind(revision,JSON.stringify(sample)),
+    db.prepare(query+' WHERE v.catalog_revision=? AND v.product_id IN (SELECT value FROM json_each(?))').bind(revision,JSON.stringify(Object.keys(merchandising).filter(id=>merchandising[id].commissionPriority))),
   ]);
   const candidates=new Map();
   for(let lane=0;lane<batches.length;lane++)for(const row of batches[lane].results){
-    const p=resolvePublicProduct(JSON.parse(row.public_display_json),now);
+    const raw=resolvePublicProduct(JSON.parse(row.public_display_json),now),p=raw&&productPresentation(raw);
     if(!p||!p.description?.trim()||p.imageUrl.includes('gift-placeholder'))continue;
-    const item=candidates.get(p.id)||{id:p.id,title:copy.cardTitles[p.id]||p.title,
-      description:copy.cardNotes[p.id]||copy.descriptions[p.id]||p.wittyDescription||p.description,
-      imageUrl:new URL(p.imageUrl,'https://stupid.gifts').href,url:'https://stupid.gifts/gifts/'+p.slug,lanes:[]};
-    item.lanes.push(['newest','previous','rediscovery','rediscovery'][lane]);candidates.set(p.id,item);
+    const item=candidates.get(p.id)||{id:p.id,title:p.title,
+      description:p.description,
+      imageUrl:new URL(p.imageUrl,'https://stupid.gifts').href,url:'https://stupid.gifts/gifts/'+p.slug,
+      merchandising:merchandisingForProduct(p,merchandising)??{},lanes:[]};
+    item.lanes.push(['newest','previous','rediscovery','verified-campaign'][lane]);candidates.set(p.id,item);
   }
   return{day,catalogRevision:revision,catalogSize:count,previous:prior,candidates:[...candidates.values()],readOnlyUsage:db.metrics()};
 }
@@ -88,7 +92,8 @@ export async function main(){
       await fs.rename(temporary,file);
       console.log(JSON.stringify({state:'curated',path:file,edition,readOnlyUsage:db.metrics()}));return;
     }
-    const brief=await homepageBrief(db,revision,prior,day);console.log(JSON.stringify(brief));
+    const merchandising=await routineMerchandising();
+    const brief=await homepageBrief(db,revision,prior,day,Date.now(),merchandising);console.log(JSON.stringify(brief));
     if(command==='preview'){
       const html=previewHtml(brief),server=createServer((req,res)=>{
         res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});res.end(html);
