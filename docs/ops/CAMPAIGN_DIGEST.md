@@ -82,13 +82,22 @@ nonmonetary metadata or neutral defaults, stripping commission preference.
 
 ## Scope and evidence
 
-Chrome37 readback on November5 confirmed Riley's parent store and Creator
-Connections access. A live11% Seymour Butz prank-box offer was inspected; its
-four ASINs do not overlap the accepted catalog, so it is a lead, not a join
-notification or active boost. No campaign was joined by this work. Enrollment
+Chrome37 readback on November5 confirmed the correct parent store and Creator
+Connections access. A live gag-gift offer was inspected; its four ASINs do not
+overlap the accepted catalog, so it remains a private lead, not a join
+notification or active boost. Provider-specific rates/terms remain in protected
+evidence, not public artifacts. No campaign was joined by this work. Enrollment
 and actual bonus earnings remain distinct owner/provider follow-up.
 
 Monday's existing discovery caps admissions before generation. The deeper
 collect→agent-shortlist→enrich internal split and automated research export
 remain follow-ups, not claims made by this release. No cadence expansion,
 new provider plan or wholesale enrichment is introduced.
+
+PR350/353 are merged and production-verified; see
+`evidence/2026-11-05-catalog-quality-accepted.json`. The existing morning task is
+updated and ACTIVE. One configuration-test Slack message was delivered and
+independently read back; this is transport evidence, not an actual enrollment
+request or campaign-participation proof. No actionable current-catalog offer
+was invented merely to demonstrate a notification. The remaining export/pilot
+and deeper shortlist stage have separate Beads, not hidden publication gates.
