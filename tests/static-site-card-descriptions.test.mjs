@@ -8,7 +8,7 @@ import {CatalogDescription} from '../static-site/components/CatalogPhotos.tsx';
 globalThis.React=React;
 
 test('all retained presentation corrections are bound to the actual original title/copy',()=>{
-  assert.equal(Object.keys(copy).length,1036);
+  assert.ok(Object.keys(copy).length >= 1036, 'retain the original backfill while allowing reviewed additions');
   for(const [id,note]of Object.entries(copy)){
     assert.match(id,/^[A-Z0-9]{10}$/);assert.ok(note.sourceTitle.trim()&&note.sourceCopy.trim()&&note.description.trim());
     assert.notEqual(note.description,'A strange little catalog find.');

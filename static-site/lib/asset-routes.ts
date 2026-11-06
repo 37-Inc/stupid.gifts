@@ -12,7 +12,7 @@ import { catalogDisplayView } from "../../lib/catalog/display";
 import { createPhotoRelease } from "./photos";
 import { createRelatedGiftSelector } from "./related-gifts";
 import { rankedBrowseProducts } from "./browse";
-import { selectShowOpening, selectShowPicks } from "./show-rehearsal";
+import { selectShowPicks } from "./show-rehearsal";
 
 type RoutePolicy = Omit<CatalogAssetRoute, "assetPath"> & {
   indexable: boolean;
@@ -78,7 +78,7 @@ export function createStaticRoutes(
       state: snapshot.products.length ? "ready" : "held",
       indexable: catalog.indexable && snapshot.products.length > 0 };
   if (assetPaths.includes("/h.html")) policies["/h"] = { ...catalog, indexable: false,
-    eligibleUntil: earliest([...selectShowOpening(snapshot), ...selectShowPicks(snapshot)]
+    eligibleUntil: earliest(selectShowPicks(snapshot)
       .map((product) => product.eligibleUntil)) };
   policies["/gift-guides"] = { ...catalog, eligibleUntil: null };
   for (const guide of guides) {
