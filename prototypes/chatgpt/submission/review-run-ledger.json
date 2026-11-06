@@ -1,0 +1,57 @@
+{
+  "checkedAt": "2026-11-06",
+  "scope": "Actual ChatGPT release-candidate review cases",
+  "executionState": "NOT_RUN",
+  "reason": "Current production MCP endpoint is not selected/deployed, and local browser automation was disabled in Work settings during the last check. No current actual-host execution or demo recording is claimed.",
+  "cases": [
+    {
+      "id": "P1",
+      "status": "Not run",
+      "evidence": null
+    },
+    {
+      "id": "P2",
+      "status": "Not run",
+      "evidence": null
+    },
+    {
+      "id": "P3",
+      "status": "Not run",
+      "evidence": null
+    },
+    {
+      "id": "P4",
+      "status": "Not run",
+      "evidence": null
+    },
+    {
+      "id": "P5",
+      "status": "Not run",
+      "evidence": null
+    },
+    {
+      "id": "N1",
+      "status": "Not run",
+      "evidence": null
+    },
+    {
+      "id": "N2",
+      "status": "Not run",
+      "evidence": null
+    },
+    {
+      "id": "N3",
+      "status": "Not run",
+      "evidence": null
+    }
+  ],
+  "additionalQa": [
+    "Desktop and physical mobile themes/scrolling/keyboard/screen reader",
+    "Empty search and unavailable service",
+    "Missing or withdrawn IDs and catalog release change",
+    "Broken image and external link failure",
+    "Cross-instance search then render and restarts",
+    "No raw prompt/credential leakage in public data or logs"
+  ],
+  "historicalEvidence": "Earlier 19 automated tests and 18 local MCP cases are separate from this ledger and do not satisfy actual-host review evidence."
+}

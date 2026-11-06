@@ -1,0 +1,91 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "stupid-gifts",
+  "version": "0.2.0",
+  "description": "Find unusual physical gifts by recipient interests.",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Stupid Gifts",
+        "shortDescription": "Find unusual gifts by interest",
+        "longDescription": "Discover unusual physical gift ideas from the Stupid Gifts catalog using the recipient’s interests. Browse a compact carousel with product photos, short descriptions and links to the corresponding Stupid Gifts pages. Refine your request in conversation—for example, exclude mugs or ask for different ideas. The app provides read-only discovery. It does not show current prices, filter by budget, promise availability or delivery, access retailer accounts, or place orders. The website may earn commissions from qualifying purchases at third-party retailers.",
+        "category": "Other",
+        "capabilities": [
+          "Find gift ideas",
+          "View gift carousels"
+        ],
+        "websiteURL": "https://stupid.gifts/",
+        "defaultPrompt": [
+          "Find unusual gifts for a cat lover.",
+          "Show me playful gifts for someone who enjoys cooking.",
+          "Find unusual desk gifts for a coworker."
+        ],
+        "logo": "./assets/icon.png",
+        "composerIcon": "./assets/icon.png"
+      },
+      "review": {
+        "prompts": [
+          "I need an unusual gift for my dad who loves cats.",
+          "No mugs or cups, please. What else would fit?",
+          "Show me some different unusual desk gifts."
+        ],
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Core discovery. Start a fresh conversation with Stupid Gifts enabled. Use the current catalog; exact product identities may change.",
+              "prompt": "I need an unusual gift for my dad who loves cats.",
+              "tools_triggered": "search_gifts, then render_gifts",
+              "expected_behavior": "Search with cat interests and recipient context. Select up to six relevant returned IDs and show one final carousel with matching photos, concise product facts and canonical https://stupid.gifts/gifts/ links. Do not claim prices, stock, delivery or an order. If fewer appropriate gifts exist, show fewer honestly; if none exist, explain the empty result."
+            },
+            {
+              "description": "Conversational exclusion. Immediately follow the cat-gift case in the same conversation.",
+              "prompt": "No mugs or cups, please. What else would fit?",
+              "tools_triggered": "search_gifts, then render_gifts when suitable candidates exist",
+              "expected_behavior": "Carry forward cat interests and exclude mugs/cups in the search and selected cards. Render only eligible IDs from the new result; do not reintroduce excluded product kinds. If nothing appropriate remains, explain that rather than filling cards with unrelated gifts."
+            },
+            {
+              "description": "Change recipient and interest. Continue after the cat-gift cases.",
+              "prompt": "Actually, this is for my sister who loves barbecuing. Show me ideas for her instead.",
+              "tools_triggered": "search_gifts, then render_gifts when suitable candidates exist",
+              "expected_behavior": "Switch the query to barbecue/grilling and sister context. Do not carry cat-specific intent forward or select gifts explicitly addressed to dad. Display one carousel of returned appropriate IDs, or an honest no-matches explanation."
+            },
+            {
+              "description": "Avoid repeats. Start a fresh conversation with “Find unusual desk gifts for a coworker.” Keep the resulting cards visible, then use this follow-up.",
+              "prompt": "Show me some different unusual desk gifts, without repeating the ones you just showed.",
+              "tools_triggered": "search_gifts, then render_gifts when new appropriate candidates exist",
+              "expected_behavior": "Use conversation history to omit already displayed IDs. Show only different relevant returned products when available. If the eligible catalog has no additional choices, say so; do not relabel repeated gifts as new or invent products."
+            },
+            {
+              "description": "Supported empty-result boundary. Use the literal absent keyword below; verify the release candidate has no such catalog entry before recording the case.",
+              "prompt": "Find a gift specifically themed around zzzxqv.",
+              "tools_triggered": "search_gifts",
+              "expected_behavior": "Return an honest empty-result explanation and suggest a useful recipient interest to try. Do not call render_gifts with invented IDs, display imaginary fixtures, or describe gifts as shown."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Unsupported transaction. After the core discovery case, request the purchase below; do not place an order, collect payment/shipping secrets or call gift discovery tools merely to claim a purchase succeeded.",
+              "prompt": "Buy the first gift you showed me and have it shipped using my saved payment details.",
+              "expected_behavior": "Explain that Stupid Gifts cannot place orders, charge cards or arrange shipping. Do not invoke search_gifts or render_gifts for the purchase action and do not claim any order was placed. An already returned canonical gift-page link may be offered for the user to inspect."
+            },
+            {
+              "description": "Unsupported account workflow: order tracking is outside the public catalog contract.",
+              "prompt": "Track my Amazon order and tell me exactly when it will arrive.",
+              "expected_behavior": "Explain that Stupid Gifts has no retailer-account or order-tracking access. Do not call its gift tools, request credentials or invent shipment details; direct the user to their retailer order history."
+            },
+            {
+              "description": "Strict price-only shopping request. Run after the core discovery case so “these gifts” refers to the returned cards. This app has no current prices, price comparisons, budget filtering or delivery data.",
+              "prompt": "Compare live prices and delivery dates for these gifts and show only the ones guaranteed under $20 arriving tomorrow. Do not show unpriced suggestions.",
+              "expected_behavior": "State that the requested price/delivery comparison cannot be verified with Stupid Gifts. Do not call gift tools solely to present unpriced results as completing the comparison, and do not invent prices, dates or guarantees. Offer a separate ordinary interest-based search only as an option."
+            }
+          ]
+        },
+        "commerce": true,
+        "commerce_description": "Read-only discovery of physical gifts. Cards open canonical Stupid Gifts product pages, where users can choose a third-party retailer link. Purchases and payment occur with that retailer, not in ChatGPT or this MCP server. Stupid Gifts may earn qualifying affiliate commissions."
+      },
+      "publication": {
+        "release_notes": "Initial public-submission candidate for Stupid Gifts conversational gift discovery: bounded read-only search, an inline carousel, canonical product links and honest capability/error handling. This draft is not uploaded, reviewed or published."
+      }
+    }
+  }
+}
