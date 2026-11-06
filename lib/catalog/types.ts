@@ -1,6 +1,7 @@
 import type { HomepageEdition } from './homepage-edition.ts';
 import type { Product } from '../types.ts';
 import type { SemanticCatalog } from './semantic-profile.ts';
+import type { Merchandising } from './merchandising.ts';
 
 /** Public artifacts are price-free until a separately verified offer lane exists. */
 export interface PublicCatalogProduct extends Pick<Product,
@@ -61,6 +62,7 @@ export interface CatalogAssetRoute {
 }
 export interface SiteAssetManifest extends CatalogReleaseManifest {
   homepage?: HomepageEdition;
+  merchandising?: Merchandising;
   /** Optional compiled proof, hash-bound by this release manifest; not supplier expiry. */
   semanticCatalog?: SemanticCatalog;
   dataKind: CatalogSnapshot['dataKind'];

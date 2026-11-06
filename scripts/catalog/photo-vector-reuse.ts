@@ -22,7 +22,7 @@ export function preservedPhotoVector(product:Row,state:Row,previous:PublicCatalo
   if(!base||!prior||base.imageUrl!=='/images/gift-placeholder.svg'||canonicalJson(base)!==canonicalJson(prior)
     ||typeof display.imageUrl!=='string'||!display.imageUrl.startsWith('https://')||display.eligibleUntil===null)fail();
   const current=JSON.parse(String(state.semantic_json)) as SemanticProduct,proof=JSON.parse(String(state.embedding_provenance_json));
-  const text=maintenanceEmbeddingText(current),bytes=Buffer.from(String(state.embedding_native_base64),'base64');
+  const text=maintenanceEmbeddingText(current,proof.text),bytes=Buffer.from(String(state.embedding_native_base64),'base64');
   if(current.id!==product.id||current.publicId!==member.publicId||current.sourceFactsHash!==member.sourceFactsHash
     ||proof.input!=='verified'||proof.model!=='text-embedding-3-small'||typeof proof.reference!=='string'||!proof.reference.trim()
     ||proof.text!==text||proof.embeddingTextHash!==sha256(text)

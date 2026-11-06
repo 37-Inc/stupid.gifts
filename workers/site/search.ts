@@ -8,6 +8,9 @@ import { DERIVED_SEARCH_PROFILE, normalizeSemanticPrefix } from '../../lib/catal
 import type { DerivedSearchProfile } from '../../lib/catalog/semantic-profile.ts';
 import type { DerivedSemanticSearch } from './derived-search.ts';
 import { canonicalJson } from '../../lib/catalog/canonical-json.ts';
+import { productPresentation } from '../../lib/catalog/presentation.ts';
+import { rankHybridResults } from '../../lib/catalog/hybrid-ranking.ts';
+import type { Merchandising } from '../../lib/catalog/merchandising.ts';
 
 export const EMBEDDING_MODEL = 'text-embedding-3-small';
 export const EMBEDDING_DIMENSIONS = 1536;
@@ -63,19 +66,17 @@ export async function openAIEmbedding(query: string, env: SiteEnv, signal: Abort
 function result(product: PublicCatalogProduct, similarity: number, matchType: 'semantic' | 'keyword'): SearchResult {
   // The catalog validator produces the public allowlist; never spread D1 rows.
   return {
-    ...product,
+    ...productPresentation(product),
     similarity,
-    rankScore: similarity * 0.76 + (product.qualityScore || 0) * 0.22
-      + (product.price > 0 && product.price <= 75 ? 0.02 : 0),
+    rankScore: similarity,
     matchType,
   };
 }
 
 function keywordSimilarity(product: PublicCatalogProduct, query: string): number {
   const needle = query.toLowerCase();
-  if (product.punnyTitle?.toLowerCase().includes(needle)) return 0.78;
   if (product.title.toLowerCase().includes(needle)) return 0.74;
-  if (product.wittyDescription?.toLowerCase().includes(needle)) return 0.68;
+  if (product.description.toLowerCase().includes(needle)) return 0.68;
   if (product.humorTags?.join(' ').toLowerCase().includes(needle)) return 0.62;
   const terms = catalogSearchTerms(query);
   const coverage = (text: string) => terms.filter(term => text.toLowerCase().includes(term)).length / Math.max(1, terms.length);
@@ -86,12 +87,6 @@ function keywordSimilarity(product: PublicCatalogProduct, query: string): number
 
 /** Small lexical tie-breaker keeps literal interests ahead of generic gift copy.
  * The fixed v3 profile's negative-query smoke cohort stays below0.4 cosine. */
-function derivedRank(product: SearchResult, query: string): number {
-  const terms = catalogSearchTerms(query);
-  const text = [product.title, product.punnyTitle, product.humorTags?.join(' ')].join(' ').toLowerCase();
-  return product.rankScore + 0.2 * terms.filter(term => text.includes(term)).length / Math.max(1, terms.length);
-}
-
 function select(candidates: SearchResult[], limit: number, now: number,semanticDeadlines?:ReadonlyMap<string,number>): SearchResult[] {
   const ids = new Set<string>();
   const eligible = candidates.flatMap(candidate=>{
@@ -99,7 +94,7 @@ function select(candidates: SearchResult[], limit: number, now: number,semanticD
     if(!product)return[];
     // A permanent listing is not a renewed semantic/native freshness proof.
     if(candidate.matchType==='semantic'&&(semanticDeadlines?.get(candidate.publicId)??catalogDeadline(candidate.eligibleUntil))<=now)return[];
-    return[result(product,candidate.similarity,candidate.matchType)];
+    return[{...result(product,candidate.similarity,candidate.matchType),rankScore:candidate.rankScore}];
   }).filter((product) => {
     if (ids.has(product.id) || !(product.eligibleUntil===null
       ? product.isActive&&product.qualityScore>=0&&product.qualityScore<=1&&product.imageUrl&&product.affiliateUrl
@@ -114,7 +109,7 @@ function select(candidates: SearchResult[], limit: number, now: number,semanticD
   return eligible.filter(product => product.eligibleUntil === null || finite.has(product.id)).slice(0, limit);
 }
 
-/** Per-isolate cache/limiter are best effort, not global spending guarantees. */
+/** Bounded per-isolate cache and alert-only request telemetry. */
 export function createSearchHandler<Env extends SiteEnv>(options: {
   catalogRevision: string;
   adapters: SearchAdapters<Env>;
@@ -124,14 +119,22 @@ export function createSearchHandler<Env extends SiteEnv>(options: {
   semanticBudgetScope?: SemanticBudgetScope;
   /** null explicitly fails closed on a malformed derived artifact, not to legacy semantic serving. */
   derivedSemantic?: DerivedSemanticSearch | null;
+  merchandising?: Merchandising;
 }) {
   const now = options.now || Date.now;
   const timeout = Math.max(10, Math.min(options.providerTimeoutMs ?? 1500, 3000));
-  const cache = new Map<string, { until: number; results: SearchResult[];semanticDeadlines:ReadonlyMap<string,number> }>();
+  const cache = new Map<string, { until: number; keywords: SearchResult[]; semantic: SearchResult[];semanticDeadlines:ReadonlyMap<string,number> }>();
   const clients = new Map<string, { until: number; count: number }>();
   const maxRequests = Math.max(1, Math.min(options.rateLimit ?? 20, 60));
   const derived = options.derivedSemantic;
   const scope = options.semanticBudgetScope && Object.freeze({ ...options.semanticBudgetScope });
+  const hybrid=(query:string,keywords:SearchResult[],semantic:SearchResult[],limit:number,deadlines:ReadonlyMap<string,number>)=>{
+    const current=now();
+    // Expired semantic proof must not swallow a valid same-ID lexical result
+    // during identity merging. Filter each lane first, then fuse once.
+    const lexical=select(keywords,240,current),vectors=select(semantic,240,current,deadlines);
+    return select(rankHybridResults(query,lexical,vectors,options.merchandising,current),limit,current,deadlines);
+  };
 
   return async (request: Request, env: Env): Promise<Response> => {
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
@@ -166,16 +169,21 @@ export function createSearchHandler<Env extends SiteEnv>(options: {
     // Hashing above can cross a product deadline. Check the current clock and
     // reselect immediately before serialization, just as for uncached responses.
     if (cached && cached.until > now()) {
-      const fresh = select(cached.results, limit, now(),cached.semanticDeadlines);
-      if (fresh.length === cached.results.length) return json({ searchId: null, results: fresh });
+      // Re-rank all saved candidates, not only yesterday's winners: a campaign
+      // ending during cache lifetime loses its preference without another query.
+      const fresh = hybrid(query,cached.keywords,cached.semantic,limit,cached.semanticDeadlines);
+      return json({ searchId: null, results: fresh });
     }
     cache.delete(key);
 
     try {
       const storage = options.adapters.storage(env);
       const candidateLimit = Math.min(240, limit * 4);
+      const keywordLimit=semantic?Math.max(limit,candidateLimit-Math.min(50,candidateLimit)):candidateLimit;
+      const keywordTask=bounded(()=>storage.keyword(query,keywordLimit,new Date(now()),options.catalogRevision),timeout)
+        .then(products=>({ok:true,products}),()=>({ok:false,products:[] as PublicCatalogProduct[]}));
       let candidates: SearchResult[] = [];
-      let vectorCount = 0;
+      let semanticAvailable = false;
       if (semantic) {
         try {
           const matches = await bounded(async (signal) => {
@@ -197,14 +205,14 @@ export function createSearchHandler<Env extends SiteEnv>(options: {
             const verified = await bounded(() => derived.resolve(matches.matches.slice(0, Math.min(100, candidateLimit))), timeout);
             candidates = verified.filter(({ score }) => score >= 0.4)
               .map(({ product, score }) => result(product, score, 'semantic'))
-              .sort((a,b) => derivedRank(b,query) - derivedRank(a,query) || a.id.localeCompare(b.id));
-            vectorCount = candidates.length;
+              .sort((a,b) => b.similarity-a.similarity || a.id.localeCompare(b.id));
+            semanticAvailable = true;
           } else {
             const scores = new Map<string, number>();
             for (const match of matches.matches.slice(0, Math.min(100, candidateLimit))) {
               if (typeof match.id === 'string' && match.id.length <= 100 && Number.isFinite(match.score)) scores.set(match.id, Math.max(-1, Math.min(1, match.score)));
             }
-            vectorCount = scores.size;
+            semanticAvailable = true;
             if (scores.size) {
               const products = await bounded(() => storage.byPublicIds([...scores.keys()], new Date(now()), options.catalogRevision), timeout);
               candidates = products.filter((product) => scores.has(product.publicId))
@@ -217,20 +225,10 @@ export function createSearchHandler<Env extends SiteEnv>(options: {
         }
       }
       const semanticDeadlines=new Map(candidates.map(product=>[product.publicId,catalogDeadline(product.eligibleUntil)]));
-      let results = select(candidates, limit, now(),semanticDeadlines);
-      if (results.length < limit) {
-        // Rejected ANN candidates cannot starve lexical fallback. Legacy D1
-        // lookup + keyword overfetch still share the 240-candidate ceiling.
-        const keywordLimit = Math.min(240 - vectorCount, Math.max(limit - results.length, candidateLimit - vectorCount));
-        const products = await bounded(() => storage.keyword(query, keywordLimit, new Date(now()), options.catalogRevision), timeout);
-        const semanticIds = new Set(results.map((product) => product.id));
-        // Storage already ranks by full-text relevance. Re-sorting these by
-        // optimistic copy/quality can bury the best actual query matches.
-        const keywords = products.slice(0, keywordLimit)
-          .filter((product) => !semanticIds.has(product.id))
-          .map((product) => result(product, keywordSimilarity(product, query), 'keyword'));
-        results = select([...results, ...keywords], limit, now(),semanticDeadlines);
-      }
+      const keywordResponse=await keywordTask;
+      if(!keywordResponse.ok&&!semanticAvailable)throw new Error('search_unavailable');
+      const keywords=keywordResponse.products.slice(0,keywordLimit).map(p=>result(p,keywordSimilarity(p,query),'keyword'));
+      let results = hybrid(query,keywords,candidates,limit,semanticDeadlines);
       // Recheck deadlines after all I/O, and cap cache at the earliest result expiry.
       results = select(results, limit, now(),semanticDeadlines);
       const until = Math.min(startedAt + CACHE_MS,
@@ -238,7 +236,7 @@ export function createSearchHandler<Env extends SiteEnv>(options: {
         ...results.map(product=>catalogDeadline(product.eligibleUntil)));
       if (until > now()) {
         if (cache.size >= MAX_STATE_ENTRIES) cache.delete(cache.keys().next().value!);
-        cache.set(key, { results, until,semanticDeadlines });
+        cache.set(key, { keywords, semantic:candidates, until,semanticDeadlines });
       }
       let searchId: string | null = null;
       if (options.adapters.diagnostic) {

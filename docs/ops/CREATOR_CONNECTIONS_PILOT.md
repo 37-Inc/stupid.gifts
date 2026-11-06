@@ -1,6 +1,9 @@
 # Stupid Gifts — Creator Connections integration notes
 
-Proposal for owner review, November 5, 2026. The authoritative combined rollout is [One product view, better discovery](CATALOG_QUALITY_AND_MERCHANDISING.md): correct copy/index consistency, then share gag-appeal and verified commission signals across search and the existing homepage job. PR350 remains documentation-only.
+Owner-approved PR350 implementation, November5,2026. See
+[One product view, better discovery](CATALOG_QUALITY_AND_MERCHANDISING.md) and
+[the manual-digest contract](CAMPAIGN_DIGEST.md). Accepted campaigns and bonus
+earnings remain separate from implementation/notification acceptance.
 
 ## The candidate rule
 
@@ -21,4 +24,4 @@ Proposal for owner review, November 5, 2026. The authoritative combined rollout 
 
 - Amazon includes publishers/bloggers but bonuses apply only to qualifying campaign sales: [program overview](https://advertising.amazon.com/help/GPARAL6JVGFEJKG2). Campaign content/disclosure requirements can vary: [campaign guidance](https://advertising.amazon.com/help/GMANECFAFD49W23Y).
 - Current research handoff reports source-browser access failures. Saved leads are reusable, but fresh unattended collection and any specific accepted website campaign remain unproven. Keep browser-dependent work outside the site's publication dependency chain.
-- No account action, new model/supplier call, job change, ranking implementation or production release is authorized by this documentation PR. Automatic enrollment, hosted research and pricing integration remain deferred.
+- The owner's subsequent request authorizes implementation/deployment and the existing-task manual Slack digest. Automatic enrollment is prohibited; hosted research, public prices and new provider plans remain deferred.

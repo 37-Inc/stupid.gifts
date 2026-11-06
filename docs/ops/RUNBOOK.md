@@ -6,6 +6,15 @@ latest protected receipt take precedence over historical journal entries.
 
 ## Current state
 
+PR350 implements the owner-approved shared short-copy backfill, fused search
+ranking and optional manual campaign digest. Read `CAMPAIGN_DIGEST.md` before
+morning editorial. Its narrow Slack exception permits new/changed manual
+campaign-join notices through the existing marketing transport; no automatic
+enrollment, new scheduler, video/payback scoring or public commission claims.
+Missing campaign evidence/notifications cannot gate care or search. Preserve
+telemetry and the accepted catalog. Use the new source only after actual
+production acceptance is recorded; the prior runtime below remains historical.
+
 November5 telemetry acceptance supersedes the serving-code/operator references
 in the historical November4 paragraphs below. PR351 merged as
 `d523580f3081b343d7c42337ae010e4457bcce64`; its clean maintained runtime is

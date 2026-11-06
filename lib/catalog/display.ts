@@ -1,4 +1,5 @@
 import type { CatalogSnapshot, PersistentCatalogProduct, PublicCatalogProduct } from './types.ts';
+import { productPresentation } from './presentation.ts';
 
 /** Null denotes positive permanent clearance, not an invented future date. */
 export function catalogDeadline(value: string | null): number {
@@ -31,5 +32,5 @@ export function earliestDisplayExpiry(products: readonly PublicCatalogProduct[])
 
 /** A build-time view, not a replacement snapshot/receipt or a new observation. */
 export function catalogDisplayView(snapshot: CatalogSnapshot): CatalogSnapshot {
-  return { ...snapshot, products: snapshot.products.map(product => persistentPublicProduct(product) ?? product) };
+  return { ...snapshot, products: snapshot.products.map(product => productPresentation(persistentPublicProduct(product) ?? product)) };
 }

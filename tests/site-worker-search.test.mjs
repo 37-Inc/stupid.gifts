@@ -57,7 +57,7 @@ test('semantic response retains contract, rank score, provider and candidate bou
   assert.equal(response.status, 200);
   assert.equal(typeof body.searchId, 'string');
   assert.equal(body.results[0].matchType, 'semantic');
-  assert.equal(body.results[0].rankScore, 0.9 * 0.76 + 0.8 * 0.22);
+  assert.equal(body.results[0].rankScore, 1/61);
   assert.deepEqual(fixture.calls.vector[0], { topK: 100, returnValues: false, returnMetadata: 'none', filter: { catalogRevision: 'revision-1', eligible: true } });
   assert.ok(fixture.calls.keyword[0].limit + fixture.calls.ids[0].length <= 240);
   assert.ok(body.results.length <= 60);

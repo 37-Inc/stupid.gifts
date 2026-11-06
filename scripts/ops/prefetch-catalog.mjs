@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createPostgresCatalogMaintenanceStore } from './catalog-maintenance-postgres.mjs';
+import { canonicalDescriptionEmbeddingInput, refreshedShortCopy, sameProductTitle } from '../../lib/catalog/presentation.ts';
 import OpenAI from 'openai';
 import amazonCreators from '../../lib/amazon-creators.js';
 import { hydrateLocalAmazonCreatorsEnv } from './amazon-creators-env.mjs';
@@ -605,13 +606,7 @@ function normalizeQualityScore(value, fallback) {
 }
 
 function buildProductEmbeddingText(product) {
-  return [
-    product.punnyTitle,
-    product.title,
-    product.wittyDescription,
-    product.sourceQuery,
-    product.humorTags?.join(' '),
-  ].filter(Boolean).join('. ');
+  return canonicalDescriptionEmbeddingInput(product);
 }
 
 async function enrichCopyBatch(products, telemetry, operation = 'editorial_draft', shortCopy = false) {
@@ -1245,6 +1240,8 @@ async function getProductsForRevalidation(limit, staleDays, storeOrQuery) {
 
 function revalidatedProduct(existing, remote, options, evidence) {
   const stored = (camelKey, snakeKey) => existing[camelKey] ?? existing[snakeKey];
+  const title = remote.title || existing.title;
+  const copyChanged = !sameProductTitle(title,existing.title);
   const remotePrice = Number(remote.price || 0);
   const existingPrice = Number(existing.price || 0);
   const price = remotePrice > 0 ? remotePrice : existingPrice;
@@ -1266,7 +1263,7 @@ function revalidatedProduct(existing, remote, options, evidence) {
   const product = {
     id: existing.id,
     slug: existing.slug,
-    title: remote.title || existing.title,
+    title,
     price,
     currency: remotePrice > 0
       ? (remote.currency || existing.currency || 'USD')
@@ -1275,9 +1272,10 @@ function revalidatedProduct(existing, remote, options, evidence) {
     affiliateUrl: remote.affiliateUrl || stored('affiliateUrl', 'affiliate_url') || amazonAffiliateUrl(existing.id),
     source: 'amazon',
     sourceQuery: stored('sourceQuery', 'source_query') || '',
-    humorTags: stored('humorTags', 'humor_tags') || inferHumorTags(remote.title || existing.title, stored('sourceQuery', 'source_query') || ''),
-    punnyTitle: stored('punnyTitle', 'punny_title'),
-    wittyDescription: stored('wittyDescription', 'witty_description'),
+    humorTags: copyChanged ? [] : stored('humorTags', 'humor_tags') || inferHumorTags(title, stored('sourceQuery', 'source_query') || ''),
+    punnyTitle: copyChanged ? undefined : stored('punnyTitle', 'punny_title'),
+    wittyDescription: copyChanged ? refreshedShortCopy({...existing,source:'amazon',wittyDescription:stored('wittyDescription','witty_description')},title)
+      : stored('wittyDescription', 'witty_description'),
     qualityScore: Number(stored('qualityScore', 'quality_score') || 0.35),
     rating: remote.rating ?? existing.rating,
     reviewCount: remote.reviewCount ?? stored('reviewCount', 'review_count'),

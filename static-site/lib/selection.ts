@@ -3,6 +3,7 @@ import type {
   PublicCatalogProduct,
 } from "../../lib/catalog/types";
 import { catalogDeadline, persistentPublicProduct } from "../../lib/catalog/display";
+import { productPresentation } from '../../lib/catalog/presentation';
 
 export const RANDOM_POOL_LIMIT = 48;
 
@@ -10,7 +11,7 @@ export function readySnapshotProducts(
   snapshot: CatalogSnapshot,
   now = Date.parse(snapshot.generatedAt),
 ) {
-  return snapshot.products.map(product => persistentPublicProduct(product) ?? product).filter(
+  return snapshot.products.map(product => productPresentation(persistentPublicProduct(product) ?? product)).filter(
     (product) =>
       product.isActive &&
       product.qualityScore >= (product.eligibleUntil === null ? 0 : 0.55) &&

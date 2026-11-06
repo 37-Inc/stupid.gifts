@@ -17,7 +17,7 @@ function fail():never{throw Error('new_product_slug_repair_refused');}
 function verifiedNative(row:Row,state:Row){
   if(state.product_id!==row.id||state.embedding_present!==1||typeof state.embedding_native_base64!=='string')fail();
   const product=maintenanceState({...row,maintenance_semantic:state.semantic_json});
-  const proof=JSON.parse(String(state.embedding_provenance_json)),text=maintenanceEmbeddingText(product);
+  const proof=JSON.parse(String(state.embedding_provenance_json)),text=maintenanceEmbeddingText(product,proof.text);
   if(proof.input!=='verified'||proof.model!=='text-embedding-3-small'||proof.text!==text||proof.embeddingTextHash!==sha256(text)
     ||row.embedding_text_hash!==proof.embeddingTextHash||proof.sourceFactsHash!==row.source_facts_hash
     ||proof.vectorBytesSha256!==createHash('sha256').update(Buffer.from(state.embedding_native_base64,'base64')).digest('hex'))fail();

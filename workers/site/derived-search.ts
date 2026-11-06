@@ -4,6 +4,7 @@ import { semanticHash, semanticPublicFields, semanticVectorIdentity, semanticVec
   validateSemanticCatalog, semanticEntryFromMetadata, DERIVED_SEARCH_PROFILE } from '../../lib/catalog/semantic-profile.ts';
 import type { CatalogSnapshot } from '../../lib/catalog/types.ts';
 import type { VectorMatch } from './bindings.ts';
+import { hasRepairedSemanticCopy, productPresentation } from '../../lib/catalog/presentation.ts';
 
 /** Compiled, hash-bound artifact + CURRENT public snapshot, never broad D1 lookup.
  * Do not equate this local contract with actual index coverage/quality acceptance.
@@ -30,11 +31,12 @@ export function createDerivedSemanticSearch(snapshot: CatalogSnapshot, input: un
         const metadata = match.metadata as {publicId?:string} | undefined;
         const product = products.get(metadata?.publicId ?? '');
         const entry = entries.get(match.id) ?? (product && semanticEntryFromMetadata(match.id,metadata,product.id));
-        if (!entry || !product || product.id !== entry.productId || !Number.isFinite(match.score)
+        if (!entry || !product || hasRepairedSemanticCopy(product)&&entry.inputRecipe!=='canonical-short-description-v2'
+          || product.id !== entry.productId || !Number.isFinite(match.score)
           || canonicalJson(match.metadata ?? null) !== canonicalJson(semanticVectorMetadata(entry))
           || await semanticVectorIdentity(entry) !== entry.vectorId
-          || await semanticHash(canonicalJson(semanticPublicFields(product))) !== entry.publicFieldsSha256) return null;
-        return { product, score: Math.max(-1, Math.min(1, match.score)) };
+          || await semanticHash(canonicalJson(semanticPublicFields(product,entry.inputRecipe))) !== entry.publicFieldsSha256) return null;
+        return { product:productPresentation(product), score: Math.max(-1, Math.min(1, match.score)) };
       }));
       return verified.flatMap(item => {
         if (!item || ids.has(item.product.publicId)) return [];

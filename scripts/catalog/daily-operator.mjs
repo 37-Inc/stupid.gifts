@@ -7,6 +7,7 @@ import {homedir} from 'node:os';
 import {readHomepageEdition} from '../../lib/catalog/homepage-edition.ts';
 import defaultEdition from '../../content/homepage-edition.json' with {type:'json'};
 import {PHOTO_EXPIRY_SQL} from './maintenance-d1.ts';
+import {routineMerchandising} from './campaign-operator.mjs';
 import path from 'node:path';
 
 // Sole daily Codex operator; no hosted Cron or additional publisher. Normal reviewed driver owns every
@@ -176,8 +177,9 @@ async function prepare(directory,calendar,photosOnly=false){
   const key=service=>({service:'goose.gifts.'+service,account:'goose.gifts'}),runId='daily-'+calendar.day+'-'+SOURCE.slice(0,8)+'-'+digest(path.basename(directory)).slice(0,8);
   const homepageEdition=await routineHomepageEdition(calendar.day,prior.control.path);
   const semanticSearch=routineSearchPolicy(await optional(CARE+'/semantic-search.json'));
+  const merchandising=await routineMerchandising();
   const config=validateCloudflareWeeklyConfig({schemaVersion:1,runId,catalogRevision:runId,codeSha:SOURCE,environment:SCOPE.environment,accountId:SCOPE.accountId,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},vectorIndex:{name:SCOPE.indexName,dimensions:1536,metric:'cosine'},catalog:{associateTag:'goose-gifts-37-20',marketplace:'www.amazon.com'},backfillLimit:0,cadence:{day:calendar.day,featuredIds:[...homepageEdition.anchors,...homepageEdition.rotation],runKey:runId,...(photosOnly?{photosOnly:true}:{})},credentials:{cloudflare:{type:'wrangler_oauth'},amazonId:key('AMAZON_CREATORS_CREDENTIAL_ID'),amazonSecret:key('AMAZON_CREATORS_CREDENTIAL_SECRET'),amazonVersion:'3.1',...(calendar.monday&&!photosOnly?{openai:key('OPENAI_API_KEY')}:{})},limits,retention:{reviewReference:'owner/2026-11-02/per-run-catalog-bounds',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint'].map(k=>[k,{maxAgeMs:86400000,notAfter}]))},inputs,
-    publication:{schemaVersion:1,environment:SCOPE.environment,accountId:SCOPE.accountId,workerName:SCOPE.workerName,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},indexName:SCOPE.indexName,codeSha:SOURCE,sourceMode:'stupid-production',sourceRoot:ROOT,releaseId:runId,identityOrigin:'https://stupid.gifts',compatibilityDate:'2026-10-19',prior:{directory:null,releaseId:seal.publication.releaseId,manifestSha256:prior.manifestSha256,versionReference:prior.versionReference},servingPrior,semanticSearch,homepage:homepageEdition,publicAnalytics:{enabled:true,posthogHost:'https://us.i.posthog.com',posthogKey:'phc_ATVKSPwDYTRfX9qDtDVLzZuXQcNdV9d55SjC8bHtuU8w'}}});
+    publication:{schemaVersion:1,environment:SCOPE.environment,accountId:SCOPE.accountId,workerName:SCOPE.workerName,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},indexName:SCOPE.indexName,codeSha:SOURCE,sourceMode:'stupid-production',sourceRoot:ROOT,releaseId:runId,identityOrigin:'https://stupid.gifts',compatibilityDate:'2026-10-19',prior:{directory:null,releaseId:seal.publication.releaseId,manifestSha256:prior.manifestSha256,versionReference:prior.versionReference},servingPrior,semanticSearch,homepage:homepageEdition,merchandising,publicAnalytics:{enabled:true,posthogHost:'https://us.i.posthog.com',posthogKey:'phc_ATVKSPwDYTRfX9qDtDVLzZuXQcNdV9d55SjC8bHtuU8w'}}});
   const configPath=directory+'/config.json',configSha256=await put(configPath,config),record={source:SOURCE,helperSha256:self,configPath,configSha256,runId,capacity};await put(directory+'/operator.json',record);return record;
 }
 async function review(entry,config,directory){

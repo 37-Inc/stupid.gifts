@@ -7,7 +7,6 @@ import { previewMetadata, PREVIEW_ORIGIN } from "../../../lib/metadata";
 import { ProductCard } from "../../../components/ProductCard";
 import { og } from "../../../lib/og-data";
 import { shortProductName } from "../../../lib/product-presentation";
-import homepage from "../../../../content/homepage.json";
 import { Icon } from "../../../components/Icon";
 
 export const dynamicParams = false;
@@ -26,7 +25,7 @@ export async function generateMetadata({
   const product = catalog.products.find((item) => item.slug === slug);
   if (!product) notFound();
   return previewMetadata(
-    (product.source === "amazon" && (homepage.cardTitles as Record<string, string>)[product.id]) || shortProductName(product.title),
+    shortProductName(product.title),
     product.description,
     `/gifts/${slug}`,
     { indexable: true, fixture: catalog.dataKind === "synthetic_fixture",
@@ -72,7 +71,7 @@ export default async function Gift({
             alt={
               illustrative
                 ? `Original illustration of the fictional ${product.title}`
-                : (product.source === "amazon" && (homepage.cardTitles as Record<string, string>)[product.id]) || shortProductName(product.title)
+                : shortProductName(product.title)
             }
             className="object-contain"
             sizes="(max-width: 700px) 90vw, 55vw"

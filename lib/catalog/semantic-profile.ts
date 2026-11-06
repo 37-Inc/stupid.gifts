@@ -1,5 +1,6 @@
 import { canonicalJson } from './canonical-json.ts';
 import type { PublicCatalogProduct } from './types.ts';
+import { productPresentation } from './presentation.ts';
 
 /** Derived search only; the original 1536-d native maintenance contract is unchanged. */
 export const DERIVED_SEARCH_PROFILE = Object.freeze({
@@ -12,6 +13,7 @@ export interface SemanticCatalogEntry {
   vectorId: string; publicId: string; productId: string; publicFieldsSha256: string;
   inputSha256: string; originalNativeSha256: string; derivedNativeSha256: string;
   receiptSha256: string; sourceFactsHash: string;
+  inputRecipe?: 'canonical-short-description-v2';
 }
 export type SemanticVectorBinding=Omit<SemanticCatalogEntry,'receiptSha256'|'sourceFactsHash'>;
 export interface SemanticCatalog {
@@ -22,7 +24,10 @@ export const semanticHash = async (text: string) => [...new Uint8Array(await cry
 
 /** These exact fields feed the retained producer recipe, not volatile offers,
  * descriptions, scores, slugs, receipt dates or daily catalog revisions. */
-export function semanticPublicFields(product: PublicCatalogProduct) {
+export function semanticPublicFields(product: PublicCatalogProduct, recipe?: SemanticCatalogEntry['inputRecipe']) {
+  if(recipe==='canonical-short-description-v2'){
+    const view=productPresentation(product);return {title:view.title,description:view.description};
+  }
   return { title: product.title, punnyTitle: product.punnyTitle ?? null,
     wittyDescription: product.wittyDescription ?? null, humorTags: product.humorTags ?? [] };
 }
@@ -41,12 +46,14 @@ export function normalizeSemanticPrefix(values: readonly number[], dimensions: n
 }
 export function semanticVectorIdentity(entry: Omit<SemanticVectorBinding, 'vectorId'> | SemanticVectorBinding) {
   return semanticHash(canonicalJson({ profile: DERIVED_SEARCH_PROFILE, publicId: entry.publicId,
+    ...(entry.inputRecipe?{inputRecipe:entry.inputRecipe}:{}),
     productId: entry.productId, publicFieldsSha256: entry.publicFieldsSha256, inputSha256: entry.inputSha256,
     originalNativeSha256: entry.originalNativeSha256, derivedNativeSha256: entry.derivedNativeSha256 }));
 }
 export function semanticVectorMetadata(entry: SemanticVectorBinding) {
   const profile = DERIVED_SEARCH_PROFILE;
   return { profile: profile.id, model: profile.model, dimensions: profile.dimensions, transform: profile.transform,
+    ...(entry.inputRecipe?{inputRecipe:entry.inputRecipe}:{}),
     publicId: entry.publicId, publicFieldsSha256: entry.publicFieldsSha256, inputSha256: entry.inputSha256,
     originalNativeSha256: entry.originalNativeSha256, derivedNativeSha256: entry.derivedNativeSha256 };
 }
@@ -56,11 +63,13 @@ export function semanticEntryFromMetadata(vectorId: string, metadata: unknown, p
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const m = metadata as ReturnType<typeof semanticVectorMetadata>;
   const entry = { vectorId, productId, publicId:m.publicId, publicFieldsSha256:m.publicFieldsSha256,
-    inputSha256:m.inputSha256, originalNativeSha256:m.originalNativeSha256, derivedNativeSha256:m.derivedNativeSha256 };
+    inputSha256:m.inputSha256, originalNativeSha256:m.originalNativeSha256, derivedNativeSha256:m.derivedNativeSha256,
+    ...(m.inputRecipe?{inputRecipe:m.inputRecipe}:{}) };
   if(!/^[a-zA-Z0-9_-]{1,100}$/.test(productId)||typeof m.publicId!=='string'
     ||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(m.publicId)
     ||[vectorId,m.publicFieldsSha256,m.inputSha256,m.originalNativeSha256,m.derivedNativeSha256]
-      .some(v=>typeof v!=='string'||!/^[a-f0-9]{64}$/.test(v)))return null;
+      .some(v=>typeof v!=='string'||!/^[a-f0-9]{64}$/.test(v))
+    ||m.inputRecipe!==undefined&&m.inputRecipe!=='canonical-short-description-v2')return null;
   return canonicalJson(metadata) === canonicalJson(semanticVectorMetadata(entry)) ? entry : null;
 }
 /** Structural validation does not attest a provider receipt or index coverage. */
@@ -75,7 +84,8 @@ export function validateSemanticCatalog(value: unknown): SemanticCatalog {
     throw new Error('semantic_catalog_invalid');
   const products = new Set<string>(), vectors = new Set<string>(), publicIds = new Set<string>();
   for (const entry of catalog.entries) {
-    if (!entry || Object.keys(entry).sort().join(',') !== 'derivedNativeSha256,inputSha256,originalNativeSha256,productId,publicFieldsSha256,publicId,receiptSha256,sourceFactsHash,vectorId'
+    if (!entry || Object.keys(entry).sort().join(',') !== `derivedNativeSha256,${entry.inputRecipe?'inputRecipe,':''}inputSha256,originalNativeSha256,productId,publicFieldsSha256,publicId,receiptSha256,sourceFactsHash,vectorId`
+      ||entry.inputRecipe!==undefined&&entry.inputRecipe!=='canonical-short-description-v2'
       || typeof entry.productId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(entry.productId)
       || typeof entry.publicId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(entry.publicId)
       || [entry.vectorId, entry.publicFieldsSha256, entry.inputSha256, entry.originalNativeSha256,

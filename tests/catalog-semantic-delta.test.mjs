@@ -7,6 +7,9 @@ import {maintenanceEmbeddingText,snake} from '../scripts/catalog/maintenance-sta
 import {encodePgvectorSendBase64} from '../scripts/catalog/pgvector-binary.ts';
 import {deriveMaintenanceSearchVector,prepareMaintenanceSearchDelta,syncDerivedSearchVectors} from '../scripts/catalog/sync-semantic-delta.ts';
 import {accountedPublicationFetch,accountedPublicationReadFetch} from '../scripts/catalog/publication-read-fetch.ts';
+import {canonicalDescriptionEmbeddingInput} from '../lib/catalog/presentation.ts';
+import {createDerivedSemanticSearch} from '../workers/site/derived-search.ts';
+import {semanticVectorMetadata} from '../lib/catalog/semantic-profile.ts';
 
 const digest=b=>createHash('sha256').update(b).digest('hex');
 const hash=v=>sha256(canonicalJson(v));
@@ -38,6 +41,22 @@ test('source/state/input/model/native drift cannot be relabeled as a new semanti
     x=>{x.state.embedding_native_base64=encodePgvectorSendBase64(Array(1536).fill(0));x.inventory.privateStateSha256=hash(x.state);}]){
     const x=await fixture();edit(x);await assert.rejects(deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory));
   }
+});
+test('corrected short-copy recipe projects saved bytes and serves alongside legacy entries without relabeling',async()=>{
+  const x=await fixture(),p=JSON.parse(x.state.semantic_json);
+  const text=canonicalDescriptionEmbeddingInput(p),proof=JSON.parse(x.state.embedding_provenance_json);
+  proof.text=text;proof.embeddingTextHash=sha256(text);
+  x.row.embedding_text_hash=proof.embeddingTextHash;x.state.embedding_provenance_json=JSON.stringify(proof);
+  x.inventory={productSha256:hash(x.row),privateStateSha256:hash(x.state)};
+  const before=structuredClone(x),current=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory);
+  assert.equal(current.entry.inputRecipe,'canonical-short-description-v2');assert.deepEqual(x,before);
+  const catalog={...x.f.catalog,entries:[...x.f.catalog.entries.filter(e=>e.publicId!==x.product.publicId),current.entry]};
+  const resolver=createDerivedSemanticSearch(x.f.snapshot,catalog);
+  const matches=[{id:current.vector.id,score:.9,metadata:semanticVectorMetadata(current.entry)},
+    ...x.f.vectors.filter(v=>v.metadata.publicId!==x.product.publicId).map(v=>({id:v.id,score:.8,metadata:v.metadata}))];
+  assert.equal((await resolver.resolve(matches)).length,x.f.snapshot.products.length);
+  const changed=structuredClone(x.f.snapshot);changed.products[0].description='Different reviewed short description.';
+  assert.ok(!(await createDerivedSemanticSearch(changed,catalog).resolve(matches)).some(r=>r.product.id===x.product.id));
 });
 test('photo-only fact refresh reuses the original serving identity and observation, without re-embedding',async()=>{
   const x=await fixture();x.product.imageUrl='/images/gift-placeholder.svg';

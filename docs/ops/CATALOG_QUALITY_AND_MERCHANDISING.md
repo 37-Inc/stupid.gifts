@@ -1,6 +1,12 @@
 # Stupid Gifts — One product view, better discovery
 
-Proposal for owner review, November 5, 2026. This extends the campaign pilot in PR350; it does not implement a new ranker, change jobs, accept campaigns or alter production. The separate telemetry implementation [PR351](https://github.com/37-Inc/stupid.gifts/pull/351) is now merged, deployed and ingestion-verified; allow real observations to accumulate before drawing demand/quality conclusions.
+Owner-approved implementation in PR350, November5,2026. Shared-copy backfill,
+hybrid ranking, optional merchandising and the manual Slack digest use
+[this operating contract](CAMPAIGN_DIGEST.md). Reuse the existing description
+and bounded legacy corrections, rather than add another D1 copy column/table.
+Original catalog/native evidence stays intact. Production acceptance is recorded
+separately. The separate telemetry [PR351](https://github.com/37-Inc/stupid.gifts/pull/351)
+is merged, deployed and ingestion-verified; allow observations to accumulate.
 
 ## Recommendation
 
@@ -18,7 +24,7 @@ Proposal for owner review, November 5, 2026. This extends the campaign pilot in 
 
 ## One reviewed product view
 
-- Extend existing `catalog_maintenance_products` with **one optional, versioned `presentation_review_json`**, not a second catalog. Store a review-input hash, factual short title/description, appeal (`standout`, `giftable`, `ordinary`, `unreviewed`), optional verified variant/design group, brief reason and review time. Keep merchant records, original supplier receipt hashes and historical editorial untouched.
+- Reuse the existing public `description` through one shared resolver. Keep only exact-input-bound legacy corrections and optional private appeal/group reviews; no extra D1 copy column/table. Keep merchant records, original supplier receipt hashes and historical editorial untouched.
 - One canonical factual short description supplies cards, details, metadata/JSON-LD, guides, keyword text and semantic inputs. The resolver may format/truncate it, but must not invent separate surface-specific copy. Optional long articles and legally useful disclosures remain separate. Backfill the existing notes/overrides into the reviewed field, reconcile contradictions, update ingestion/refresh/indexing to use it, then remove the duplicate copy paths. The migration is complete only when the full existing catalog is covered, not after patching a few examples. Keep the prank-box disclosure separate rather than repeating it in the description. Preserve price-free pages, photos/fallbacks and canonical links.
 - Bind reuse to **meaningful identity/copy inputs**, not volatile price, stock, photo URLs or campaign fields. Cosmetic/offer-only changes reuse copy/vectors; material object/variant contradictions require copy/tag repair. Hash changes flag review, not automatic deletion or permission to invent replacement facts.
 - Reuse good copy; correct only inconsistent current fields from confirmed facts, preserving originals privately. Ambiguous identity gets specific review, not silent item substitution or a whole-site release gate. Ordinary/unreviewed gifts stay accessible; labels affect merchandising, not existence.
@@ -53,7 +59,7 @@ Proposal for owner review, November 5, 2026. This extends the campaign pilot in 
 - **1 — Correctness:** confirm the net identity/history, fix its current copy/tags and the prank-box repetition; add the shared resolver and content-change reuse rules. Prove consistent card/detail/keyword/semantic/metadata text; preserve catalog IDs, slugs, images and history. Do not call the whole cleanup done after two edits.
 - **2 — Shared merchandising:** add review metadata, one fused relevance-first ranker, controlled variant spreading and the homepage candidate lane. Test exact `raw chicken vase`, broad `fishing`, natural-language cat gifts, explicit `cat blanket`, named variants and nonsense. Relevant funny gifts beat ordinary equivalents; unrelated high-commission items never displace correct results. Test mixed legacy/corrected recipe coverage and automatic native/derived updates. Missing metadata/provider failure retains working search.
 - **3 — Small revenue pilot:** verify/enroll a few worthy campaigns in the right account, consume their metadata in the same pipeline, and observe actual outcomes. Test wrong account, open-but-not-joined, joined-but-full, end/exhaustion/stale verification, unchanged-text metadata updates and expiry across a cached response. No fixed campaign slots or inference from the influencer calculator.
-- November5 owner accepted the shared-description simplification, existing-job reuse, relevance/appeal tiers with descending verified commission, and manual campaign joining with notifications. Implement these in separate reviewed code changes; the description backfill and new ranking are not complete just because this plan is accepted. Keep the product-quality and campaign Beads open until actual production evidence; PR350 itself remains documentation-only. PR351 is separately merged/deployed as the telemetry foundation, with acceptance recorded in PR352.
+- November5 owner authorized PR350 implementation/deployment. Keep actual campaign enrollment/earnings, automated research export and the deeper Monday internal-stage split separate from this notification/ranking foundation. PR351 is separately deployed as the telemetry foundation, with acceptance in PR352.
 
 ## Research and implementation touchpoints
 

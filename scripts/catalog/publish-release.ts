@@ -1,5 +1,7 @@
 import { readHomepageEdition } from '../../lib/catalog/homepage-edition.ts';
 import type { HomepageEdition } from '../../lib/catalog/homepage-edition.ts';
+import {readMerchandising} from '../../lib/catalog/merchandising.ts';
+import type {Merchandising} from '../../lib/catalog/merchandising.ts';
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -65,6 +67,7 @@ export interface PublicationConfig {
    * observed before the run. The prior above remains the real D1 receipt. */
   servingPrior?:DeploymentIdentity;
   homepage?:HomepageEdition;
+  merchandising?:Merchandising;
   /** Omission preserves historical config hashes and default-off behavior. */
   semanticSearch?:{enabled:boolean;
     /** Accepted only for retained historical configs, never sent to live search. */
@@ -83,7 +86,7 @@ const exact=(v:object,keys:string)=>Object.keys(v).sort().join(',')===keys;
 const sameRef=(a:ArtifactRef|undefined,b:ArtifactRef|undefined)=>canonicalJson(a??null)===canonicalJson(b??null);
 const sha256=(value:string|Uint8Array)=>createHash('sha256').update(value).digest('hex');
 export function validatePublicationConfig(input:PublicationConfig):Readonly<PublicationConfig> {
-  if(!input||!exact(input,`accountId,codeSha,compatibilityDate,database,environment,${Object.hasOwn(input,'homepage')?'homepage,':''}identityOrigin,indexName,prior,${Object.hasOwn(input,'publicAnalytics')?'publicAnalytics,':''}releaseId,schemaVersion,${Object.hasOwn(input,'semanticSearch')?'semanticSearch,':''}${Object.hasOwn(input,'servingPrior')?'servingPrior,':''}sourceMode,sourceRoot,workerName`)
+  if(!input||!exact(input,`accountId,codeSha,compatibilityDate,database,environment,${Object.hasOwn(input,'homepage')?'homepage,':''}identityOrigin,indexName,${Object.hasOwn(input,'merchandising')?'merchandising,':''}prior,${Object.hasOwn(input,'publicAnalytics')?'publicAnalytics,':''}releaseId,schemaVersion,${Object.hasOwn(input,'semanticSearch')?'semanticSearch,':''}${Object.hasOwn(input,'servingPrior')?'servingPrior,':''}sourceMode,sourceRoot,workerName`)
     ||input.schemaVersion!==1||!['staging','production'].includes(input.environment)||!/^[a-f0-9]{32}$/.test(input.accountId)
     ||!RESOURCE.test(input.workerName)||input.environment==='staging'&&!WORKERS_DEV_NAME.test(input.workerName)
     ||!RESOURCE.test(input.indexName)||!input.database||!exact(input.database,'id,name')
@@ -93,6 +96,7 @@ export function validatePublicationConfig(input:PublicationConfig):Readonly<Publ
     ||new Date(`${input.compatibilityDate}T00:00:00.000Z`).toISOString().slice(0,10)!==input.compatibilityDate)
     throw new Error('publication_configuration_invalid');
   if(Object.hasOwn(input,'homepage')&&!readHomepageEdition(input.homepage))throw new Error('publication_homepage_invalid');
+  if(Object.hasOwn(input,'merchandising')&&!readMerchandising(input.merchandising))throw new Error('publication_merchandising_invalid');
   const identity=siteIdentityFor(input.sourceMode); const origin=new URL(input.identityOrigin);
   if(origin.protocol!=='https:'||origin.origin!==input.identityOrigin||origin.username||origin.password
     ||input.environment==='staging'&&input.sourceMode!=='preview'
@@ -132,6 +136,7 @@ export function validatePublicationConfig(input:PublicationConfig):Readonly<Publ
   }
   return Object.freeze({...input,database:Object.freeze({...input.database}),prior:input.prior&&Object.freeze({...input.prior}),
     ...(input.homepage?{homepage:readHomepageEdition(input.homepage)!}:{}),
+    ...(input.merchandising?{merchandising:readMerchandising(input.merchandising)!}:{}),
     ...(input.servingPrior?{servingPrior:Object.freeze({...input.servingPrior})}:{}),
     ...(Object.hasOwn(input,'semanticSearch')?{semanticSearch:Object.freeze({...input.semanticSearch!,
       ...(input.semanticSearch?.derivedCatalog?{derivedCatalog:Object.freeze({...input.semanticSearch.derivedCatalog})}:{})})}:{}),
@@ -886,7 +891,8 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       const context:ReleaseBuildContext={schemaVersion:1,sourceMode:config.sourceMode,releaseId:config.releaseId,codeSha:config.codeSha,
         catalogRevision:revision.snapshot.catalogRevision,catalogSnapshotSha256:sha256(`${JSON.stringify(revision.snapshot)}\n`),
         generatedAt:revision.snapshot.generatedAt,vectorSyncWatermark:revision.vectorSyncWatermark,priorReleaseId:config.prior?.releaseId??null,
-        retainedManifestSha256:config.prior?.directory?config.prior.manifestSha256:null,...(config.homepage?{homepage:config.homepage}:{})};
+        retainedManifestSha256:config.prior?.directory?config.prior.manifestSha256:null,...(config.homepage?{homepage:config.homepage}:{}),
+        ...(config.merchandising?{merchandising:config.merchandising}:{})};
       validateBuildContext(context,revision.snapshot,config.codeSha,context.catalogSnapshotSha256,now());
       let observedAt=revision.snapshot.generatedAt;
       const deadlines=revision.snapshot.products.map(p=>p.eligibleUntil);

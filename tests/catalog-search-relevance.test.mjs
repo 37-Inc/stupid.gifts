@@ -11,11 +11,11 @@ import { snapshotKeywordSearch } from '../workers/site/snapshot-search.ts';
 import { createSiteWorker } from '../workers/site/index.ts';
 import { suppressNearDuplicateProducts } from '../lib/db/product-scoring.ts';
 import { LEGACY_DESCRIPTION_PLACEHOLDER } from '../static-site/lib/card-description.ts';
-import descriptions from '../content/catalog-card-descriptions.json' with {type:'json'};
+import descriptions from '../content/catalog-presentation.json' with {type:'json'};
 
 test('keyword search indexes the factual short note shown on a generic catalog card without changing source data', async () => {
   const id = 'B09P3N5NZ2', note = descriptions[id];
-  const product = {...fixture.products[0], source:'amazon', id, title:note.title,
+  const product = {...fixture.products[0], source:'amazon', id, title:note.sourceTitle,
     description:LEGACY_DESCRIPTION_PLACEHOLDER, punnyTitle:undefined, wittyDescription:undefined,
     humorTags:[], eligibleUntil:null};
   const before = JSON.stringify(product), snapshot = {...fixture,products:[product]};

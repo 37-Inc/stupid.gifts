@@ -12,6 +12,7 @@ import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import {mutationAssertion} from '../../lib/catalog/mutation-fence.ts';
 import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
 import {preservedPhotoVector} from './photo-vector-reuse.ts';
+import {canonicalDescriptionEmbeddingInput,hasRepairedSemanticCopy} from '../../lib/catalog/presentation.ts';
 
 type Row=Record<string,unknown>;
 export type DerivedVector={id:string;values:number[];metadata:ReturnType<typeof semanticVectorMetadata>};
@@ -28,7 +29,7 @@ export async function deriveMaintenanceSearchVector(product:PublicCatalogProduct
     ||state.product_id!==row.id||state.embedding_present!==1||typeof state.embedding_native_base64!=='string')refuse();
   const native=decodePgvectorSendBase64(state.embedding_native_base64);
   const proof=JSON.parse(String(state.embedding_provenance_json)),text=maintenanceEmbeddingText(
-    maintenanceState({...row,maintenance_semantic:state.semantic_json}));
+    maintenanceState({...row,maintenance_semantic:state.semantic_json}),proof.text);
   if(proof.input!=='verified'||proof.model!==DERIVED_SEARCH_PROFILE.model||proof.text!==text
     ||proof.embeddingTextHash!==sha256(text)
     ||proof.vectorBytesSha256!==digest(Buffer.from(state.embedding_native_base64,'base64'))
@@ -40,13 +41,15 @@ export async function deriveMaintenanceSearchVector(product:PublicCatalogProduct
   const prefix=[product.punnyTitle,product.title,product.wittyDescription].filter(Boolean).join('. ');
   const suffix=product.humorTags?.join(' ');
   let context:string|null=null;
-  if(semanticProductInput(product,null)!==text){
+  const recipe=text===canonicalDescriptionEmbeddingInput(product)?'canonical-short-description-v2' as const:undefined;
+  if(!recipe&&semanticProductInput(product,null)!==text){
     if(!text.startsWith(prefix+'. ')||suffix&&!text.endsWith('. '+suffix))refuse();
     context=text.slice(prefix.length+2,suffix?-(suffix.length+2):undefined);
     if(!context||semanticProductInput(product,context)!==text)refuse();
   }
   const values=normalizeSemanticPrefix(native,DERIVED_SEARCH_PROFILE.dimensions);
-  const identity={productId:product.id,publicId:product.publicId,publicFieldsSha256:hash(semanticPublicFields(product)),
+  const identity={productId:product.id,publicId:product.publicId,publicFieldsSha256:hash(semanticPublicFields(product,recipe)),
+    ...(recipe?{inputRecipe:recipe}:{}),
     inputSha256:sha256(text),originalNativeSha256:proof.vectorBytesSha256,
     derivedNativeSha256:digest(Buffer.from(encodePgvectorSendBase64(values),'base64')),
     receiptSha256:proof.reference.slice(8,-5),sourceFactsHash:String(proof.sourceFactsHash)};
@@ -64,14 +67,22 @@ export async function prepareMaintenanceSearchDelta(db:CatalogD1,revision:Approv
   const vectors:DerivedVector[]=[],entries:SemanticCatalogEntry[]=[];
   for(const change of changes){
     const product=products.get(change.publicId);
-    if(!product||known.get(product.publicId)?.publicFieldsSha256===hash(semanticPublicFields(product)))continue;
+    if(!product)continue;
+    const existing=known.get(product.publicId);
+    if(existing&&!hasRepairedSemanticCopy(product)
+      &&existing.publicFieldsSha256===hash(semanticPublicFields(product,existing.inputRecipe)))continue;
     const captured=revision.persistent.inventory.find(p=>p.publicId===product.publicId);if(!captured)refuse();
     const rows=(await db.prepare('SELECT * FROM products WHERE id=?').bind(product.id).all()).results;
     const states=(await db.prepare('SELECT * FROM catalog_maintenance_products WHERE product_id=?').bind(product.id).all()).results;
     if(rows.length!==1||states.length!==1)refuse();
+    const proof=JSON.parse(String(states[0].embedding_provenance_json));
+    const prior=known.get(product.publicId);
+    if(prior&&prior.originalNativeSha256===proof.vectorBytesSha256
+      &&prior.publicFieldsSha256===hash(semanticPublicFields(product,prior.inputRecipe)))continue;
+    if(hasRepairedSemanticCopy(product)&&proof.text!==canonicalDescriptionEmbeddingInput(product))continue;
     const projected=await deriveMaintenanceSearchVector(product,rows[0],states[0],captured,
       revision.request.previous?.products.find(p=>p.publicId===product.publicId));
-    entries.push(projected.entry);vectors.push(projected.vector);
+    if(known.get(product.publicId)?.vectorId!==projected.entry.vectorId){entries.push(projected.entry);vectors.push(projected.vector);}
   }
   return {indexName:catalog.indexName,vectors,entries};
 }

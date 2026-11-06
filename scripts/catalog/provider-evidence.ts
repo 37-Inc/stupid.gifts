@@ -155,7 +155,7 @@ export function createCatalogProviderEvidence(options: {
         || new Set(products.map(p=>p.id)).size!==products.length) throw new Error('provider_evidence_embedding_response');
       const entries=products.map((p,index)=>{
         if (typeof p?.id!=='string' || !ID.test(p.id) || response.data![index]?.index!==index || typeof inputs[index]!=='string'
-          || Buffer.byteLength(inputs[index])>64000 || inputs[index]!==maintenanceEmbeddingText(p as SemanticProduct))
+          || Buffer.byteLength(inputs[index])>64000 || inputs[index]!==maintenanceEmbeddingText(p as SemanticProduct,inputs[index]))
           throw new Error('provider_evidence_embedding_input');
         const bytes=native(response.data![index].embedding);
         return {id:String(p.id),sourceFactsHash:editorialSourceHash(p),text:inputs[index],nativeBase64:bytes,vectorBytesSha256:vectorHash(bytes)};
@@ -191,7 +191,7 @@ export function createCatalogProviderEvidence(options: {
           incomingNative=exact.every((v,i)=>v===Math.fround(p.embedding![i])) ? String(args[2]) : null;
         }
       }
-      if (embedding && embedding.sourceFactsHash===sourceFactsHash && embedding.text===maintenanceEmbeddingText(p)
+      if (embedding && embedding.sourceFactsHash===sourceFactsHash && embedding.text===maintenanceEmbeddingText(p,embedding.text)
         && incomingNative===embedding.nativeBase64)
         intent.embeddingById={[p.id]:{reference:embedding.reference,model:EMBEDDING_MODEL,text:embedding.text,sourceFactsHash}};
       return intent;

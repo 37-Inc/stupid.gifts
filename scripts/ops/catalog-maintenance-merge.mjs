@@ -1,3 +1,5 @@
+import { refreshedShortCopy, sameProductTitle } from '../../lib/catalog/presentation.ts';
+
 /** Pure semantics of the existing maintenance INSERT/ON CONFLICT, not a writer.
  * CamelCase input/output; numerics are exact fixed-scale decimal strings.
  * Existing timestamps are opaque: never infer a historical timezone here.
@@ -98,5 +100,13 @@ export function mergeCatalogMaintenanceUpsert(existing, incoming, { sourceFactsH
   product.contentUpdatedAt = reviewed(status) && (next.editorialWriteup !== nullable(old.editorialWriteup)
     || next.wittyDescription !== nullable(old.wittyDescription)) ? now : nullable(old.contentUpdatedAt);
   product.lastVerifiedAt = verified ? now : nullable(old.lastVerifiedAt);
+  if (!reviewed(status) && !sameProductTitle(old.title,next.title)) {
+    product.wittyDescription = refreshedShortCopy(old,next.title);
+    product.punnyTitle = null;
+    product.humorTags = [];
+    // Original article/base/history stay retained. Stale copy is a review hint,
+    // not a reason to deactivate a catalog identity or remove its native vector.
+    if(product.editorialStatus!=='manual_locked')product.editorialStatus='stale';
+  }
   return { inserted: false, product: structuredClone(product) };
 }
