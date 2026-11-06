@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {rankHybridResults} from '../lib/catalog/hybrid-ranking.ts';
 import {readMerchandising} from '../lib/catalog/merchandising.ts';
+import {snapshotKeywordSearch} from '../workers/site/snapshot-search.ts';
 const p=(id,title='Fishing gift',description='A fishing gift.')=>({id,title,description,rankScore:.99});
 test('full ANN page cannot bury an exact literal product; overlap strengthens rank fusion',()=>{
   const exact=p('vase','Raw chicken vase'),generic=p('mug','Chicken mug');
@@ -19,6 +20,11 @@ test('expired commission loses preference on the same cached candidate set',()=>
   const a=p('a'),b=p('b'),signals={b:{commissionPriority:2,commissionUntil:'2026-11-05T12:00:00.000Z'}};
   assert.equal(rankHybridResults('fishing',[a,b],[],signals,Date.parse('2026-11-05T11:00:00Z'))[0].id,'b');
   assert.equal(rankHybridResults('fishing',[a,b],[],signals,Date.parse('2026-11-05T13:00:00Z'))[0].id,'a');
+});
+test('bounded lexical retrieval does not discard a reviewed gag gift behind ordinary ASIN ties',async()=>{
+  const products=Array.from({length:200},(_,i)=>({...p(String(i).padStart(4,'0'),'Cat object','A cat object.'),source:'amazon',eligibleUntil:null}));
+  const snapshot={catalogRevision:'fixture',products},keyword=snapshotKeywordSearch(snapshot,{'0199':{appeal:'standout'}});
+  assert.equal((await keyword('cat',36,new Date(),'fixture'))[0].id,'0199');
 });
 test('spread verified designs, not every blanket or category; no identity disappears',()=>{
   const items=[p('a','Cat blanket'),p('b','Cat blanket blue'),p('c','Cat blanket taco'),p('d','Cat blanket stars')];

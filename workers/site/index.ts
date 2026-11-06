@@ -142,7 +142,8 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
     || options.canonicalOrigin === 'https://www.goose.gifts' ? options.canonicalOrigin : undefined;
   const productionHost = productionOrigin ? new URL(productionOrigin).hostname : undefined;
   const productionAlias = productionHost?.startsWith('www.') ? productionHost.slice(4) : productionHost ? `www.${productionHost}` : undefined;
-  const localKeyword = snapshotKeywordSearch(snapshot);
+  const merchandising=readMerchandising(manifest.merchandising)??{};
+  const localKeyword = snapshotKeywordSearch(snapshot,merchandising);
   const adapters = options.searchAdapters;
   let derivedSemantic: DerivedSemanticSearch | null | undefined;
   if (Object.hasOwn(manifest, 'semanticCatalog')) {
@@ -155,7 +156,7 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
       // Explicit GA4/PostHog search events already cover the public interaction.
       // Do not write a redundant D1 diagnostic for immutable keyword results.
       diagnostic: undefined,
-    } : adapters, now, semanticBudgetScope: options.semanticBudgetScope, derivedSemantic,merchandising:readMerchandising(manifest.merchandising)??{},
+    } : adapters, now, semanticBudgetScope: options.semanticBudgetScope, derivedSemantic,merchandising,
   }) : undefined;
 
   function finish(response: Response, env: Env, request: Request): Response {
