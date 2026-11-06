@@ -421,10 +421,6 @@ nav .nav-search {
   font-size: 17px;
 }
 .show-intro { color: var(--muted); margin: 0 0 20px; }
-/* Keep the shortlist's photos large enough to show to the camera. */
-@media (min-width: 701px) {
-  .show-rehearsal .catalog-grid { margin-top: 0; }
-}
 .browse-feed.section-block {
   margin-top: 0;
 }
