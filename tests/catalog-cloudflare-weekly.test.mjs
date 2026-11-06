@@ -314,6 +314,10 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
         const exceeded=mode.reportedUsageExceeded&&q.sql.startsWith('SELECT r.*,t.start_json,t.finish_json');if(exceeded)mode.reportedUsageExceeded=false;
         result.push({success:true,results:rows,meta:{served_by_primary:true,rows_read:exceeded?1_000_001:rows.length,rows_written:writes,changes:writes}});
       }sql.exec('COMMIT');}catch(error){sql.exec('ROLLBACK');throw error;}
+      if(mode.loseProjectionSealRead&&queries.some(q=>q.sql.startsWith('INSERT INTO catalog_projection_receipts')))
+        mode.projectionSealReadArmed=true;
+      if(mode.projectionSealReadArmed&&queries.some(q=>q.sql.startsWith('SELECT coalesce(max(sequence),0) n FROM vector_sync_outbox WHERE source_revision=')&&q.params[0]===config.catalogRevision)){
+        mode.projectionSealReadArmed=false;mode.loseProjectionSealRead=false;throw Error('TEST ONLY lost post-seal watermark read');}
       calls.finish+=queries.filter(q=>q.sql.startsWith('UPDATE catalog_run_telemetry SET finish_json=')).length;
       if(dropWrite&&queries.some(q=>q.sql.startsWith('INSERT INTO catalog_maintenance_products'))){dropWrite=false;throw new Error('TEST ONLY committed response loss');}
       if(mode.loseActivationFenceResponse&&queries.some(q=>q.sql.startsWith("UPDATE catalog_build_requests SET state='activating'"))){
@@ -429,6 +433,22 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
     }};
 }
 
+test('same routine publication recovers a committed projection seal without repeating providers',async t=>{
+  const f=await setup(t,{permanent:22,held:2,authenticPrior:true,realTransport:true});
+  f.config.cadence={day:'2026-10-20',featuredIds:[ID]};f.config.backfillLimit=0;await f.configure();
+  assert.equal((await f.run('start')).reason,'awaiting_reviewed_approval');
+  const approval=await f.approve();f.mode.loseProjectionSealRead=true;
+  await assert.rejects(f.run('resume',approval),/vector_delivery_failed|cohort_failed/);
+  const old=(await fullCheckpoint(f.workspaceOptions)).checkpoint;
+  const actual=await readMutationOwner(f.local,old.owner);
+  assert.equal(old.phase,'freezing');assert.equal(actual.epoch,old.owner.epoch+1);assert.equal(old.pins.preparedRevision,undefined);
+  const providerCounts=()=>Object.fromEntries(['getItems','search','chat','embedding','merchantApiHttp','modelHttp'].map(k=>[k,f.calls[k]]));
+  const before=providerCounts();
+  const result=await f.run('resume',approval);assert.equal(result.state,'finalized',JSON.stringify(result));
+  assert.deepEqual(providerCounts(),before);
+  assert.equal(result.budget.unconfirmedRequests,1);assert.equal(f.calls.upload,1);assert.equal(f.calls.activate,1);
+  assert.equal((await readMutationOwner(f.local,old.owner)),null);
+});
 test('AUTHENTIC small whole runner consumes genuine permanent native predecessor and journals its successor',async t=>{
   const f=await setup(t,{permanent:22,held:2,authenticPrior:true,realTransport:true,at:'2026-10-19T18:00:00.000Z'});
   f.config.cadence={day:'2026-10-19',featuredIds:Array.from({length:10},(_,i)=>`B${String(11+i).padStart(9,'0')}`)};f.config.backfillLimit=0;
