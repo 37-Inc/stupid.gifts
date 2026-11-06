@@ -6,6 +6,40 @@ latest protected receipt take precedence over historical journal entries.
 
 ## Current state
 
+November5 Pacific / November6 UTC: PR350 and the live-QA refinement PR353 are
+merged and deployed. This supersedes the telemetry-only source below. Maintain
+the clean frozen operator
+`/Users/cameronehrlich/.codex/worktrees/stupid-ranking-tier-polish/stupid.gifts`
+at `a113a77b7b256723c210672b7b19cf1e073a7da1`.
+Actual code-only release `quality-tier-live-20261106-a113a77b7b25`, version
+`4b039273-86e8-49d6-8fb0-1c39f479f9f3`, deployment
+`663e6cc6-c151-4d7d-8050-99a41ae95e80`, manifest
+`995addfcf24a48aa8e31b4132aae07c9ee25b49f521ca79b8c5eaebe0a2cec0d`
+preserves the genuine November5 catalog receipt, snapshot, resolved build,
+idle owner55/776 and unchanged successor.3,388 identities /3,355 public /33 holds /
+40 articles remain intact;7,025 physical assets. All public gifts resolve one
+short description;1,036 exact-bound corrections replace old per-surface
+overlays and2,319 good fields are reused. No supplier batch or catalog-generation
+call, native rewrite, plan change or campaign joining occurred.
+
+Live search protects exact/literal relevance, then gag appeal, then verified
+commission, with RRF agreement only as a final tie-break. The final full build,
+independent verifier,276 Worker/static/search tests and408 catalog-ops tests
+passed with only documented optional skips. Live body hashes, sitemap membership,
+retired404s, Goose redirects, photos, canonical net copy/schema and tagged link,
+browse24→48, search/Clear and exact/cat/fishing/nonsense searches were checked.
+Read `evidence/2026-11-05-catalog-quality-accepted.json`.
+
+The existing08:30/20:30 task remains ACTIVE on this source. Morning care adds
+the optional manual campaign digest in `CAMPAIGN_DIGEST.md`; the actual Slack
+connection test was independently read back. Do not repeat it on schedule.
+No accepted website campaign is asserted. The actual campaign/export pilot
+remains `roadmap-mt1gp`; the deeper Monday collect→agent-shortlist→enrich split
+is `roadmap-lbbz1.20`. Neither is a release/visitor gate. Finish any registered
+source-bound output cleanup before starting care; never replay either completed
+quality publication, supplier/model phase, upload or activation. Earlier6669,
+b0a and76fa sources stay frozen historical bindings, not alternate daily writers.
+
 PR350 implements the owner-approved shared short-copy backfill, fused search
 ranking and optional manual campaign digest. Read `CAMPAIGN_DIGEST.md` before
 morning editorial. Its narrow Slack exception permits new/changed manual

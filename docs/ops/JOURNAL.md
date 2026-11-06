@@ -4,6 +4,39 @@ Newest entries first. Record release-level changes here for a cold start.
 Routine catalog care keeps protected receipts and updates Beads on meaningful
 state changes without dirtying its retained execution checkout.
 
+## 2026-11-05 — Shared copy, hybrid ranking and manual campaign digest accepted
+
+PR350/353 merged and Cloudflare actually serves
+`quality-tier-live-20261106-a113a77b7b25`; runtime source
+`a113a77b7b256723c210672b7b19cf1e073a7da1`, version
+`4b039273-86e8-49d6-8fb0-1c39f479f9f3`, deployment
+`663e6cc6-c151-4d7d-8050-99a41ae95e80`. Existing catalog snapshot/receipt,
+idle owner55/776, resolved build, successor,3,388 identities,3355 public gifts,
+33 holds,40 articles and original imagery/history are unchanged.7025 assets.
+Full copy backfill resolves every public short description, consolidating1036
+bound corrections and reusing2319 existing fields. The net/Mickey mismatch is
+fixed without changing its URL; prank-box disclosure is separate. New embeddings
+use canonical copy while legacy bytes/recipes remain retained, never relabeled.
+
+Search fuses both lanes before truncation; exact/literal relevance precedes
+reviewed appeal, then verified commission, then RRF. Real cat search now puts
+reviewed gag gifts at ranks2–4 instead of a blanket-heavy opening. Exact vase
+remains first; fishing29 and nonsense0. Browser24→48, search/Clear, photos,
+net copy/meta/schema/tagged link, all checked bodies, sitemap and redirects pass.
+276 storefront/search tests and408 catalog operations tests pass (optional
+skips only), plus types/lint/full-build independent verification. Each code-only
+publication retains31HTTP/10SQL/63reads/zero writes/unknowns; no merchant batch,
+catalog generation, native write, plan change or enrollment. API query smoke
+tests are functional traffic, separately QA-labelled, not catalog generation.
+
+Existing task stays ACTIVE on the clean ranking-tier operator, with optional
+morning private appeal/campaign review and deduplicated manual Slack joins.
+Transport was independently read back; no campaign was joined or bonus proof
+invented. Real export/pilot remains `roadmap-mt1gp`; deeper same-run shortlist
+split is `roadmap-lbbz1.20`. Evidence and source-bound cleanup are retained;
+never replay either completed quality publication. See the acceptance receipt
+and `CAMPAIGN_DIGEST.md`, not old telemetry-only operator instructions.
+
 ---
 
 ## 2026-11-04 — Saved catalog recovered; usage stops become alerts

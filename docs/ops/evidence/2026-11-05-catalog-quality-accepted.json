@@ -1,0 +1,160 @@
+{
+  "acceptedAt": "2026-11-06T00:23:06.486Z",
+  "pullRequests": [
+    350,
+    353
+  ],
+  "serving": {
+    "release_id": "quality-tier-live-20261106-a113a77b7b25",
+    "code_sha": "a113a77b7b256723c210672b7b19cf1e073a7da1",
+    "catalog_revision": "daily-2026-11-05-76fa8ba2-9d850ef2",
+    "catalog_snapshot_sha256": "2b54e6846b2bf4c37be7647d00e57ba4081987ce49d4c95c2ade53f342030ab9",
+    "manifest_sha256": "995addfcf24a48aa8e31b4132aae07c9ee25b49f521ca79b8c5eaebe0a2cec0d"
+  },
+  "version": "4b039273-86e8-49d6-8fb0-1c39f479f9f3",
+  "deployment": "663e6cc6-c151-4d7d-8050-99a41ae95e80",
+  "catalogReceiptSha256": "599f1611db1d39b3ba68ac8c0d7ca28873aaae376734cc54f4976de47247bb3c",
+  "build": "resolved",
+  "owner": {
+    "phase": "idle",
+    "generation": 55,
+    "mutation_epoch": 776,
+    "external_pending": 0
+  },
+  "catalogSuccessorUnchanged": true,
+  "counts": {
+    "public": 3355,
+    "held": 33,
+    "identities": 3388,
+    "articles": 40,
+    "assets": 7025,
+    "sitemap": 3400
+  },
+  "copy": {
+    "reused": 2319,
+    "legacyCorrections": 1036,
+    "missingDescriptions": 0,
+    "genericDescriptionPlaceholders": 0
+  },
+  "checks": {
+    "catalogOperations": {
+      "tests": 408,
+      "passed": 406,
+      "skipped": 2,
+      "failed": 0
+    },
+    "workerStaticSearch": {
+      "tests": 276,
+      "passed": 271,
+      "skipped": 5,
+      "failed": 0
+    },
+    "typecheck": true,
+    "lint": true,
+    "independentFullBuildVerifier": true,
+    "publicBodies": [
+      {
+        "pathname": "/",
+        "status": 200,
+        "assetSha256": "c2a1f493eed96c3f6ded95ae9397d01a399c1e2dcd3f4545bd0951375bd48618",
+        "transform": null
+      },
+      {
+        "pathname": "/gift-guides",
+        "status": 200,
+        "assetSha256": "f502a6888b91152975a69099beead74023f3b109e17269e2a351f98c4bde6c59",
+        "transform": null
+      },
+      {
+        "pathname": "/gift-guides/white-elephant-gifts",
+        "status": 200,
+        "assetSha256": "7060679c7b0616bb127fdc31787db6dc1ff136a796c9d4fdf94cdf8e3bd7a367",
+        "transform": null
+      },
+      {
+        "pathname": "/random-gift",
+        "status": 200,
+        "assetSha256": "caf88c06037ba33b3d895a6bc7c19a7317d091a250e6885cb34ca07138b8f841",
+        "transform": null
+      },
+      {
+        "pathname": "/h",
+        "status": 200,
+        "assetSha256": "35ef01cad4e1ad781204958a7dae2b0734731d29818bda39ddd1a7479d127df5",
+        "transform": null
+      },
+      {
+        "pathname": "/privacy",
+        "status": 200,
+        "assetSha256": "800b3de1df62e5718a348d682a8c0a7e32a1b95d3e6cb15c45dccc9d06b2e0b4",
+        "transform": null
+      },
+      {
+        "pathname": "/gifts/get-knit-together-with-mickey-stuffed-animal",
+        "status": 200,
+        "assetSha256": "a93ab25ff4e3fcf7f95195f23bc69f3edbb72465532ec069566238daa9929f56",
+        "transform": null
+      },
+      {
+        "pathname": "/gifts/my-first-fire-not-what-you-think-it-is",
+        "status": 200,
+        "assetSha256": "02f4048a05499486e83503d1141396d1dbd3a1de7264ca9e2b03125755ebe07f",
+        "transform": null
+      },
+      {
+        "pathname": "/gifts",
+        "status": 404
+      },
+      {
+        "pathname": "/weird-gift-index",
+        "status": 404
+      }
+    ],
+    "redirects": [
+      {
+        "host": "goose.gifts",
+        "status": 301,
+        "location": "https://stupid.gifts/gifts/shear-ly-the-best-toilet-roll-holder"
+      },
+      {
+        "host": "www.goose.gifts",
+        "status": 301,
+        "location": "https://stupid.gifts/gifts/shear-ly-the-best-toilet-roll-holder"
+      }
+    ],
+    "search": {
+      "exactVaseRank": 1,
+      "fishingResults": 29,
+      "catResults": 36,
+      "reviewedCatGagsRanks": [
+        2,
+        3,
+        4
+      ],
+      "nonsenseResults": 0
+    },
+    "browser": {
+      "home24To48": true,
+      "searchAndClear": true,
+      "netTitleDescriptionMetadataSchemaAgree": true,
+      "netImagesLoaded": true,
+      "affiliateTag": "goose-gifts-37-20"
+    },
+    "slackTransportReadback": true
+  },
+  "publicationLedger": {
+    "httpRequests": 31,
+    "sqlStatements": 10,
+    "knownRowsRead": 63,
+    "knownRowsWritten": 0,
+    "unconfirmedRequests": 0
+  },
+  "noSupplierBatch": true,
+  "noCatalogGeneration": true,
+  "noNativeWrites": true,
+  "noAutomaticEnrollment": true,
+  "followUps": [
+    "roadmap-mt1gp",
+    "roadmap-lbbz1.20"
+  ]
+}
