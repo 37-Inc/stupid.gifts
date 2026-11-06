@@ -7,6 +7,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
+import { PUBLIC_CONTACT_EMAIL } from "../lib/site.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -66,6 +67,7 @@ function component(relative, config, fixture = false) {
     "../lib/site-identity": config,
     "../lib/catalog": { isFixtureRelease: fixture, photos: { indexPath: null, index: { products: {} } } },
     "../components/CatalogPhotos": { CatalogPhotos: ({ children }) => children },
+    "../../lib/site": { PUBLIC_CONTACT_EMAIL },
     "../lib/site-editorial": { siteEditorialDisclosures: {} },
     "../../content/homepage.json": { default: { cardTitles: {} } },
     "./CatalogPhotos": { CatalogImage: () => React.createElement("img", { alt: "Controlled fixture" }) },
@@ -81,7 +83,10 @@ function component(relative, config, fixture = false) {
     "./styles.css": {},
   };
   vm.runInNewContext(outputText, { module: commonJs, exports: commonJs.exports,
-    require(name) { return Object.hasOwn(dependencies, name) ? dependencies[name] : require(name); },
+    require(name) {
+      if (name === "../components/Icon") return component("../static-site/components/Icon.tsx", config);
+      return Object.hasOwn(dependencies, name) ? dependencies[name] : require(name);
+    },
     process: { env: { NEXT_PUBLIC_STATIC_ANALYTICS_ENABLED: "true" } } });
   return commonJs.exports;
 }
@@ -93,7 +98,7 @@ test("layout and show wordmarks/URLs follow source mode without losing contact o
     const html = renderToStaticMarkup(React.createElement(layout.default, null, React.createElement("main", { id: "main" })));
     assert.match(html, new RegExp(`${config.siteIdentity.brand}<span>\\.</span>gifts`));
     assert.doesNotMatch(html, /The collection|weird-gift-index/);
-    assert.ok(html.includes("mailto:goosegifts@37.technology"));
+    assert.ok(html.includes(`mailto:${PUBLIC_CONTACT_EMAIL}`));
     assert.equal(html.includes("Private staging preview"), mode === "preview");
     assert.equal(html.includes("data-test-analytics"), mode !== "preview");
     const fixture = component("../static-site/app/layout.tsx", config, true);
@@ -122,12 +127,22 @@ test("shared footer links to the owned Pinterest profile safely without changing
       assert.match(bottom, /<a href="https:\/\/www\.pinterest\.com\/stupid_gifts\/" target="_blank" rel="noopener noreferrer">Pinterest<span class="sr-only"> \(opens in a new tab\)<\/span><\/a>/);
       assert.deepEqual([...bottom.matchAll(/href="([^"]+)"/g)].map(match => match[1]), [
         "/gift-guides", "/random-gift", "https://www.pinterest.com/stupid_gifts/",
-        "mailto:goosegifts@37.technology", "/privacy",
+        `mailto:${PUBLIC_CONTACT_EMAIL}`, "/privacy",
       ]);
       assert.match(footer, /We may earn a commission\. As an Amazon Associate we earn from qualifying purchases\./);
       assert.match(bottom, /© Thirty Seven Inc\./);
+      assert.ok(footer.includes(`<a href="mailto:${PUBLIC_CONTACT_EMAIL}?subject=Stupid%20Gifts%20partnership">Selling something stupid? Partner with us!</a>`));
     }
   }
+});
+test("Surprise me navigation uses the existing decorative dice icon", () => {
+  const config = identity({ CATALOG_SITE_MODE: "stupid-production" });
+  const layout = component("../static-site/app/layout.tsx", config);
+  const { Icon } = component("../static-site/components/Icon.tsx", config);
+  const html = renderToStaticMarkup(React.createElement(layout.default));
+  const nav = html.match(/<nav aria-label="Main navigation">([\s\S]*?)<\/nav>/)[1];
+  assert.match(nav, /<a class="nav-random" href="\/random-gift"><svg[^>]*aria-hidden="true"[^>]*focusable="false"/);
+  assert.ok(nav.includes(renderToStaticMarkup(React.createElement(Icon, { name: "dice" })) + "Surprise me</a>"));
 });
 test("actual show and QR generation use only selected compile-time origin across all source modes", () => {
   const script = `

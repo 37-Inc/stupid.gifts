@@ -8,6 +8,8 @@ import { StaticContentExpiry } from "../components/StaticContentExpiry";
 import SafeCatalog from "./safe/catalog/page";
 import { show } from "../lib/show-data";
 import { isSitePreview, isSiteProduction, siteIdentity } from "../lib/site-identity";
+import { Icon } from "../components/Icon";
+import { PUBLIC_CONTACT_EMAIL } from "../../lib/site";
 import "./styles.css";
 
 export const metadata: Metadata = {
@@ -41,7 +43,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             {siteIdentity.brand}<span>.</span>gifts
           </a>
           <nav aria-label="Main navigation">
-            <a className="nav-random" href="/random-gift">Surprise me</a>
+            <a className="nav-random" href="/random-gift"><Icon name="dice" />Surprise me</a>
             {show.latest && <a className="nav-show" href="/howie">From the show</a>}
             <a className="nav-secondary" href="/gift-guides">Gift guides</a>
             <a href="/#catalog-search" className="nav-search">
@@ -64,6 +66,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             We may earn a commission. As an Amazon Associate we earn from
             qualifying purchases.
           </p>
+          <p className="footer-partner">
+            <a href={`mailto:${PUBLIC_CONTACT_EMAIL}?subject=Stupid%20Gifts%20partnership`}>
+              Selling something stupid? Partner with us!
+            </a>
+          </p>
           <div className="footer-bottom">
             <span>© Thirty Seven Inc.</span>
             <a href="/gift-guides">Gift guides</a>
@@ -71,7 +78,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <a href="https://www.pinterest.com/stupid_gifts/" target="_blank" rel="noopener noreferrer">
               Pinterest<span className="sr-only"> (opens in a new tab)</span>
             </a>
-            <a href="mailto:goosegifts@37.technology">Contact</a>
+            <a href={`mailto:${PUBLIC_CONTACT_EMAIL}`}>Contact</a>
             <a href="/privacy">Privacy</a>
           </div>
         </footer>
