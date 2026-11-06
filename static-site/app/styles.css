@@ -412,11 +412,10 @@ nav .nav-search {
 .catalog-grid .card-copy h2 {
   font-size: 17px;
 }
-/* Keep the first reveal and its names visible in a typical show viewport. */
+.show-intro { color: var(--muted); margin: 0 0 20px; }
+/* Keep the shortlist's photos large enough to show to the camera. */
 @media (min-width: 701px) {
-  .show-rehearsal .catalog-grid .product-art { aspect-ratio: 1.5; }
-  .show-rehearsal .search-status { padding: 12px 0; }
-  .show-rehearsal .catalog-grid { margin-top: 8px; }
+  .show-rehearsal .catalog-grid { margin-top: 0; }
 }
 .browse-feed.section-block {
   margin-top: 0;

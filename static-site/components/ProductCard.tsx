@@ -9,13 +9,11 @@ export function ProductCard({
   product,
   lead = false,
   eager = false,
-  presentation,
   context = "catalog",
 }: {
   product: PublicCatalogProduct | CatalogCard;
   lead?: boolean;
   eager?: boolean;
-  presentation?: { title: string; description: string };
   context?: string;
 }) {
   const illustrative =
@@ -30,14 +28,14 @@ export function ProductCard({
       data-analytics-permanent={product.eligibleUntil === null ? "" : undefined}>
       <CatalogCardArt
         href={`/gifts/${product.slug}`}
-        label={`View ${presentation?.title || shortProductName(product.title)}`}
+        label={`View ${shortProductName(product.title)}`}
         illustrative={illustrative}
         id={product.id}
         imageUrl={product.imageUrl}
         alt={
           illustrative
             ? `Original illustration for a fictional ${product.title}`
-            : presentation?.title || shortProductName(product.title)
+            : shortProductName(product.title)
         }
         className="object-contain"
         sizes="(max-width: 700px) 45vw, 30vw"
@@ -47,14 +45,14 @@ export function ProductCard({
         {illustrative && <p className="eyebrow">Illustrative fixture · not for sale</p>}
         <h2>
           <a data-analytics-product-link="" href={`/gifts/${product.slug}`}>
-            {presentation?.title || <CatalogTitle source={product.source} id={product.id} fallback={product.title} />}
+            <CatalogTitle source={product.source} id={product.id} fallback={product.title} />
           </a>
         </h2>
         {!illustrative && <CatalogDisclosure source={product.source} id={product.id} />}
-        {presentation ? <p>{presentation.description}</p> : <CatalogDescription source={product.source} id={product.id} title={product.title} fallback={product.description} card />}
+        <CatalogDescription source={product.source} id={product.id} title={product.title} fallback={product.description} card />
         <a className="card-action" data-analytics-product-link="" href={`/gifts/${product.slug}`}>
           View gift <Icon name="arrow" />
-          <span className="sr-only">: {presentation?.title || <CatalogTitle source={product.source} id={product.id} fallback={product.title} />}</span>
+          <span className="sr-only">: <CatalogTitle source={product.source} id={product.id} fallback={product.title} /></span>
         </a>
       </div>
     </article>

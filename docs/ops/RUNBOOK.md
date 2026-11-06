@@ -6,6 +6,12 @@ latest protected receipt take precedence over historical journal entries.
 
 ## Current state
 
+November6 owner update: `/h` is now an instant, fixed Billy Ray shortlist, not
+a search/reveal interaction. Read `HOWIE_SHORTLIST.md`. Preserve its eight
+canonical picks and shared copy; do not restore the older opening/reveal sets.
+This serving change does not alter catalog membership, supplier observations,
+homepage editorial or campaign participation.
+
 November5 Pacific / November6 UTC: PR350 and the live-QA refinement PR353 are
 merged and deployed. This supersedes the telemetry-only source below. Maintain
 the clean frozen operator
