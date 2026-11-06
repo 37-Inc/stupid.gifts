@@ -19,14 +19,18 @@ export type DerivedVector={id:string;values:number[];metadata:ReturnType<typeof 
 const digest=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 const hash=(value:unknown)=>sha256(canonicalJson(value));
 function refuse():never{throw Error('semantic_delta_source_mismatch');}
+function assertSource(product:PublicCatalogProduct,row:Row,state:Row,
+  inventory:{productSha256:string;privateStateSha256:string}) {
+  if(product.id!==row.id||product.publicId!==row.public_id||row.is_active!==1||row.duplicate_of_product_id!==null
+    ||hash(row)!==inventory.productSha256||hash(state)!==inventory.privateStateSha256||state.product_id!==row.id)refuse();
+}
 
 /** Reuse VERIFIED native bytes, not another embedding/model call. The complete
  * private sidecar and products row must belong to the approved inventory. */
 export async function deriveMaintenanceSearchVector(product:PublicCatalogProduct,row:Row,state:Row,
   inventory:{productSha256:string;privateStateSha256:string},previous?:PublicCatalogProduct) {
-  if(product.id!==row.id||product.publicId!==row.public_id||row.is_active!==1||row.duplicate_of_product_id!==null
-    ||hash(row)!==inventory.productSha256||hash(state)!==inventory.privateStateSha256
-    ||state.product_id!==row.id||state.embedding_present!==1||typeof state.embedding_native_base64!=='string')refuse();
+  assertSource(product,row,state,inventory);
+  if(state.embedding_present!==1||typeof state.embedding_native_base64!=='string')refuse();
   const native=decodePgvectorSendBase64(state.embedding_native_base64);
   const proof=JSON.parse(String(state.embedding_provenance_json)),text=maintenanceEmbeddingText(
     maintenanceState({...row,maintenance_semantic:state.semantic_json}),proof.text);
@@ -75,6 +79,13 @@ export async function prepareMaintenanceSearchDelta(db:CatalogD1,revision:Approv
     const rows=(await db.prepare('SELECT * FROM products WHERE id=?').bind(product.id).all()).results;
     const states=(await db.prepare('SELECT * FROM catalog_maintenance_products WHERE product_id=?').bind(product.id).all()).results;
     if(rows.length!==1||states.length!==1)refuse();
+    assertSource(product,rows[0],states[0],captured);
+    // Preserved legacy listings may have no native embedding. Their exact
+    // source still must match; missing optional coverage is not corruption or
+    // permission to generate a vector, hide a listing or remove index history.
+    if((states[0].embedding_present===null||states[0].embedding_present===0)
+      &&states[0].embedding_native_base64===null)continue;
+    if(states[0].embedding_present!==1||typeof states[0].embedding_native_base64!=='string')refuse();
     const proof=JSON.parse(String(states[0].embedding_provenance_json));
     const prior=known.get(product.publicId);
     if(prior&&prior.originalNativeSha256===proof.vectorBytesSha256

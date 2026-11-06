@@ -79,6 +79,23 @@ test('delta visits only reviewed public changes, skipping unchanged seed entries
   const result=await prepareMaintenanceSearchDelta(db,revision,catalog);
   assert.equal(result.vectors.length,1);assert.deepEqual(calls,[x.product.id,x.product.id]);
 });
+test('authenticated legacy products without saved embeddings stay public and keyword-searchable',async()=>{
+  for(const present of [null,0]){
+    const x=await fixture(),catalog={...x.f.catalog,entries:x.f.catalog.entries.filter(e=>e.publicId!==x.product.publicId)};
+    Object.assign(x.state,{embedding_present:present,embedding_native_base64:null,embedding_provenance_json:'{"input":"absent"}'});
+    x.inventory={productSha256:hash(x.row),privateStateSha256:hash(x.state)};
+    const revision={snapshot:x.f.snapshot,persistent:{inventory:[{publicId:x.product.publicId,...x.inventory}]},
+      request:{approval:{changes:[{publicId:x.product.publicId}]}}};
+    const db={prepare(sql){return{bind(){return{async all(){return{results:[sql.includes('maintenance_products')?x.state:x.row]};}};}};}};
+    const before=structuredClone(revision);
+    assert.deepEqual(await prepareMaintenanceSearchDelta(db,revision,catalog),{indexName:catalog.indexName,vectors:[],entries:[]});
+    assert.deepEqual(revision,before);
+    x.state.version++;await assert.rejects(prepareMaintenanceSearchDelta(db,revision,catalog),/source_mismatch/);
+    x.state.version--;x.state.embedding_native_base64='contradictory native bytes';
+    revision.persistent.inventory[0].privateStateSha256=hash(x.state);
+    await assert.rejects(prepareMaintenanceSearchDelta(db,revision,catalog),/source_mismatch/);
+  }
+});
 test('same immutable payload retries after an uncertain upsert without a second write; original index is untouched',async()=>{
   const x=await fixture(),{vector}=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory);
   const events=[],stored=new Map();let lose=true,upserts=0;
