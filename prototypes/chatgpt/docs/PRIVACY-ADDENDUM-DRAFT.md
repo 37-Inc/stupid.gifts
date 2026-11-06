@@ -4,7 +4,7 @@
 
 ## Proposed public copy
 
-**Operator:** [[Confirm the legal publisher operating Stupid Gifts]]  
+**Operator:** [[Confirm the legal publisher operating Stupid Gifts]]
 **Applies to:** Stupid Gifts gift discovery in ChatGPT.
 
 When you ask Stupid Gifts for ideas, the app receives the gift-interest text or selected product identifiers that ChatGPT sends for that operation. Please describe interests rather than include names, contact details or other private information. The app does not request payment details, retailer passwords, exact location or your complete ChatGPT history.

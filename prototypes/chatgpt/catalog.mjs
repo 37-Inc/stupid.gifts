@@ -28,4 +28,3 @@ export async function createCatalog({ mode = 'fixture', file, approved = false }
   };
   return { mode, load, disclosure: mode === 'fixture' ? fixtureDisclosure : liveDisclosure };
 }
-

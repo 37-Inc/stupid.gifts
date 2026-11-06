@@ -30,7 +30,7 @@ async function search(){
     const turn=document.createElement('section');turn.className='turn';const request=document.createElement('p');request.className='prompt';request.textContent=prompt;turn.append(request);
     const label=document.createElement('div');label.className='app-label';label.textContent='Stupid Gifts';turn.append(label);
     {const frame=document.createElement('iframe');frame.title='Gift carousel';frames.set(frame,{result});frame.src='/widget';turn.append(frame)}
-    
+
     if(result.structuredContent.gifts.length){const response=document.createElement('p');response.className='response';response.textContent=catalogMode==='fixture'?'Sample gift ideas matched to those interests.':'Gift ideas from the Stupid Gifts catalog.';turn.append(response)}
     conversation.append(turn);document.getElementById('status').textContent=(qa?'Synthetic UI QA state: '+qa+' · ':'')+(selectedIds?.length?'Exact selected cards · local QA · ':'')+catalogNotice();
   }catch{document.getElementById('status').textContent='Search failed. Try again.'}finally{button.disabled=false}
