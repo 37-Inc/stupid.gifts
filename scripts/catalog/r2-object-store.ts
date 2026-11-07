@@ -19,7 +19,8 @@ const fail=(code:string):never=>{throw Error('catalog_object_store_'+code);};
 /** One private bucket/prefix; no list/create-bucket, public URL or credential
  * discovery. Conditional writes are atomic in R2. SDK transport retries are
  * disabled; transient GETs have bounded retries. An uncertain write is
- * reconciled against exact bytes before ACK, never blindly dispatched again.
+ * reconciled against exact bytes before ACK. A transient write retries only
+ * after a fresh read still matches its ORIGINAL atomic precondition.
  * https://developers.cloudflare.com/r2/api/s3/api/ */
 export function createCatalogR2Store(options:{accountId:string;bucket:string;prefix:string;
   accessKeyId:string;secretAccessKey:string;send?:typeof fetch;timeoutMs?:number}):CatalogObjectStore {
@@ -77,21 +78,33 @@ export function createCatalogR2Store(options:{accountId:string;bucket:string;pre
   }
   async function write(key:string,expectedEtag:string|null,body:Uint8Array){
     if(!(body instanceof Uint8Array)||body.byteLength>MAX_BYTES||expectedEtag!==null&&!validEtag(expectedEtag))fail('configuration');
-    const bytes=new Uint8Array(body),digest=hash(bytes),md5=createHash('md5').update(bytes).digest();let status:number|undefined;
-    try{const response=await request(key,'PUT',{'Content-Type':'application/octet-stream','x-amz-meta-sha256':digest,'Content-MD5':md5.toString('base64'),
+    const bytes=new Uint8Array(body),digest=hash(bytes),md5=createHash('md5').update(bytes).digest();
+    for(let attempt=0;;attempt++){
+      let status:number|undefined,delay=100*2**attempt;
+      try{const response=await request(key,'PUT',{'Content-Type':'application/octet-stream','x-amz-meta-sha256':digest,'Content-MD5':md5.toString('base64'),
       ...(expectedEtag===null?{'If-None-Match':'*'}:{'If-Match':expectedEtag})},bytes);
-      status=response.status;const etag=response.headers.get('etag');await response.body?.cancel();
-      // Single PUT only: R2 validates Content-MD5 and atomically commits the
+      status=response.status;const etag=response.headers.get('etag'),header=response.headers.get('retry-after'),
+        retry=header===null?NaN:/^\d+$/.test(header)?Number(header)*1000:Date.parse(header)-Date.now();
+      if(Number.isFinite(retry))delay=Math.max(0,retry);await response.body?.cancel();
+      // Single-part PUT: R2 validates Content-MD5 and atomically commits the
       // conditional write. A matching successful ACK is durable; avoid a
       // redundant GET for every journal event/head. Lost/odd ACKs still use
       // exact SHA-256+byte readback below, never another blind write.
       // https://developers.cloudflare.com/r2/reference/consistency/
       if(status===200&&etag==='"'+md5.toString('hex')+'"')return{bytes,etag};
-    }catch{/* A lost ACK is settled by exact readback, never an overwrite. */}
-    const actual=await get(key);
-    if(actual&&hash(actual.bytes)===digest&&Buffer.from(actual.bytes).equals(Buffer.from(bytes)))return actual;
-    if(status===412)return fail('conflict');
-    return fail(status!==undefined&&status>=400?'write_refused':'write_unknown');
+      }catch{/* A lost ACK is settled by exact readback, never an overwrite. */}
+      const actual=await get(key);
+      if(actual&&hash(actual.bytes)===digest&&Buffer.from(actual.bytes).equals(Buffer.from(bytes)))return actual;
+      // A negative read does NOT rule out an earlier in-flight PUT. Retain the
+      // ORIGINAL atomic condition and exact bytes on retry: even a late commit
+      // cannot cause a duplicate transition or overwrite a competing head.
+      const unchanged=expectedEtag===null?actual===null:actual?.etag===expectedEtag;
+      if(status===412||!unchanged)return fail('conflict');
+      const transient=status===undefined||status===429||status>=500;
+      if(transient&&delay>30000)return fail('write_throttled');
+      if(!transient||attempt===2)return fail(status!==undefined&&status>=400?'write_refused':'write_unknown');
+      await wait(delay);
+    }
   }
   return Object.freeze({get,putImmutable:(key:string,bytes:Uint8Array)=>write(key,null,bytes),
     compareAndSwap:async(key:string,expectedEtag:string|null,bytes:Uint8Array)=>{

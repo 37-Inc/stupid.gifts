@@ -101,7 +101,7 @@ test('provider dispatch cannot pass an unfinished remote reservation CAS',async 
 for(const fault of ['before','after-unreadable'])test(`same local resume reconciles ${fault} without local-only repair or losing a charge`,async t=>{
   const f=await fixture(t),w=await f.open();f.setFault(fault);let dispatched=false;
   await assert.rejects(async()=>{await w.reserveBudget(reservation);dispatched=true;},/unknown/);assert.equal(dispatched,false);
-  await assert.rejects(w.budget(),/journal_uncertain/);await w.close();f.readable();
+  await assert.rejects(w.budget(),error=>error.message==='run_workspace_journal_uncertain'&&error.cause?.message?.includes('unknown'));await w.close();f.readable();
   const resumed=await f.open({mode:'resume'});assert.equal((await resumed.budget()).unconfirmedRequests,1);
   const head=JSON.parse(await readFile(join(resumed.directory,'head.json'),'utf8'));
   assert.deepEqual(JSON.parse(Buffer.from(f.objects.get('runs/test-run/head.json').bytes)),head);
