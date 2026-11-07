@@ -122,7 +122,7 @@ test('expiry and build-view helpers ignore only explicit null and do not mutate 
   assert.equal(earliestCatalogExpiry([p.persistent, p]), p.eligibleUntil);
   assert.equal(earliestCatalogExpiry([p.persistent]), null);
   assert.equal(catalogDeadline(null), Infinity);
-  assert.equal(catalogDisplayView(snapshot).products[0], p.persistent);
+  assert.deepEqual(catalogDisplayView(snapshot).products[0], p.persistent);
   assert.equal(JSON.stringify(snapshot), bytes);
 });
 

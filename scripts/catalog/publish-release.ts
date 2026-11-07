@@ -248,7 +248,7 @@ async function files(directory:string){const entries=await fs.readdir(directory,
   return entries.filter(e=>e.isFile()).map(e=>path.relative(directory,path.join(e.parentPath,e.name)).split(path.sep).join('/')).sort();}
 async function inventory(directory:string){const names=await files(directory);let bytes=0;
   // Count actual files, including private package metadata, within the same
-  // conservative Free asset bound already enforced by the static assembler.
+  // existing Standard-plan asset bound enforced by the static assembler.
   if(names.length>CLOUDFLARE_ASSET_LIMIT)throw new Error('publication_package_bound');const hashes:Record<string,string>={};
   for(const name of names){const file=path.join(directory,name);await privateDirectories(path.dirname(file),directory);
     const body=await privateBytes(file);bytes+=body.length;

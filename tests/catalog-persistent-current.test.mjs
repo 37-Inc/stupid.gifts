@@ -39,11 +39,17 @@ test('a direct base selects its original nested grants without replacing or rene
     assert.throws(()=>checkCurrent(f.product,f.projection,{...f.current,rights_json:JSON.stringify({...merchant,persistent})},now));
   }
 });
-test('permanent current-row checks still reject original curation, factual drift and exact-grant revocation', () => {
+test('permanent current-row checks still reject curation, display drift and exact-grant revocation', () => {
   for (const nested of [false, true]) for (const update of [{ is_active: 0 }, { duplicate_of_product_id: 'winner' },
     { quality_score: .1 }, { editorial_status: 'blocked' }, { editorial_status: 'needs_review' },
-    { source_facts_hash: 'changed' }, { rights_json: '{}' }, { public_display_json: 'null' }]) {
+    { rights_json: '{}' }, { public_display_json: 'null' }]) {
     const f = fixture(nested);
     assert.throws(() => checkCurrent(f.product, f.projection, { ...f.current, ...update }, now));
+  }
+});
+test('new supplier facts alone do not revoke unchanged independently cleared base content', () => {
+  for (const nested of [false, true]) {
+    const f = fixture(nested);
+    assert.doesNotThrow(() => checkCurrent(f.product, f.projection, { ...f.current, source_facts_hash: 'b'.repeat(64) }, now));
   }
 });
