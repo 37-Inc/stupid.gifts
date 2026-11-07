@@ -56,6 +56,16 @@ export function createCodeOnlyStore(base){
     try{await handle.writeFile(body);await handle.sync();}finally{await handle.close();}if(!(await bytes(file)).equals(body))refuse('private_readback');return sha256(body);};
   return{bytes,json,optional,put};
 }
+/** An explicitly released, never-dispatched attempt is historical, not resumable. */
+export async function codeOnlyTerminal(store,directory,record){
+  const abandoned=await store.optional(directory+'/abandoned.json');
+  if(!abandoned)return null;
+  if(!record||abandoned.schemaVersion!==1||abandoned.state!=='abandoned_prebuild'||abandoned.runId!==record.runId
+    ||abandoned.source!==record.source||abandoned.operatorSha256!==sha256(await store.bytes(directory+'/operator.json'))
+    ||![abandoned.builds,abandoned.uploads,abandoned.activations].every(value=>value===0)
+    ||abandoned.idle?.phase!=='idle'||abandoned.idle.external_pending!==0||await store.optional(directory+'/success.json'))refuse('abandonment_changed');
+  return{state:'abandoned_prebuild',runId:record.runId,source:record.source,historicalAcceptance:false,supplierCalls:0,modelCalls:0};
+}
 export function codeOnlyAuthority({seal,codeSha,observedAt,cutoff,globalVectorWatermark,publicationReceiptWatermark}){
   const envelope=JSON.parse(seal.envelopeJson),authority={schemaVersion:1,kind:'accepted-persistent-code-only',
     sealSha256:sha256(catalogSuccessorBytes(seal)),publication:seal.publication,request:{schemaVersion:1,environment:'production',
@@ -84,6 +94,7 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
   const {command,runKey}=codeOnlyInvocation(argv),codeSha=source(),store=createCodeOnlyStore(BASE),care=BASE+'/daily-catalog-care',
     directory=care+'/code-only/'+runKey,recordPath=directory+'/operator.json',helperSha256=sha256(await fs.readFile(new URL(import.meta.url)));
   let record=await store.optional(recordPath);
+  const terminal=await codeOnlyTerminal(store,directory,record);if(terminal){console.log(JSON.stringify(terminal));return;}
   if(command==='status'){console.log(JSON.stringify(record?{state:await store.optional(directory+'/success.json')?'published':'prepared',runId:record.runId,source:record.source}:{state:'not_prepared'}));return;}
   if(record&&(record.source!==codeSha||record.helperSha256!==helperSha256))refuse('source_changed');
   if(record&&await store.optional(directory+'/success.json')){

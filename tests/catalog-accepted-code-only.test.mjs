@@ -6,6 +6,7 @@ import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {permanentCatalogFixture} from './helpers/permanent-catalog-fixture.mjs';
 import {scope,uuid} from './helpers/published-vector-fixture.mjs';
+import {earliestDisplayExpiry,resolvePublicProduct} from '../lib/catalog/display.ts';
 import {preparePermanentCatalog,settlePermanentCatalog} from '../lib/catalog/freeze-permanent-catalog.ts';
 import {approvedCohortOperationKey} from '../lib/catalog/freeze-approved-cohort.ts';
 import {claimMutationOwnership,releaseMutationOwnership} from '../lib/catalog/mutation-fence.ts';
@@ -31,19 +32,20 @@ import {assembleReleaseAssets} from '../scripts/staging/retention.mts';
 import {createStaticFeedPlan} from '../workers/site/feed.ts';
 import {createBrowseRelease} from '../static-site/lib/browse.ts';
 import {createOgRelease} from '../static-site/lib/og.ts';
+import {createPhotoRelease} from '../static-site/lib/photos.ts';
 import {siteIdentityFor} from '../static-site/lib/site-identity.ts';
 import {guides} from '../static-site/lib/guides.ts';
 import {codeOnlyAuthority} from '../scripts/catalog/code-only-operator.mjs';
 import safeCatalogPayload from '../static-site/public/safe/catalog.json' with {type:'json'};
 
-async function fixture(t,{codeSha='8'.repeat(40)}={}){
-  const f=await permanentCatalogFixture(t,{count:32,afterExpiry:true});
+async function fixture(t,{codeSha='8'.repeat(40),mixed=false}={}){
+  const f=await permanentCatalogFixture(t,{count:32,afterExpiry:!mixed,merchant:mixed});
   const prepared=await preparePermanentCatalog(f.db,f.owner,f.request),initial=prepared.revision;
   async function publish(revision,queued,releaseId,prior,version,permanent=false,servingPrior){
     const build=await claimBuildRequest(f.db,queued.requestId,releaseId,f.now());
     const intent={releaseId,catalogRevision:revision.snapshot.catalogRevision,codeSha:revision.request.codeSha,
       catalogSnapshotSha256:revision.packet.receipt.snapshot_sha256,manifestSha256:'a'.repeat(64),vectorSyncWatermark:revision.vectorSyncWatermark,
-      priorReleaseId:prior.releaseId,nextExpiry:null};
+      priorReleaseId:prior.releaseId,nextExpiry:earliestDisplayExpiry(revision.snapshot.products)};
     await enqueuePublication(f.db,revision.snapshot,intent,f.now());
     const publication=await claimPublication(f.db,revision.snapshot,releaseId,f.now());
     await recordPublicationDispatch(f.db,revision.snapshot,publication,'version:'+version,f.now());
@@ -112,6 +114,28 @@ test('accepted persistent reader proves >20 identities without source/native wri
   await assert.rejects(readAcceptedCodeOnlyCatalog({db:f.db,owner:f.owner,seal:f.seal,authority:wrongWatermark,runReference:'code-only'}));
   f.unchanged();
   f.sql.prepare("UPDATE products SET title='source drift' WHERE public_id=?").run(uuid(1));await assert.rejects(f.read());
+});
+
+test('mixed accepted catalog preserves original finite overlays, permanent fallbacks and completion authority',async t=>{
+  const f=await fixture(t,{mixed:true}),r=f.input.revision,original=canonicalJson(r.snapshot),
+    overlays=r.snapshot.products.filter(p=>p.eligibleUntil!==null);
+  assert.ok(overlays.length>0);assert.ok(r.snapshot.products.some(p=>p.eligibleUntil===null));
+  assert.ok(overlays.every(p=>p.persistent?.eligibleUntil===null));
+  assert.equal(earliestDisplayExpiry(r.snapshot.products),null);assertAcceptedCodeOnlyBinding(f.input);
+  const queued=await enqueueBuildRequest(f.db,f.authority.request),build=await claimBuildRequest(f.db,queued.requestId,'mixed-code',f.now()),
+    intent={releaseId:'mixed-code',catalogRevision:r.snapshot.catalogRevision,codeSha:f.authority.request.codeSha,
+      catalogSnapshotSha256:f.seal.snapshotSha256,manifestSha256:'b'.repeat(64),vectorSyncWatermark:r.vectorSyncWatermark,
+      priorReleaseId:f.seal.publication.releaseId,nextExpiry:earliestDisplayExpiry(r.snapshot.products)};
+  await enqueuePublication(f.db,r.snapshot,intent,f.now());const publication=await claimPublication(f.db,r.snapshot,intent.releaseId,f.now());
+  await recordPublicationDispatch(f.db,r.snapshot,publication,'version:mixed-version',f.now());
+  const permit=await beginBuildActivation(f.db,build,r.snapshot,publication,'mixed-version',async()=>({environment:scope.environment,settled:true,
+    active:{...f.accepted.intent,versionReference:f.accepted.versionReference}}),f.now(),f.owner);
+  await assert.rejects(completeActivatedServingPublication(f.db,r,{...publication,intent:{...intent,nextExpiry:overlays[0].eligibleUntil}},permit,
+    f.authority,async()=>intent,f.now),/serving_publication_fenced/);
+  await completeActivatedServingPublication(f.db,r,publication,permit,f.authority,async()=>{await f.read(permit.mutationOwner);return intent;},f.now);
+  assert.equal(await resolveBuildActivation(f.db,permit,async()=>({environment:scope.environment,settled:true,active:{...intent,versionReference:'mixed-version'}}),
+    {acceptedCatalog:f.authority}),'resolved');f.unchanged();assert.equal(canonicalJson(r.snapshot),original);
+  for(const p of overlays)assert.equal(resolvePublicProduct(p,Date.parse(p.eligibleUntil)),p.persistent??null);
 });
 
 test('serving completion and uncertain activation resolution preserve latest catalog receipt and accepted pointer',async t=>{
@@ -196,7 +220,7 @@ test('ordinary catalog successor accepts skipped code-only ownership generation 
 
 // Real publisher/control/accounting/upload-bridge composition; only external
 // provider HTTP, process execution and generated output are LOCAL fixtures.
-test('actual serving-only publisher resumes uncertain activation with one upload and no catalog receipt',{skip:process.platform!=='darwin'},async t=>{
+test('actual mixed serving-only publisher resumes uncertain activation with one upload and no catalog receipt',{skip:process.platform!=='darwin'},async t=>{
   const directory=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'accepted-code-only-'))),sourceRoot=path.join(directory,'source');
   let workspace;t.after(async()=>{await workspace?.close();await fs.rm(directory,{recursive:true,force:true});});
   await fs.mkdir(sourceRoot,{mode:0o700});
@@ -205,7 +229,7 @@ test('actual serving-only publisher resumes uncertain activation with one upload
     GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'}}).trim();
   git('init','-q');await put(path.join(sourceRoot,'.gitignore'),'build/\nstatic-site/out/\n');git('add','.gitignore');
   git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Owned serving fixture');
-  const codeSha=git('rev-parse','HEAD'),f=await fixture(t,{codeSha}),r=f.input.revision,version=uuid(410),deployment=uuid(411);
+  const codeSha=git('rev-parse','HEAD'),f=await fixture(t,{codeSha,mixed:true}),r=f.input.revision,version=uuid(410),deployment=uuid(411);
   // Serving code can already be newer than the genuine catalog publication.
   // It has no catalog receipt and must remain a separate deployment identity.
   const servingPrior={releaseId:'prior-code-only',codeSha:'d'.repeat(40),catalogRevision:f.accepted.intent.catalogRevision,
@@ -267,6 +291,9 @@ test('actual serving-only publisher resumes uncertain activation with one upload
       assets.set('/safe/catalog.json',bytes(safeCatalogPayload));assets.set('/images/gift-placeholder.svg',bytes('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h10"/></svg>'));
       for(const suffix of ['.txt','/__next._full.txt','/__next._tree.txt','/__next.safe.product.__PAGE__.txt'])assets.set(`/safe/product${suffix}`,bytes('Owned safe RSC'));
       for(const shard of createBrowseRelease(snapshot).shards)assets.set(shard.path,bytes(shard.payload));
+      const photos=createPhotoRelease(snapshot);if(photos.indexPath)assets.set(photos.indexPath,bytes(photos.index));
+      for(const shard of photos.shards)assets.set(shard.path,bytes(shard.payload));
+      assets.set('/safe/photos.json',bytes({schemaVersion:1,status:'unavailable'}));
       for(const name of createOgRelease(snapshot,siteIdentityFor(context.sourceMode)).byPath.keys())assets.set(name,bytes('Owned PNG fixture'));
       const assembled=assembleReleaseAssets(snapshot,assets,context,null),rest={...context};delete rest.retainedManifestSha256;
       const manifest={...rest,dataKind:'catalog',siteIdentitySha256:sha256(siteIdentityBytes(context.sourceMode)),nextExpiry:null,
@@ -287,7 +314,7 @@ test('actual serving-only publisher resumes uncertain activation with one upload
     runReference:config.releaseId,workspace,config,credentials:{cloudflareToken:'FIXTURE_ONLY',identityAuthorization:'Basic FIXTURE_ONLY'},dependencies:{fetch:io.fetch,
       observationFetch:io.observationFetch,command:accountedPublicationUploadCommand({workspace,scope:{accountId:f.accountId,workerName:config.workerName},send:raw,command}),now:f.now}});
   const denied=await execute(true);assert.equal(denied.state,'pending');assert.equal(denied.errorCode,'publication_serving_settlement_scope');assert.equal(counts.uploads,0);
-  const first=await execute();assert.equal(first.state,'pending',JSON.stringify(first));assert.equal(counts.activations,1);assert.equal(counts.uploads,1);f.unchanged();
+  const first=await execute();assert.equal(first.state,'pending',JSON.stringify(first));assert.equal(counts.activations,1,JSON.stringify(first));assert.equal(counts.uploads,1);f.unchanged();
   const expectedManifestSha256=workspace.manifestSha256;await workspace.close();workspace=await openRunWorkspace({...wsOptions,mode:'resume',expectedManifestSha256});io=await transports();
   loseResolve=true;const uncertain=await execute();assert.equal(uncertain.state,'pending',JSON.stringify(uncertain));f.unchanged();
   assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'idle');

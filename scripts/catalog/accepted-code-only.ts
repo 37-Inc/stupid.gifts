@@ -36,7 +36,6 @@ export function assertAcceptedCodeOnlyBinding(input:AcceptedCodeOnlyRead|Accepte
     ||revision.snapshot.catalogRevision!==authority.request.sourceRevision
     ||revision.snapshot.generatedAt!==authority.request.capturedAt
     ||sha256(`${JSON.stringify(revision.snapshot)}\n`)!==authority.request.sourceDigest
-    ||revision.snapshot.products.some(p=>p.eligibleUntil!==null)
     ||revision.snapshot.products.length+revision.snapshot.heldProducts.length!==authority.identityCount
     ||revision.sourceRows.length!==authority.identityCount
     ||canonicalJson(revision.sourceRows.map(row=>row.public_id).sort())!==canonicalJson(identities)
