@@ -82,14 +82,29 @@ test('saved complete result survives a new editor instance without another model
 test('unknown dispatch and failed result persistence never cause automatic paid retries',async()=>{
   const store=storage();let calls=0;
   const f=editor(async()=>{calls++;throw Error('private provider detail');},store);
-  await assert.rejects(f.editor.reviewDiscovery([candidate]),/editorial_dispatch_uncertain/);
-  await assert.rejects(f.editor.reviewDiscovery([candidate]),/editorial_dispatch_uncertain/);assert.equal(calls,1);
+  assert.equal((await f.editor.reviewDiscovery([candidate]))[0].decision,'defer');
+  assert.equal((await f.editor.reviewDiscovery([candidate]))[0].decision,'defer');assert.equal(calls,1);
   const failed=storage();const put=failed.put;failed.put=async(key,value)=>{
     if(key.endsWith('-result'))throw Error('disk lost');return put(key,value);
   };
   const g=editor(async()=>{calls++;return completion(decision);},failed);
   await assert.rejects(g.editor.reviewDiscovery([candidate]),/editorial_storage_unconfirmed/);
-  await assert.rejects(g.editor.reviewDiscovery([candidate]),/editorial_dispatch_uncertain/);assert.equal(calls,2);
+  assert.equal((await g.editor.reviewDiscovery([candidate]))[0].decision,'defer');assert.equal(calls,2);
+});
+test('one unconfirmed visual review defers only that candidate and preserves unrelated saved judgments',async()=>{
+  const second={...candidate,id:'B000000002',title:'Lobster oven mitts'};let calls=0;
+  const f=editor(async request=>{calls++;if(request.messages[1].content[0].text.includes(second.id))return completion({...decision,id:second.id});
+    throw Error('test only lost model response');});
+  assert.deepEqual((await f.editor.reviewDiscovery([candidate,second])).map(p=>p.decision),['defer','admit']);
+  assert.deepEqual((await f.editor.reviewDiscovery([candidate,second])).map(p=>p.decision),['defer','admit']);assert.equal(calls,2);
+});
+test('evidence identity rejection remains a hold across restart, unlike an unconfirmed external response',async()=>{
+  const store=storage();let calls=0;
+  for(let restart=0;restart<2;restart++){
+    const stages=createEditorialStages({...store,now:()=>NOW});
+    await assert.rejects(stages.run('embedding',{fixture:true},async()=>{calls++;throw Error('provider_evidence_embedding_input');}),/provider_evidence_embedding_input/);
+  }
+  assert.equal(calls,1);
 });
 test('an acknowledged result with a lost save response resolves from exact saved content',async()=>{
   const store=storage(),put=store.put;let calls=0,lost=false;

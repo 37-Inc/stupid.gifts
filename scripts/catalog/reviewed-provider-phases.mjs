@@ -77,16 +77,21 @@ export function createReviewedPhaseJournal({ initial, read, put, save, readRecei
       for (const key of Object.keys(state.entries)) {
         if (!key.endsWith('-result') && !key.endsWith('-dispatch')) continue;
         const item = await read(state.entries[key]);
-        if (!['copy-draft', 'copy-review', 'embedding', 'discovery-review', 'homepage-selection'].includes(item.stage)) continue;
+        const model = ['copy-draft', 'copy-review', 'embedding', 'discovery-review', 'homepage-selection'].includes(item.stage);
+        const supplier = ['refresh-collect', 'discovery-collect'].includes(item.stage);
+        if (!model && !supplier) continue;
         if (key.endsWith('-dispatch')) {
-          if (!state.entries[key.replace(/-dispatch$/, '-result')]) unknown.push({ stage: item.stage, inputSha256: item.inputSha256 });
+          if (!state.entries[key.replace(/-dispatch$/, '-result')]) unknown.push({ provider: supplier ? 'amazon' : 'openai', stage: item.stage, inputSha256: item.inputSha256 });
           continue;
         }
+        if (!model) continue;
         const response = item.value;
         recordOpenAIUsage(ledger, { model: response.model || (item.stage === 'embedding' ? 'text-embedding-3-small' : 'gpt-6-luna'),
           operation: item.stage, usage: response.usage });
       }
-      return { ...finalizeUsageLedger(ledger), unknownDispatches: unknown };
+      const reported = finalizeUsageLedger(ledger);
+      return { ...reported, ...(unknown.some(item => item.provider === 'openai')
+        ? { knownEstimatedCostUsd: reported.estimatedCostUsd, estimatedCostUsd: null } : {}), unknownDispatches: unknown };
     },
   };
 }
@@ -149,7 +154,14 @@ export async function prepareReviewedPhase({ key, journal, execute, options, sto
     if (error.message !== 'editorial_dispatch_uncertain') throw error;
     // Preparation has made no product write. Retain precise unknown dispatches
     // in the journal, defer this chunk, and keep unrelated good work usable.
-    result = { deferred: true };
+    await telemetry.items.flush();
+    const selected = new Map(items.filter(item => item.decision === 'selected' || item.stage === 'editorial_admission' && item.decision === 'admit')
+      .map(item => [item.productId || item.externalId, item]));
+    for (const [id, item] of selected) telemetry.items.record({ id, source: item.source, title: item.title, imageUrl: item.imageUrl }, {
+      phase: item.phase, stage: 'provider_preparation', decision: 'deferred', reasonCode: 'unconfirmed_provider_dispatch',
+      nextAction: 'Keep this listing unchanged; retain unknown usage and do not repeat supplier or model work in this run.',
+    });
+    result = { deferred: true, knownDeferredCandidates: selected.size };
     mutations.length = 0;
     warnings.push({ phase: 'provider_preparation', reasonCode: /^[a-z][a-z0-9_]{1,100}$/.test(error.message) ? error.message : 'provider_stage_failed' });
   }

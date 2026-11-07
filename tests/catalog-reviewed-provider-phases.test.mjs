@@ -14,6 +14,7 @@ import { maintenanceEmbeddingText } from '../scripts/catalog/maintenance-state.t
 import { canonicalJson, sha256 } from '../scripts/catalog/migration.ts';
 import { editorialSourceHash } from '../scripts/ops/catalog-editorial-core.mjs';
 import { decodePgvectorSendBase64 } from '../scripts/catalog/pgvector-binary.ts';
+import { executeCatalog,parseArgs } from '../scripts/ops/prefetch-catalog.mjs';
 
 const NOW = '2026-11-06T20:00:00.000Z', LATER = '2026-11-06T21:00:00.000Z';
 const id = n => `B${String(n).padStart(9, '0')}`;
@@ -94,6 +95,9 @@ test('saved provider/model stages hydrate original evidence and aggregate actual
   journal = saved.journal(); stages = createEditorialStages({ read: key => journal.read(key), put: (key, value) => journal.put(key, value) });
   await assert.rejects(stages.run('embedding', { fixture: true }, () => { throw Error('must_not_repeat'); }), /dispatch_uncertain/);
   assert.equal((await journal.usage()).unknownDispatches[0].stage, 'embedding');
+  assert.equal((await journal.usage()).estimatedCostUsd,null);assert.ok((await journal.usage()).knownEstimatedCostUsd>0);
+  await assert.rejects(stages.run('discovery-collect', { fixture: true }, async () => { throw Error('lost_supplier_response'); }), /dispatch_uncertain/);
+  assert.deepEqual((await journal.usage()).unknownDispatches.map(p => p.provider), ['openai', 'amazon']);
 });
 
 test('different initial and confirmation calls keep separate saved omissions, even for identical IDs', async () => {
@@ -169,9 +173,33 @@ test('lost committed telemetry ACK reconciles only the exact journalled receipt,
 test('journal storage uncertainty halts preparation, while a supplier/model-only unknown defers no product writes', async () => {
   const saved = memory(); let journal = saved.journal();
   const input = { key: 'phase-0', options: { dailyRefresh: true, selectedIds: [product.id] }, runId: 'fixture', store: {}, evidence: {},
-    execute: async () => { throw Error('editorial_dispatch_uncertain'); } };
+    execute: async (_o, _s, telemetry) => { telemetry.items.record(product, { phase: 'discovery', stage: 'selection', decision: 'selected' });
+      throw Error('editorial_dispatch_uncertain'); } };
   const result = await prepareReviewedPhase({ ...input, journal }); assert.equal(result.result.deferred, true); assert.deepEqual(result.mutations, []);
+  assert.equal(result.result.knownDeferredCandidates,1);
+  assert.equal(result.items.at(-1).decision,'deferred');assert.equal(result.items.at(-1).productId,product.id);
   journal = memory().journal();
   await assert.rejects(prepareReviewedPhase({ ...input, journal, execute: async () => { throw Error('editorial_storage_unconfirmed'); } }), /storage_unconfirmed/);
   await assert.rejects(prepareReviewedPhase({ ...input, journal, execute: async () => { throw Error('maintenance_fenced'); } }), /maintenance_fenced/);
+});
+
+test('missing confirmation holds on storage/evidence failure but preserves valid first-response updates for a response-only unknown',async()=>{
+  for(const errorCode of ['editorial_storage_unconfirmed','provider_evidence_products','editorial_dispatch_uncertain']){
+    const writes=[],items=[],telemetry={runId:'fixture',usage:{models:{}},warnings:[],timingsMs:{},
+      items:{record(_product,fields){items.push(fields);},async flush(){}}};let requests=0;
+    const options={...parseArgs(['--revalidate','--revalidate-limit','2','--backfill-limit','0','--skip-enrichment']),dailyRefresh:true,deactivateMissing:false};
+    const store={async getProductsForRevalidation(){return[1,2].map(n=>({id:id(n),slug:`fixture-${n}`,title:product.title,
+      price:20,currency:'USD',image_url:product.imageUrl,source_facts:{},humor_tags:[],last_verified_at:null}));},
+      async upsertProduct(p){writes.push(p.id);return{inserted:false,slug:'fixture-1'};},
+      async markConfirmedMissingUnavailable(){assert.fail('An unconfirmed omission is not confirmed unavailable');}};
+    const evidence={async amazon(){requests++;if(requests===1)return[product];throw Error(errorCode);},async embeddings(){assert.fail('No model work');}};
+    const action=()=>executeCatalog(options,undefined,telemetry,store,evidence);
+    if(errorCode!=='editorial_dispatch_uncertain'){
+      await assert.rejects(action(),new RegExp(errorCode));assert.deepEqual(writes,[]);
+    }else{
+      const result=await action();assert.equal(result.refreshed,1);assert.deepEqual(writes,[product.id]);
+      assert.ok(items.some(item=>item.decision==='deferred'&&item.reasonCode==='missing_confirmation_failed'));
+    }
+    assert.equal(requests,2);
+  }
 });

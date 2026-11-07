@@ -509,7 +509,6 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         const needsModel=needsProvider&&config.cadence.automation.discovery;
         const environment=needsProvider?await providerEnvironment(config,resolveToken,needsModel):null;
         if(cp.phase==='created'){
-          if(pacificCatalogCalendar(now()).day!==config.cadence.day)throw new Error('weekly_cadence_day_changed');
           const owner=await claimMutationOwnership(db,scope,{phase:'writing',ownerReference:config.runId,operationKey:sha256(`weekly:${options.configSha256}`)});
           if(!owner)throw new Error('weekly_owner_busy');await write({phase:'phases_running',owner});
         }

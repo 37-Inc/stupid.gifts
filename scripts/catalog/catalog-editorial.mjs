@@ -31,12 +31,24 @@ export function createEditorialStages({read,put,now=()=>new Date().toISOString()
         throw Error('editorial_saved_result_invalid');
       return{value:structuredClone(saved.value),reused:true};
     }
+    const rejected=await stored(`${key}-failure`);
+    if(rejected){
+      if(!exact(rejected,'errorCode,inputSha256,schemaVersion,stage')||rejected.schemaVersion!==1
+        ||rejected.stage!==stage||rejected.inputSha256!==inputSha256||!/^provider_evidence_[a-z_]+$/.test(rejected.errorCode))
+        throw Error('editorial_saved_result_invalid');
+      throw Error(rejected.errorCode);
+    }
     if(await stored(`${key}-dispatch`))throw Error('editorial_dispatch_uncertain');
     await save(`${key}-dispatch`,{schemaVersion:1,stage,inputSha256,dispatchedAt:now()});
     let value;
     try{value=await action();}catch(error){
-      if(['editorial_storage_unconfirmed','provider_evidence_storage_unconfirmed'].includes(error.message))
+      const code=error?.message;
+      if(['editorial_storage_unconfirmed','provider_evidence_storage_unconfirmed'].includes(code))
         throw Error('editorial_storage_unconfirmed');
+      if(/^provider_evidence_[a-z_]+$/.test(code)){
+        await save(`${key}-failure`,{schemaVersion:1,stage,inputSha256,errorCode:code});
+        throw error;
+      }
       throw Error('editorial_dispatch_uncertain');
     }
     await save(`${key}-result`,{schemaVersion:1,stage,inputSha256,completedAt:now(),value});
@@ -142,7 +154,10 @@ export function createCatalogEditorial({complete,stages,onUsage=()=>{}}){
           const decision=validateDiscoveryDecision(value,p,comparisons);decisions.push(decision);
           if(decision.decision==='admit')admitted.push(p);
         }catch(error){
-          if(['editorial_response_incomplete','editorial_response_invalid','editorial_decision_invalid'].includes(error.message))
+          if(error.message==='editorial_dispatch_uncertain')
+            decisions.push({id:p.id,decision:'defer',appeal:'unreviewed',imageMatches:false,duplicateOfId:null,
+              reason:'The model response is unconfirmed. Preserve its unknown charge and do not repeat this review in this run.'});
+          else if(['editorial_response_incomplete','editorial_response_invalid','editorial_decision_invalid'].includes(error.message))
             decisions.push({id:p.id,decision:'defer',appeal:'unreviewed',imageMatches:false,duplicateOfId:null,reason:'The saved editorial response did not establish a valid admission.'});
           else throw error; // Unknown dispatch/storage must remain explicit, not be silently regenerated.
         }

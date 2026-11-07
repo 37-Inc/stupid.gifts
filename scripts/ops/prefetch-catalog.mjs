@@ -1435,6 +1435,8 @@ async function revalidateCatalog(options, telemetry, store, evidence) {
         confirmedPresent.forEach((product, id) => remoteById.set(id, product));
         confirmedIds = missing.filter((product) => !confirmedPresent.has(product.id)).map((product) => product.id);
       } catch (error) {
+        if (['editorial_storage_unconfirmed','editorial_saved_result_invalid'].includes(error?.message)
+          || error?.message?.startsWith('provider_evidence_')) throw error;
         telemetry.warnings.push({ phase: 'revalidation', reasonCode: 'missing_confirmation_failed', message: redactTelemetryText(error.message) });
         missing.forEach((product) => {
           terminalIds.add(product.id);
