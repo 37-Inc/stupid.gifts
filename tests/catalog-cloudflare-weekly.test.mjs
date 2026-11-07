@@ -335,7 +335,7 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
     if(url.pathname.endsWith('/upsert')){calls.upsert++;const v=JSON.parse(init.body);index.set(v.id,v);mutation=`00000000-0000-4000-8000-${String(100+calls.upsert).padStart(12,'0')}`;return response({mutationId:mutation});}
     if(url.pathname.endsWith('/delete_by_ids')){calls.delete++;for(const id of JSON.parse(init.body).ids)index.delete(id);
       mutation=`00000000-0000-4000-8000-${String(100000+calls.delete).padStart(12,'0')}`;return response({mutationId:mutation});}
-    if(url.pathname.endsWith('/info'))return response({dimensions:1536,processedUpToMutation:mutation});
+    if(url.pathname.endsWith('/info'))return response({dimensions:1536,processedUpToMutation:mode.nativeProcessingPending?'prior-mutation':mutation});
     if(url.pathname.endsWith('/get_by_ids'))return vectorResponse(JSON.parse(init.body).ids.flatMap(id=>index.has(id)?[index.get(id)]:[]));
     if(url.pathname.endsWith('/versions'))return response({items:upload?[{id:targetVersion}]:[]});
     if(url.pathname.endsWith(`/versions/${targetVersion}`)){
@@ -432,6 +432,22 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
       const file=path.join(directory,`${config.runId}-explicit-reviewed-postphase.json`);await put(file,approval);return{path:file,sha256:sha256(await fs.readFile(file))};
     }};
 }
+
+test('acknowledged native indexing waits resume the same publication without repeating provider phases',async t=>{
+  const f=await setup(t);
+  assert.equal((await f.run('start')).reason,'awaiting_reviewed_approval');
+  const approval=await f.approve();f.mode.nativeProcessingPending=true;
+  const first=await f.run('resume',approval);
+  assert.equal(first.state,'pending');assert.equal(first.errorCode,'not_visible');
+  const paid=Object.fromEntries(['getItems','search','chat','embedding'].map(k=>[k,f.calls[k]]));
+  const delivery=f.sql.prepare("SELECT delivery_id,attempts,mutation_reference FROM catalog_vector_deliveries WHERE status='pending'").get();
+  assert.equal(delivery.attempts,1);assert.ok(delivery.mutation_reference);
+  f.mode.nativeProcessingPending=false;
+  const result=await f.run('resume',approval);
+  assert.equal(result.state,'finalized',JSON.stringify(weeklyCommandSummary(result)));
+  for(const [k,v]of Object.entries(paid))assert.equal(f.calls[k],v);
+  assert.equal(f.sql.prepare('SELECT attempts FROM catalog_vector_deliveries WHERE delivery_id=?').get(delivery.delivery_id).attempts,1);
+});
 
 test('same routine publication recovers a committed projection seal without repeating providers',async t=>{
   const f=await setup(t,{permanent:22,held:2,authenticPrior:true,realTransport:true});
