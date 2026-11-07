@@ -38,7 +38,9 @@ test('actual Linux bubblewrap permits only the accounted bridge and denies outsi
     assert.equal(url,`https://api.cloudflare.com/client/v4/accounts/${scope.accountId}/workers/services/${scope.workerName}`);
     return Response.json({success:true,result:{}});
   },command:async wrapped=>{
-    const at=wrapped.args.findIndex(arg=>arg===relay);assert.ok(at>0);
+    // The relay also occurs in the read-only mount list. Replace only the
+    // executable entry after bubblewrap's '--', never a mount argument.
+    const at=wrapped.args.lastIndexOf(relay);assert.ok(at>wrapped.args.lastIndexOf('--'));
     const args=[...wrapped.args];args[at]=entry;args.splice(at+3,args.length-at-3,process.execPath,'-e',probe);
     try{const result=await promisify(execFile)(wrapped.file,args,{env:wrapped.env,timeout:15_000,maxBuffer:64*1024});
       proof=JSON.parse(result.stdout);
