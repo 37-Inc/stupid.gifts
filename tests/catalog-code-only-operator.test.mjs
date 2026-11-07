@@ -3,6 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {spawnSync} from 'node:child_process';
 import {codeOnlyInvocation,codeOnlyPublication,createCodeOnlyStore} from '../scripts/catalog/code-only-operator.mjs';
 import {sha256} from '../scripts/catalog/migration.ts';
 
@@ -16,6 +17,13 @@ test('code-only route requires an explicit stable label and has no supplier/reco
 test('code-only preparation observes usage estimates rather than restoring an internal publication quota',async()=>{
   const source=await fs.readFile(new URL('../scripts/catalog/code-only-operator.mjs',import.meta.url),'utf8');
   assert.match(source,/createCatalogD1ReadOnlyRest\(\{[^}]*requestLimit:'observe'/s);
+});
+test('actual daily CLI reaches code-only argument validation without a top-level import deadlock',()=>{
+  const root=path.resolve(import.meta.dirname,'..');
+  const result=spawnSync(process.execPath,['--import','tsx','scripts/catalog/daily-operator.mjs','code-only','status'],
+    {cwd:root,env:{HOME:os.tmpdir(),PATH:process.env.PATH},encoding:'utf8',timeout:10000});
+  assert.equal(result.status,1);assert.match(result.stderr,/^code_only_arguments\s*$/);
+  assert.doesNotMatch(result.stderr,/unsettled top-level await/);assert.equal(result.stdout,'');
 });
 
 test('new serving config preserves accepted presentation but separates catalog authority from current serving code',()=>{
