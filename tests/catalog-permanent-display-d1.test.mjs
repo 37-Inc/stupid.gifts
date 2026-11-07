@@ -40,7 +40,8 @@ const writers=at=>[{id:'daily',kind:'application',codePaths:['scripts/catalog/ru
 
 async function fixture(t,{count=43,initialCount=2,long=false,fresh=false,runtimeHistory=false,controlMigration=false}={}){
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());sql.exec('PRAGMA foreign_keys=ON');
-  for(const name of(await readdir(new URL('../migrations/d1/',import.meta.url))).filter(n=>/^\d{4}.*\.sql$/.test(n)).sort())
+  // Historical display restoration binds the exact24-table capture, not0017 telemetry.
+  for(const name of(await readdir(new URL('../migrations/d1/',import.meta.url))).filter(n=>/^\d{4}.*\.sql$/.test(n)&&n<'0017').sort())
     sql.exec(await readFile(new URL(`../migrations/d1/${name}`,import.meta.url),'utf8'));
   if(controlMigration){sql.exec('CREATE TABLE d1_migrations(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE)');
     for(let i=1;i<=14;i++)sql.prepare('INSERT INTO d1_migrations(name) VALUES(?)').run(`historical-${i}.sql`);}

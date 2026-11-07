@@ -103,7 +103,8 @@ async function fixture({searches=0,ownedImport=false,cooperative=false,heldContr
   // sequence allocation and typed overrides rather than hand-authoring them.
   const sqlite=new DatabaseSync(':memory:');let owned,proof;
   try{
-    for(const name of (await readdir(new URL('../migrations/d1/',import.meta.url))).filter(n=>/^00\d\d_.*\.sql$/.test(n)).sort())
+    // Preserve this historical24-table rollback scope;0017 telemetry is separate.
+    for(const name of (await readdir(new URL('../migrations/d1/',import.meta.url))).filter(n=>/^00\d\d_.*\.sql$/.test(n)&&n<'0017').sort())
       sqlite.exec(await readFile(new URL(`../migrations/d1/${name}`,import.meta.url),'utf8'));
     let clock='2026-10-21T12:00:00.123Z';sqlite.function('strftime',{varargs:true},()=>clock);
     const db={prepare(sql){let params=[];return{sql,get params(){return params;},bind(...p){params=p;return this;},

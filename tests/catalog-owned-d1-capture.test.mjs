@@ -22,7 +22,8 @@ const budget={environment:'production',index:'capture-fixture'};
 const env={ENVIRONMENT:'production',SEMANTIC_SEARCH_ENABLED:'true',SEMANTIC_SEARCH_DAILY_REQUEST_CAP:'100',SEMANTIC_SEARCH_DAILY_TOKEN_CAP:'100000'};
 async function fixture(t,{products=2,longRows=false}={}){
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());sql.exec('PRAGMA foreign_keys=ON');
-  for(const name of(await readdir(new URL('../migrations/d1/',import.meta.url))).filter(n=>/^\d{4}.*\.sql$/.test(n)).sort())
+  // This historical24-table recovery contract ends before0017 telemetry.
+  for(const name of(await readdir(new URL('../migrations/d1/',import.meta.url))).filter(n=>/^\d{4}.*\.sql$/.test(n)&&n<'0017').sort())
     sql.exec(await readFile(new URL(`../migrations/d1/${name}`,import.meta.url),'utf8'));
   sql.function('strftime',(format,instant)=>{assert.equal(format,'%Y-%m-%dT%H:%M:%fZ');assert.equal(instant,'now');return AT;});
   let before;const metrics={http:0,sql:0,maxRows:0};
@@ -65,6 +66,12 @@ test('capture binds all24 complete tables, allocator/native bytes, actual schema
   const packet={batches:[],preservedRows:[],summary:{sourceManifestSha256:'b'.repeat(64),importedAt:AT,batchCount:0,importedRows:0,sourceIdentityCount:0}};
   const plan=prepareOwnedOperationalImport({packet,capture:result.capture,captureSha256:result.captureSha256,owner:f.owner});
   await assert.rejects(applyOwnedOperationalImport({db:f.db,plan:plan.plan,planSha256:plan.sha256,ownerCursor:{current:f.owner}}),/capture_unverified/);
+});
+
+test('historical24-table capture does not silently adopt later search-demand schema',async t=>{
+  const f=await fixture(t);f.sql.exec(await readFile(new URL('../migrations/d1/0017_search_demand.sql',import.meta.url),'utf8'));
+  await assert.rejects(captureOwnedD1(f.options),/^Error: catalog_capture_schema$/);
+  assert.equal(f.sql.prepare("SELECT count(*) n FROM sqlite_schema WHERE name='search_demand' AND type='table'").get().n,1);
 });
 
 test('additive build recovery column preserves original rowids/constraints and stays inside exact24-table capture',async t=>{
