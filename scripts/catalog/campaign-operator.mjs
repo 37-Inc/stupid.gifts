@@ -4,7 +4,7 @@ import {homedir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
-import {readCampaignFeed,compileMerchandising,pendingCampaignJoins,researchCampaignLeads} from '../../lib/catalog/campaigns.ts';
+import {readCampaignFeed,compileMerchandising,pendingCampaignActions,researchCampaignLeads} from '../../lib/catalog/campaigns.ts';
 import {productPresentation} from '../../lib/catalog/presentation.ts';
 import baseline from '../../content/catalog-merchandising.json' with {type:'json'};
 import {readMerchandising} from '../../lib/catalog/merchandising.ts';
@@ -15,6 +15,8 @@ const hash=value=>createHash('sha256').update(value).digest('hex');
 const json=async file=>JSON.parse(await fs.readFile(file,'utf8'));
 async function optional(file,fallback){try{return await json(file);}catch(e){if(e.code==='ENOENT')return fallback;throw e;}}
 const escape=value=>String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// Preserve Amazon's routing query exactly; encode only Slack control delimiters.
+const linkText=value=>String(value).replace(/</g,'%3C').replace(/>/g,'%3E');
 
 export async function acceptedProducts(){
   const pointer=await json(CARE+'/last-success.json'),bytes=await fs.readFile(pointer.control.path);
@@ -52,17 +54,20 @@ async function atomic(file,value){
   try{await fs.rename(temporary,file);}catch(e){await fs.unlink(temporary).catch(()=>{});throw e;}
 }
 export function campaignDigest(groups){
-  const lines=['Stupid Gifts — Campaigns to join manually',
+  const lines=['Stupid Gifts — Manual campaign actions',
     'Website account: rileyehrlic0b-20 · tracking ID: goose-gifts-37-20',
-    'These are opportunities, not joined campaigns or guaranteed earnings.'];
+    'Join notices are opportunities; content-link actions are already joined campaigns. Neither guarantees earnings.'];
   for(const group of groups){
-    lines.push('',escape(group.name)+' — ends '+group.endsAt.slice(0,10),group.url);
-    for(const p of group.products)lines.push('• '+escape(p.title)+' ('+p.id+') · advertised bonus '+(p.bonusRate*100).toFixed(1)+'% — '+escape(p.reason),p.url);
+    const action=group.action==='submit_content'?'Submit content link manually':'Join manually';
+    lines.push('',action+': '+escape(group.name)+' — ends '+group.endsAt.slice(0,10),linkText(group.url));
+    for(const p of group.products)lines.push('• '+escape(p.title)+' ('+p.id+') · advertised bonus '+(p.bonusRate*100).toFixed(1)+'% — '+escape(p.reason),linkText(p.url));
   }
   return lines.join('\n');
 }
 const actionKey=group=>hash(JSON.stringify({campaignId:group.campaignId,url:group.url,endsAt:group.endsAt,
-  products:group.products.map(p=>({id:p.id,bonusRate:p.bonusRate}))}));
+  ...(group.action==='submit_content'?{action:group.action}:{}),
+  products:group.products.map(p=>({id:p.id,bonusRate:p.bonusRate,...(group.action==='submit_content'?{url:p.url}:{})}))}));
+const notificationKey=group=>group.action==='submit_content'?group.campaignId+':submit_content':group.campaignId;
 export function digestChunks(text,limit=3000){
   const chunks=[];let current='';
   for(const line of text.trimEnd().split('\n')){
@@ -76,7 +81,7 @@ export function digestChunks(text,limit=3000){
 }
 export async function deliverCampaignDigest(groups,{directory=DIRECTORY,send=sendSlack}={}){
   const previous=await optional(directory+'/notifications.json',{});
-  const changed=groups.filter(g=>previous[g.campaignId]!==actionKey(g));
+  const changed=groups.filter(g=>previous[notificationKey(g)]!==actionKey(g));
   if(!changed.length)return{state:'no_new_campaign_actions',pending:groups.length,sent:0};
   const key=hash(JSON.stringify(changed.map(actionKey))),folder=directory+'/deliveries';
   await fs.mkdir(folder,{recursive:true,mode:0o700});
@@ -88,13 +93,13 @@ export async function deliverCampaignDigest(groups,{directory=DIRECTORY,send=sen
     // never blindly send the same campaign actions again on every daily retry.
     try{await fs.writeFile(intent,JSON.stringify({key,campaignIds:changed.map(g=>g.campaignId),createdAt:new Date().toISOString()})+'\n',{flag:'wx',mode:0o600});}
     catch(e){if(e.code==='EEXIST')throw Error('campaign_digest_delivery_unknown');throw e;}
-    const message=chunks[i]+'\n\nDigest '+key.slice(0,12)+' · '+(i+1)+'/'+chunks.length+' · Join manually; participation is verified afterward.';
+    const message=chunks[i]+'\n\nDigest '+key.slice(0,12)+' · '+(i+1)+'/'+chunks.length+' · Act manually; participation and content submission are verified afterward.';
     const result=await send(message);
     if(!result||typeof result.messageId!=='string'||!result.messageId)throw Error('campaign_digest_delivery_unknown');
     await fs.writeFile(receipt,JSON.stringify({key,messageId:result.messageId,sentAt:new Date().toISOString()})+'\n',{flag:'wx',mode:0o600});
     sent++;
   }
-  for(const g of changed)previous[g.campaignId]=actionKey(g);
+  for(const g of changed)previous[notificationKey(g)]=actionKey(g);
   await atomic(directory+'/notifications.json',previous);
   return {state:'campaign_actions_notified',campaigns:changed.length,pending:groups.length,sent};
 }
@@ -147,9 +152,11 @@ export async function main(){
     }
     await atomic(DIRECTORY+'/product-reviews.json',existing);console.log(JSON.stringify({reviewed:Object.keys(input.reviews).length}));return;
   }
-  const state=await readCampaignState(),pending=pendingCampaignJoins(products,state.reviews,state.campaigns);
+  const state=await readCampaignState(),pending=pendingCampaignActions(products,state.reviews,state.campaigns);
   if(command==='digest'&&arg==='--send')console.log(JSON.stringify(await deliverCampaignDigest(pending)));
   else console.log(JSON.stringify({configured:state.configured,reviewedProducts:Object.keys(state.reviews).length,
-    pending,researchLeads:await optional(DIRECTORY+'/research-leads.json',[]),merchandising:compileMerchandising(products,state.reviews,state.campaigns),automaticJoining:false}));
+    pending,contentReviewRequired:state.campaigns.filter(c=>c.enrollment==='accepted'&&(!c.content||c.content.state==='unknown'))
+      .map(c=>({campaignId:c.campaignId,asin:c.asin})),
+    researchLeads:await optional(DIRECTORY+'/research-leads.json',[]),merchandising:compileMerchandising(products,state.reviews,state.campaigns),automaticJoining:false}));
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)await main();

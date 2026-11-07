@@ -34,7 +34,11 @@ a NEW run. Never change a prepared/active run's source or captured config.
 1. `npm run catalog:campaigns -- status`. Reuse complete saved Creator Research
    inventory as **leads**, bypassing its video/sales/payback calculator and
    qualified-only pool. `research <export.json>` accepts its complete
-   `CampaignInventoryEntry[]` export and retains exact public-ASIN overlaps.
+   `CampaignInventoryEntry[]` export and retains every valid exact ASIN. Each lead
+   includes `publicAsins` and `discoveryAsins`; the latter are nonpublic leads,
+   not guaranteed new identities. Normal admission still deduplicates against
+   held/private products and verified families. No outside lead is silently
+   admitted or sent as an enrollment action.
    Card-only, full and other-account observations never become website proof.
    No runtime connection to research SQLite or credentials is introduced.
 2. Verify promising leads read-only in Chrome37's parent store
@@ -54,7 +58,8 @@ a NEW run. Never change a prepared/active run's source or captured config.
    Appeal:standout/giftable/ordinary/unreviewed; optional `variantGroup` identifies
    a genuinely verified same-design family, never title/category similarity.
    Changed products do not inherit another object's review.
-4. `digest` previews actionable offers. `digest --send` sends new/changed groups
+4. `digest` previews actionable manual joins and known unmet content-link
+   obligations for already-joined public products. `digest --send` sends new/changed groups
    via existing OpenClaw to marketing `C0AGRSTBP5H`: products, advertised bonus,
    account, deadline and manual detail link. Unchanged notices deduplicate.
    `test-notification` is a one-time configuration test, not daily work.
@@ -73,6 +78,33 @@ extra-batch authorization. Cameron joins manually. Verify accepted participation
 afterward, including effective eligible rate, seller, funding, dates and
 content-link obligations. Accepted campaigns full to newcomers can still qualify.
 Notification or a Slack acknowledgement is not enrollment evidence.
+
+### Content requirement facts
+
+Schema1 feeds may record a per-product `content` object:
+
+```json
+{"state":"submitted","url":"https://stupid.gifts/gifts/exact-product-slug","observedAt":"2026-11-06T12:00:00.000Z","evidence":"retained-submission-reference"}
+```
+
+States are `unknown`, `not_required`, `required` and `submitted`. `not_required`
+needs retained requirements evidence and a null URL; `submitted` needs retained
+submission evidence and the exact canonical product URL. `required` produces a
+manual content-link action after accepted participation; the operator never
+submits a URL or joins a campaign. Keep its actual independent `observedAt`;
+recording a later submission must not renew the older campaign observation or
+expiry. Current participation/eligibility must still
+qualify independently, so content submission alone earns no boost.
+
+Historical feeds without this field remain readable. Missing/unknown fulfillment
+is neutral for commission and appears in `status` as `contentReviewRequired`.
+Before activating the stricter compiler, backfill the two November6 already-
+submitted gifts from their retained exact submission/requirements evidence,
+keeping the original campaign and submission dates/expiry. This is a bounded
+saved-evidence migration, not a new fetch or renewal. Do not infer fulfillment
+from `requirementsReviewed` alone when that old boolean did not record it.
+Join and content-link notices deduplicate separately; satisfying a requirement
+removes its action, while unchanged reruns do not resend.
 
 Slack failure falls back to this thread and never blocks site care. An uncertain
 delivery retains its intent; inspect Slack history for the printed digest ID
