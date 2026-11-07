@@ -505,13 +505,13 @@ test('only an exact current full-plan journal grants30s; generic observation rem
   assert.equal(queued.state,'build_queued');assert.equal(windows.filter(ms=>ms===30000).length,2);assert.equal(windows.includes(3000),false);
   assert.equal(f.calls(),sent);assert.equal(f.sql.prepare('SELECT count(*) n FROM catalog_build_requests').get().n,1);
 });
-test('full-plan30s timeout drains same-ledger native accounting exactly once before return and preserves exact retry',async t=>{
+test('full-plan background timeout drains same-ledger native accounting exactly once before return and preserves exact retry',async t=>{
   const f=await setup(t);for(const n of [1,2])await f.upsert(product(n,{sourceFacts:{fixture:n,fresh:true}}));await f.drain();
   const rest=await boundedRest(t,f),claim=await f.freeze([uuid(1),uuid(2)]);
   const prepared=await prepareOwnedApprovedCohortPlan({db:f.db,...claim,adapters:f.adapters}),sent=f.calls();
   const realTimer=globalThis.setTimeout,windows=[];let reads=0,reserved=0,settled=0,cleanupTimers=0;const statuses=[];
   t.mock.method(globalThis,'setTimeout',(callback,ms,...args)=>{
-    if(ms===30000)windows.push(()=>callback(...args));
+    if(ms===900_000)windows.push(()=>callback(...args));
     // Once both native requests exist, scale cleanup10s to5ms. Durable25ms
     // settlement must still finish BEFORE return, not leak past this horizon.
     if(ms===10000&&reads===2){cleanupTimers++;return realTimer(callback,5,...args);}return realTimer(callback,ms,...args);});
@@ -523,7 +523,7 @@ test('full-plan30s timeout drains same-ledger native accounting exactly once bef
     indexName:scope.indexName,identityOrigin:'https://fixture.example.invalid'});
   const native=createVectorizeRestAdapters({...scope,accountId:rest.options.scope.accountId,token:'TEST_ONLY',fetch:send});
   await assert.rejects(settleOwnedApprovedCohortVectorProof({db:f.db,...prepared,adapters:{...f.adapters,readback:native.readback}}));
-  t.mock.restoreAll();assert.equal(windows.length,2);assert.ok(cleanupTimers>0);assert.equal(reads,2);assert.equal(reserved,2);assert.equal(settled,2);
+  t.mock.restoreAll();assert.equal(windows.length,1);assert.ok(cleanupTimers>0);assert.equal(reads,2);assert.equal(reserved,2);assert.equal(settled,2);
   assert.deepEqual(statuses,['unknown','unknown']);assert.equal((await rest.workspace().budget()).unconfirmedRequests,2);
   const usage=await rest.workspace().budget();await new Promise(resolve=>realTimer(resolve,40));assert.deepEqual(await rest.workspace().budget(),usage);
   assert.equal(reads,2);assert.equal(settled,2);assert.equal(f.sql.prepare('SELECT count(*) n FROM catalog_build_requests').get().n,0);
@@ -710,7 +710,7 @@ test('activated whole-cohort read joins failed siblings and inner timeout accoun
       return new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(new Error('raw abort')),{once:true}));
     },{accountId:'a'.repeat(32),workerName:'fixture-worker',databaseId:uuid(9),indexName:scope.indexName,identityOrigin:'https://fixture.example.invalid'});
     const native=createVectorizeRestAdapters({...scope,accountId:'a'.repeat(32),token:'TEST_ONLY',fetch:send});
-    await assert.rejects(readActivatedCatalogVectors(f.db,permit,control,{...f.adapters,readback:native.readback}),fault==='failure'?/vector_not_visible/:/vector_provider_timeout/);
+    await assert.rejects(readActivatedCatalogVectors(f.db,permit,control,{...f.adapters,readback:native.readback}),fault==='failure'?/vector_not_visible/:/vector_provider_failed/);
     assert.equal(reads,2);assert.equal(reserved,2);assert.equal(settled,2);assert.equal(statuses.filter(s=>s==='unknown').length,fault==='failure'?1:2);
     await new Promise(resolve=>setTimeout(resolve,40));assert.equal(reads,2);assert.equal(settled,2);
     assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'activating');
