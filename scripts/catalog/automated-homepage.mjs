@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {existsSync} from 'node:fs';
 import {openRunWorkspace} from './run-workspace.ts';
 import {canonicalJson,sha256} from './migration.ts';
 import {resolveCatalogCredential} from './check-cloudflare-runner.ts';
@@ -32,8 +33,11 @@ export async function curateAutomationHomepage({runtime,db,seal,prior,day,mercha
   try{
     const options={directory:runtime.workspace,repository,runId,codeSha:source,configSha256:sha256(canonicalJson(config)),scope:CATALOG_SCOPE,
       retention:record.retention,budgetCaps:{httpRequests:1,sqlStatements:0},requestLimit:'observe',...(runtime.durable?{durable:runtime.durable}:{})};
-    // create is idempotent for this exact manifest and does not invent a new run.
-    workspace=await openRunWorkspace({...options,mode:'create'});
+    const local=existsSync(path.join(runtime.workspace,'runs',runId,'manifest.json')),
+      remote=runtime.durable?await runtime.durable.get(`runs/${runId}/manifest.json`):null;
+    // A saved response can outlive an edition-save failure or the runner.
+    // Unknown remote state throws; it is never treated as absence/new work.
+    workspace=await openRunWorkspace({...options,mode:local||remote?'resume':'create'});
     let checkpoint=await workspace.readCheckpoint(),state=checkpoint?.checkpoint.state??{entries:{}};
     const save=async next=>{checkpoint=await workspace.writeCheckpoint(checkpoint?.sha256??null,
       {phase:'editing',owner:null,state:next,pins:{},phaseComplete:null});state=next;};

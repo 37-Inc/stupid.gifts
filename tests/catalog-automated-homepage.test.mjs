@@ -33,3 +33,18 @@ test('uncertain API dispatch keeps the prior edition without a repeated model ca
   const first=await curateAutomationHomepage({...f,complete});assert.equal(first.state,'last_good');assert.deepEqual(first.edition,f.prior);
   const again=await curateAutomationHomepage({...f,complete});assert.equal(again.state,'last_good');assert.equal(calls,1);
 });
+test('fresh runner finishes a saved successful response after edition-save failure without another model call',async t=>{
+  const f=await fixture(t),objects=new Map();let sequence=0,calls=0;
+  const copy=value=>value?{bytes:new Uint8Array(value.bytes),etag:value.etag}:null,write=(key,bytes)=>{const value={bytes:new Uint8Array(bytes),etag:'"'+(++sequence)+'"'};
+    objects.set(key,value);return copy(value);},durable={async get(key){return copy(objects.get(key));},async putImmutable(key,bytes){
+      const old=objects.get(key);if(old){assert.deepEqual(old.bytes,new Uint8Array(bytes));return copy(old);}return write(key,bytes);},
+    async compareAndSwap(key,etag,bytes){const old=objects.get(key);assert.equal(old?.etag??null,etag);return write(key,bytes);},async remove(){assert.fail('No cleanup in this fixture');}};
+  const state=createOperatorStateStore(f.runtime.base,durable),editionFile=path.join(f.runtime.care,'homepage',f.day+'.json');
+  const firstRuntime={...f.runtime,durable,state:{...state,async put(file,value){if(file===editionFile)throw Error('synthetic edition-save failure');return state.put(file,value);}}};
+  const complete=async()=>{calls++;return{choices:[{finish_reason:'stop',message:{content:JSON.stringify({anchors:f.prior.anchors,rotation:f.prior.rotation,anchorReplacements:[]})}}]};};
+  assert.equal((await curateAutomationHomepage({...f,runtime:firstRuntime,complete})).state,'last_good');assert.equal(calls,1);
+  const base=await realpath(await mkdtemp(path.join(os.tmpdir(),'automated-homepage-fresh-')));t.after(()=>rm(base,{recursive:true,force:true}));
+  const runtime={base,care:path.join(base,'care'),workspace:path.join(base,'workspace'),durable,state:createOperatorStateStore(base,durable)};
+  const resumed=await curateAutomationHomepage({...f,runtime,complete});assert.equal(resumed.state,'curated',JSON.stringify(resumed));assert.equal(calls,1);
+  assert.deepEqual(JSON.parse(await runtime.state.bytes(path.join(runtime.care,'homepage',f.day+'.json'))),f.prior);
+});
