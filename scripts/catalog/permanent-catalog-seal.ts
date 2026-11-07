@@ -7,6 +7,8 @@ import {validateCatalogSnapshot,canonicalTime} from '../../lib/catalog/snapshot.
 import {permanentCatalogBinding,permanentSourceRows,permanentSourceInventory,permanentSourceDigest} from '../../lib/catalog/freeze-permanent-catalog.ts';
 import type {PermanentCatalogRevision} from '../../lib/catalog/freeze-permanent-catalog.ts';
 import type {ApprovedCohortEnvelope} from '../../lib/catalog/freeze-approved-cohort.ts';
+import {validateAutomationCohort} from '../../lib/catalog/automation-cohort.ts';
+import type {AutomationCohortAuthority} from '../../lib/catalog/automation-cohort.ts';
 import type {ApprovedCohortRevision} from '../../lib/catalog/freeze-approved-cohort.ts';
 import type {NativeHistoryBinding} from '../../lib/catalog/prune-existing-revision.ts';
 import type {ApprovedCatalogSeal} from './approved-catalog-seal.ts';
@@ -93,7 +95,7 @@ export function isPersistentCatalogSeal(seal:{kind?:string;persistent?:unknown})
   return seal.kind==='permanent-catalog-seal'||seal.kind==='approved-catalog-seal'&&Boolean(seal.persistent);
 }
 export async function readCatalogPredecessor(options:{db:CatalogD1;owner:MutationOwner;seal:PermanentCatalogSeal|ApprovedCatalogSeal;
-  approval:ApprovedCohortEnvelope;approvalSha256:string;ownerBaseReview?:OwnerBaseCatalogReview;
+  approval:ApprovedCohortEnvelope;approvalSha256:string;ownerBaseReview?:OwnerBaseCatalogReview;automation?:AutomationCohortAuthority;
   /** Explicit unchanged accepted-catalog reader; never admits changes. */
   servingOnly?:true;
   adapters?:Pick<OwnedVectorAdapters,'readback'|'environment'|'indexName'|'providerIdentity'>}){
@@ -101,9 +103,10 @@ export async function readCatalogPredecessor(options:{db:CatalogD1;owner:Mutatio
   validateNativeHistory(prior.nativeHistory);
   if(prior.nativeHistory.some(group=>group.ids.some(id=>!prior.inventory.some(row=>row.publicId===id))))fail();
   const phase=options.servingOnly?owner.phase:'freezing';
+  if(options.automation){if(options.servingOnly||options.ownerBaseReview)fail();validateAutomationCohort(options.automation,approval);}
   if(options.servingOnly&&(seal.kind!=='approved-catalog-seal'||approval.changes.length!==0||options.ownerBaseReview)
     ||!['freezing','activating'].includes(phase)||owner.phase!==phase||sha256(canonicalJson(approval))!==options.approvalSha256||approval.schemaVersion!==1
-    ||approval.changes.length>approvedBaseChangeLimit(options.ownerBaseReview)||new Set(approval.changes.map(c=>c.publicId)).size!==approval.changes.length)fail();
+    ||!options.automation&&approval.changes.length>approvedBaseChangeLimit(options.ownerBaseReview)||new Set(approval.changes.map(c=>c.publicId)).size!==approval.changes.length)fail();
   const snapshot=seal.kind==='permanent-catalog-seal'?await reconstructPermanentSnapshot(db,owner,seal)
   :await (await import('./approved-catalog-seal.ts')).readApprovedPrior(db,owner,seal,{envelopeSha256:sha256(seal.envelopeJson+'\n'),
     snapshotSha256:seal.snapshotSha256,projectionSha256:seal.projectionReceipt.projection_sha256,sourceExportSha256:seal.projectionReceipt.source_export_sha256,

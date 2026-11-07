@@ -1,4 +1,6 @@
 import type { CatalogD1 } from '../../lib/catalog/storage/d1.ts';
+import {automationContains} from '../../lib/catalog/automation-cohort.ts';
+import type {AutomationCohortAuthority} from '../../lib/catalog/automation-cohort.ts';
 import type { CatalogSnapshot, ProductRights, PublicCatalogProduct } from '../../lib/catalog/types.ts';
 import { createProjectionPacket } from '../../lib/catalog/d1.ts';
 import { canonicalTime, EDITORIAL_MAX_AGE_MS, persistentDisplayRights, publicProductRightsExpiry,
@@ -283,9 +285,10 @@ export async function readJournaledPruneDeleteSource(db:CatalogD1,owner:Mutation
  * the narrow captured fields reuse the final pruning CAS and archived aliases.
  */
 export async function readApprovedCurrentRows(db: CatalogD1, ids: string[], owner: MutationOwner,approvedRecovery=false,signal?:AbortSignal,
-  ownerBaseReview?:OwnerBaseCatalogReview) {
+  ownerBaseReview?:OwnerBaseCatalogReview,automation?:AutomationCohortAuthority) {
   owner = structuredClone(owner); ids = [...ids];
-  if (ids.length > approvedBaseChangeLimit(ownerBaseReview) || new Set(ids).size !== ids.length || ids.some(id => !UUID.test(id))) throw new Error('read_bounds');
+  if ((automation?!automationContains(automation,ids):ids.length > approvedBaseChangeLimit(ownerBaseReview))
+    ||automation&&ownerBaseReview||new Set(ids).size !== ids.length || ids.some(id => !UUID.test(id))) throw new Error('read_bounds');
   const gate = approvedRecovery?approvedRevisionReadFence(owner):mutationFenceQuery(owner, ['freezing']);
   const columns = (await db.prepare(`SELECT name FROM pragma_table_info('products') WHERE ${gate.sql}`).bind(...gate.params).all<{name:string}>({signal})).results.map(row=>row.name);
   if (!columns.length || columns.length > 65 || columns.some(key=>!/^[a-z_]+$/.test(key))) throw new Error('read_bounds');
@@ -314,14 +317,32 @@ export async function readOwnerBaseOperationReceipts(db:CatalogD1,owner:Mutation
     FROM requested ids CROSS JOIN catalog_maintenance_operations o ON o.operation_id=ids.value`,[],gate,signal);
   if(rows.length!==ids.length)throw Error('approved_identity_missing');return rows;
 }
+/** Same byte-bounded reader in small technical chunks, with exact original
+ * operation IDs plus independently validated same-run slug repair receipts. */
+export async function readAutomationOperationReceipts(db:CatalogD1,owner:MutationOwner,ids:string[],runId:string,approvedRecovery=false,signal?:AbortSignal) {
+  const wanted=new Set(ids);if(wanted.size!==ids.length||ids.some(id=>!HASH.test(id)))throw Error('read_bounds');
+  const gate=approvedRecovery?approvedRevisionReadFence(owner):mutationFenceQuery(owner,['freezing']);let after='';
+  for(;;){
+    const found=(await db.prepare(`SELECT operation_id FROM catalog_maintenance_operations WHERE run_id=? AND operation_id>?
+      AND json_extract(result_json,'$.kind')='new-product-slug-repair-v1' AND ${gate.sql} ORDER BY operation_id LIMIT 128`)
+      .bind(runId,after,...gate.params).all<{operation_id:string}>({signal})).results;
+    if(!found.length)break;
+    if(found.some(r=>!HASH.test(r.operation_id)||r.operation_id<=after)||wanted.size+found.length>10000)throw Error('read_bounds');
+    for(const row of found)wanted.add(row.operation_id);after=found.at(-1)!.operation_id;
+  }
+  const rows:Row[]=[],all=[...wanted].sort();
+  for(let offset=0;offset<all.length;offset+=30)rows.push(...await readOwnerBaseOperationReceipts(db,owner,all.slice(offset,offset+30),approvedRecovery,signal));
+  return rows;
+}
 /** Read-only hydration of an EXISTING seal, including a genuinely journaled
  * pending vector intent. This grants no claim, re-seal, mutation or replay. */
 export async function readApprovedRevisionSource(db:CatalogD1,owner:MutationOwner,ids:string[],
   changes:Array<{publicId:string;operationId:string}>,ownerBaseReview?:OwnerBaseCatalogReview,
-  approvalContext?:Pick<import('../../lib/catalog/freeze-approved-cohort.ts').ApprovedCohortRequest,'approval'|'previous'>){
+  approvalContext?:Pick<import('../../lib/catalog/freeze-approved-cohort.ts').ApprovedCohortRequest,'approval'|'previous'|'automation'>){
   const fence=approvedRevisionReadFence(owner),current=await captureCurrentRows(db,owner,[...ids].sort(),fence);
-  const approved=await readApprovedCurrentRows(db,changes.map(c=>c.publicId),owner,true,undefined,ownerBaseReview);
-  const operations=ownerBaseReview?await readOwnerBaseOperationReceipts(db,owner,changes.map(c=>c.operationId),true):changes.length?(await db.prepare(`SELECT * FROM catalog_maintenance_operations
+  const approved=await readApprovedCurrentRows(db,changes.map(c=>c.publicId),owner,true,undefined,ownerBaseReview,approvalContext?.automation);
+  const operations=approvalContext?.automation?await readAutomationOperationReceipts(db,owner,changes.map(c=>c.operationId),approvalContext.approval.runId,true)
+    :ownerBaseReview?await readOwnerBaseOperationReceipts(db,owner,changes.map(c=>c.operationId),true):changes.length?(await db.prepare(`SELECT * FROM catalog_maintenance_operations
     WHERE (operation_id IN(SELECT value FROM json_each(?)) OR (run_id=? AND json_extract(result_json,'$.kind')='new-product-slug-repair-v1')) AND ${fence.sql}`)
     .bind(JSON.stringify(changes.map(c=>c.operationId)),approvalContext?.approval.runId??'',...fence.params).all<Row>()).results:[];
   const byOp=new Map(operations.map(r=>[r.operation_id,r])),byId=new Map(current.map(r=>[String(r.public_id),r]));

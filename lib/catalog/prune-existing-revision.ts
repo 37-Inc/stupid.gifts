@@ -281,6 +281,7 @@ async function observationTimeout(db:CatalogD1,owner:MutationOwner,revision:Prun
       operationKey:base.operationKey,identity:{kind:'approved-cohort-plan'}}))
     ||row.status!=='complete'||row.disposition!=='verified'||row.attempts!==0||row.dispatch_token!==null||row.mutation_reference!==null
     ||row.product_json!==canonicalJson({schemaVersion:1,kind:'approved-cohort-plan',revisionSha256:request.revisionSha256,
+      ...(request.automation?{automationSha256:sha256(canonicalJson(request.automation))}:{}),
       ...(request.ownerBaseReview?{compactApprovalSha256:sha256(canonicalJson(request.approval)),
         ownerBaseReviewSha256:sha256(canonicalJson(request.ownerBaseReview)),ownerBaseApprovalCount:request.ownerBaseApprovalCount}:{})})
     ||!Array.isArray(request.sources)||row.evidence_json!==canonicalJson([{state:'policy_and_source_verification',

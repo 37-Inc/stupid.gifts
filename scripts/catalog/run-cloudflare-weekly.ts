@@ -32,6 +32,8 @@ import { claimMutationOwnership, releaseMutationOwnership, readMutationOwner } f
 import type { MutationOwner } from '../../lib/catalog/mutation-fence.ts';
 import { approvedCohortOperationKey, approvedCohortVectorPlan } from '../../lib/catalog/freeze-approved-cohort.ts';
 import type { ApprovedCohortRequest, ApprovedCohortRevision } from '../../lib/catalog/freeze-approved-cohort.ts';
+import {validateAutomationCohort} from '../../lib/catalog/automation-cohort.ts';
+import type {AutomationCohortAuthority} from '../../lib/catalog/automation-cohort.ts';
 import type { CatalogD1 } from '../../lib/catalog/storage/d1.ts';
 import { canonicalTime } from '../../lib/catalog/snapshot.ts';
 import {repairApprovedNewSlugs} from './new-product-slug-repair.ts';
@@ -551,7 +553,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           if(needsModel){const {default:OpenAI}=await import('openai');const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0});
             editor=createCatalogEditorial({stages,complete:(request:unknown)=>client.chat.completions.create(request as never)});}
           const {executeCatalog}=await import('../ops/prefetch-catalog.mjs');
-          const execute=automatedCatalogExecutor(executeCatalog),results=[],warnings=[],timingsMs:Record<string,number>={},merchandising:Record<string,unknown>={},changed=new Set<string>();
+          const execute=automatedCatalogExecutor(executeCatalog),results=[],warnings=[],timingsMs:Record<string,number>={},merchandising:Record<string,unknown>={},changed=new Set<string>(),admitted=new Set<string>();
           for(let index=0;index<phases.length;index++){
             const key=`phase-${index}`;let supplierCall=0;
             const providerEvidence={...evidence,amazon:async(...args:Parameters<typeof evidence.amazon>)=>args[0]==='getItems'
@@ -564,12 +566,12 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
             results.push(numbers(prepared.result));warnings.push(...prepared.warnings);Object.assign(merchandising,prepared.merchandising);
             for(const[key,value]of Object.entries(prepared.timingsMs))timingsMs[key]=(timingsMs[key]||0)+Number(value);
             for(const mutation of prepared.mutations){
-              if(mutation.method==='upsertProduct')changed.add(mutation.args[0].id);
+              if(mutation.method==='upsertProduct'){changed.add(mutation.args[0].id);if(phases[index].discoveryNewOnly)admitted.add(mutation.args[0].id);}
               if(mutation.method==='markConfirmedMissingUnavailable')for(const id of mutation.args[0])changed.add(id);
             }
           }
           const summary={counts:{phases:results},warnings,timingsMs,usage:await journal.usage()};
-          await journal.put('provider-phases-complete',{schemaVersion:1,summary,merchandising,changedIds:[...changed]});
+          await journal.put('provider-phases-complete',{schemaVersion:1,summary,merchandising,changedIds:[...changed],admittedIds:[...admitted]});
         };
         try{
           if(needsProvider){if(environment)await scopedProviders(environment,run);else await run();}
@@ -578,13 +580,25 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           await write({phase:'phases_complete',owner:cursor.current,phaseComplete,pins:{...cp.pins,automationJournal:state().automationJournal as ArtifactRef}});
         }catch(error){return{state:'attention',phase:cp.phase,errorCode:safeCode(error),budget:await ws.budget()};}
       }
-      const complete=await journal.read('provider-phases-complete') as {merchandising:PublicationConfig['merchandising'];changedIds:string[]}|undefined;
+      const complete=await journal.read('provider-phases-complete') as {merchandising:PublicationConfig['merchandising'];changedIds:string[];admittedIds:string[]}|undefined;
       if(complete){
         config={...config,publication:{...config.publication,merchandising:{...config.publication.merchandising,...complete.merchandising}}};
-        // The existing freeze/native/approval paths are still sealed at thirty.
-        // Never discard part of a prepared publication to fit that legacy proof.
-        if(cp.phase==='phases_complete'&&complete.changedIds.length>30)
-          return{state:'attention',phase:cp.phase,reason:'automation_publication_capacity_required',changedProducts:complete.changedIds.length,budget:await ws.budget()};
+        if(!cp.pins.automationAuthority){
+          if(cp.phase!=='phases_complete'||!cp.owner||cp.owner.phase!=='writing')throw Error('automation_cohort_invalid');
+          const products:Array<{id:string;publicId:string}>=[];
+          for(let offset=0;offset<complete.changedIds.length;offset+=30){
+            const selected=complete.changedIds.slice(offset,offset+30);
+            const rows=(await db.prepare('SELECT id,public_id FROM products WHERE id IN(SELECT value FROM json_each(?)) ORDER BY id')
+              .bind(JSON.stringify(selected)).all<{id:string;public_id:string}>()).results;
+            if(rows.length!==selected.length)throw Error('automation_cohort_changed');
+            products.push(...rows.map(p=>({id:p.id,publicId:p.public_id})));
+          }
+          const authority:AutomationCohortAuthority={schemaVersion:1,runId:config.runId,configSha256:options.configSha256,
+            journalSha256:cp.pins.automationJournal.sha256,writerGeneration:cp.owner.generation,
+            refreshIds:config.cadence!.automation!.refreshIds,admittedIds:complete.admittedIds,products};
+          validateAutomationCohort(authority);
+          const pin=await ws.putArtifact(authority,{kind:'publication',observedAt:now()});await write({pins:{...cp.pins,automationAuthority:pin}});
+        }
       }
     }
     if(cp.phase==='created'&&!config.cadence?.automation){
@@ -638,20 +652,33 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     }
     const adapters=createVectorizeRestAdapters({...scope,accountId:config.accountId,token,fetch:generalSend});
     if(cp.phase==='phases_complete'||cp.phase==='draining'){
+      const automation=config.cadence?.automation?await ws.readArtifact(cp.pins.automationAuthority) as unknown as AutomationCohortAuthority:undefined;
+      if(automation){
+        validateAutomationCohort(automation);
+        if(automation.configSha256!==options.configSha256||automation.journalSha256!==cp.pins.automationJournal.sha256
+          ||canonicalJson(automation.refreshIds)!==canonicalJson(config.cadence!.automation!.refreshIds))throw Error('automation_cohort_changed');
+      }
       // Review is separate from running paid phases. Never synthesize an envelope
       // from whichever mutable rows happen to be ready when this command resumes.
       if(!cp.pins.approval){
         if(!options.approval)return{state:'pending',phase:cp.phase,reason:'awaiting_reviewed_approval',budget:await ws.budget()};
         const approval=await reviewed(options.approval.path,options.approval.sha256,repo);
         if(approval.runId!==config.runId||approval.catalogRevision!==config.catalogRevision)throw new Error('weekly_approval_run');
+        if(automation)validateAutomationCohort(automation,approval);
         const pin=await ws.putArtifact(approval,{kind:'publication',observedAt:now()});await write({pins:{...cp.pins,approval:pin}});
       }else if(options.approval){const approval=await reviewed(options.approval.path,options.approval.sha256,repo);
         if(sha256(canonicalJson(approval))!==cp.pins.approval.sha256)throw new Error('weekly_approval_rewrite');}
       await write({phase:'draining'});
-      for(let n=0;n<200;n++){
+      const drainLimit=automation?automation.products.length+1:200;
+      for(let n=0;n<drainLimit;n++){
         const sequence=Number(state().outboxSequence)||Number((await db.prepare("SELECT sequence FROM vector_sync_outbox WHERE source_revision=? AND status='pending' ORDER BY sequence LIMIT 1")
           .bind(config.catalogRevision).all()).results[0]?.sequence)||0;
         if(!sequence)break;
+        if(automation){
+          const rows=(await db.prepare('SELECT public_id FROM vector_sync_outbox WHERE sequence=? AND source_revision=?')
+            .bind(sequence,config.catalogRevision).all<{public_id:string}>()).results;
+          if(rows.length!==1||!automation.products.some(p=>p.publicId===rows[0].public_id))throw Error('automation_cohort_changed');
+        }
         await write({state:{...state(),outboxSequence:sequence}});
         for(let pass=0;pass<4;pass++){
           const result=await deliverOwnedOutboxEvent({db,owner:cp.owner!,sequence,catalogRevision:config.catalogRevision,adapters,
@@ -661,7 +688,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           if(pass===3||result.errorCode==='mutation_unknown'&&!await mutationKnown(db,result.deliveryId))
             return{state:'pending',phase:cp.phase,errorCode:result.errorCode,budget:await ws.budget()};
         }
-        if(n===199)throw new Error('weekly_outbox_bound');
+        if(n===drainLimit-1)throw new Error('weekly_outbox_bound');
       }
       const prior=await readOrdered(ws,cp.pins.previous) as ApprovedCatalogSeal|PermanentCatalogSeal;
       const context=await ws.readArtifact(ws.execution?.contexts.ref??cp.pins.context) as unknown as ApprovedCohortRequest['context'];
@@ -670,6 +697,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         ?await readApprovedPrior(db,cp.owner!,prior,context):prior as unknown as ApprovedCohortRequest['previous'];
       const request={previous,context,scope,codeSha:config.codeSha,
         ...(isPersistentCatalogSeal(prior)?{predecessor:prior}:{}),
+        ...(automation?{automation}:{}),
         approval:await ws.readArtifact(cp.pins.approval),approvalSha256:cp.pins.approval.sha256} as unknown as ApprovedCohortRequest;
       approvedCohortOperationKey(request);
       const pin=await putOrdered(ws,approvedRequestControl(request),now());await write({phase:'freezing',pins:{...cp.pins,request:pin}});

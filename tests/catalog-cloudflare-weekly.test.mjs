@@ -1188,3 +1188,29 @@ test('automation driver resumes an exact saved preparation without another suppl
   const result=await f.run('resume',await f.approve());
   assert.equal(result.state,'finalized',JSON.stringify(result));assert.equal(f.calls.getItems,providerCalls);
 });
+
+test('exact automation cohort publishes one hundred refreshes without embedding calls or dropping identities',async t=>{
+  const f=await setup(t,{permanent:122,held:2,authenticPrior:true});f.config.backfillLimit=0;delete f.config.credentials.openai;
+  const ids=f.sql.prepare("SELECT id FROM products WHERE public_display_json IS NOT NULL AND is_active=1 AND duplicate_of_product_id IS NULL ORDER BY id LIMIT 100").all().map(p=>p.id);
+  assert.equal(ids.length,100);
+  f.config.cadence={day:'2026-10-20',featuredIds:[],runKey:f.config.runId,automation:{schemaVersion:1,refreshIds:ids,discovery:false}};
+  f.config.limits={requests:10000,statements:25000};await f.configure();
+  const originalIds=f.sql.prepare('SELECT id,public_id,slug FROM products ORDER BY id').all();
+  const originalNative=structuredClone(f.index);
+  const first=await f.run('start');assert.equal(first.reason,'awaiting_reviewed_approval',JSON.stringify(first));
+  assert.equal(f.calls.getItems,10);assert.equal(f.calls.chat+f.calls.embedding+f.calls.search,0);
+  const approval=await f.approve(),outside=JSON.parse(await fs.readFile(approval.path,'utf8'));
+  outside.changes[0].publicId=originalIds.find(p=>!ids.includes(p.id)).public_id;
+  const bad=path.join(path.dirname(approval.path),'outside-automation-membership.json');await put(bad,outside);
+  await assert.rejects(f.run('resume',{path:bad,sha256:sha256(await fs.readFile(bad))}),/automation_cohort_invalid/);
+  const result=await f.run('resume',approval);
+  t.diagnostic(JSON.stringify({scenario:'automation-100-refresh',result:weeklyCommandSummary(result),calls:f.calls}));
+  assert.equal(result.state,'finalized',JSON.stringify(result));assert.equal(f.calls.getItems,10);
+  assert.equal(f.calls.chat+f.calls.embedding+f.calls.search,0);
+  assert.deepEqual(f.index,originalNative);assert.equal(f.calls.delete,0);
+  assert.deepEqual(f.sql.prepare('SELECT id,public_id,slug FROM products ORDER BY id').all(),originalIds);
+  const ws=await openRunWorkspace(f.workspaceOptions);try{
+    const cp=await ws.readCheckpoint(),authority=await ws.readArtifact(cp.checkpoint.pins.automationAuthority);
+    assert.equal(authority.products.length,100);assert.deepEqual(authority.refreshIds,ids);assert.deepEqual(authority.admittedIds,[]);
+  }finally{await ws.close();}
+});
