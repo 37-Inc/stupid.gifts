@@ -33,6 +33,7 @@ const {canonicalJson,sha256}=await load('scripts/catalog/migration.ts');
 const {runCloudflareWeekly,weeklyCommandSummary,validateCloudflareWeeklyConfig}=await load('scripts/catalog/run-cloudflare-weekly.ts');
 const {createCatalogD1ReadOnlyRest}=await load('scripts/catalog/d1-write-rest.ts');
 const {openRunWorkspace,openPublicationBuildCleanup}=await load('scripts/catalog/run-workspace.ts');
+const {verifyPublicationSemanticCatalog}=await load('scripts/catalog/publish-release.ts');
 const {mutationAssertion}=await load('lib/catalog/mutation-fence.ts');
 const {pacificCatalogCalendar,validCatalogRunKey}=await load('scripts/ops/catalog-daily.mjs');
 const HASH=/^[a-f0-9]{64}$/;
@@ -122,7 +123,13 @@ export async function routineFreshnessPool(db,canaryId){
 }
 export async function hydrateRoutineInputs(config,read=bytes){
   for(const name of ['previous','context','rights']){const ref=config.inputs[name];await read(ref.path,ref.sha256);}
-  const derived=config.publication?.semanticSearch?.derivedCatalog;if(derived)await read(derived.path,derived.sha256);
+  const derived=config.publication?.semanticSearch?.derivedCatalog;
+  if(derived){
+    // Policy binds canonical catalog identities, not JSON whitespace. The
+    // storage adapter independently preserves each original file's raw bytes.
+    const catalog=JSON.parse((await read(derived.path)).toString('utf8'));
+    await verifyPublicationSemanticCatalog({semanticCatalog:catalog},config.publication);
+  }
 }
 export function routineSearchPolicy(value){
   if(value===null)return{enabled:false};

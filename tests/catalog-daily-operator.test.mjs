@@ -3,7 +3,8 @@ import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { headroom, observeHeadroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation, cleanupAcceptedPublication,
   routineAutomationPolicy,materializeRoutinePreparation,routineFreshnessPool,hydrateRoutineInputs,routineHostedPending } from '../scripts/catalog/daily-operator.mjs';
-import {sha256} from '../scripts/catalog/migration.ts';
+import {sha256,canonicalJson} from '../scripts/catalog/migration.ts';
+import {derivedFixture} from './helpers/derived-search-fixture.mjs';
 
 test('cleanup failures after acceptance are advisory, including open and close failures',async()=>{
   for(const failure of ['none','open','clean','close']){
@@ -65,12 +66,29 @@ test('freshness preparation pages metadata only and maps cleared stock/photo obs
   assert.equal(result[2].isActive,false);assert.equal(result[3].duplicateOfProductId,'B000000001');assert.ok(result.every(p=>p.publiclyCleared));
 });
 
-test('fresh runner hydrates exact technical input refs and current semantic metadata before the driver',async()=>{
+test('fresh runner hydrates exact technical input refs before the driver',async()=>{
   const ref=name=>({path:'/protected/'+name+'.json',sha256:'a'.repeat(64)}),inputs={previous:ref('seal'),context:ref('context'),rights:ref('rights')},calls=[];
-  const config={inputs,publication:{semanticSearch:{derivedCatalog:ref('semantic')}}};
+  const config={inputs,publication:{semanticSearch:{enabled:false}}};
   await hydrateRoutineInputs(config,async(file,hash)=>calls.push({file,hash}));
-  assert.deepEqual(calls.map(c=>c.file),['/protected/seal.json','/protected/context.json','/protected/rights.json','/protected/semantic.json']);
+  assert.deepEqual(calls.map(c=>c.file),['/protected/seal.json','/protected/context.json','/protected/rights.json']);
   assert.ok(calls.every(c=>c.hash==='a'.repeat(64)));
+});
+
+test('semantic hydration verifies canonical identities across pretty/compact bytes and rejects changed catalog',async()=>{
+  const {catalog}=await derivedFixture(),inputs=Object.fromEntries(['previous','context','rights'].map(name=>[name,{path:'/protected/'+name,sha256:'a'.repeat(64)}])),
+    derived={path:'/protected/semantic.json',indexName:catalog.indexName,sha256:sha256(canonicalJson(catalog))},
+    config={inputs,publication:{semanticSearch:{enabled:true,derivedCatalog:derived}}};
+  for(const raw of [JSON.stringify(catalog),JSON.stringify(catalog,null,2)+'\n']){
+    assert.notEqual(sha256(raw),derived.sha256);let semanticReads=0;
+    await hydrateRoutineInputs(config,async(file,hash)=>{
+      if(file===derived.path){semanticReads++;assert.equal(hash,undefined);return Buffer.from(raw);}
+      assert.equal(hash,'a'.repeat(64));return Buffer.from('{}');
+    });assert.equal(semanticReads,1);
+  }
+  const changed=structuredClone(catalog);changed.entries[0].receiptSha256='f'.repeat(64);
+  await assert.rejects(hydrateRoutineInputs(config,async file=>Buffer.from(file===derived.path?JSON.stringify(changed):'{}')),/publication_semantic_catalog_changed/);
+  changed.entries[0].vectorId='e'.repeat(64);
+  await assert.rejects(hydrateRoutineInputs(config,async file=>Buffer.from(file===derived.path?JSON.stringify(changed):'{}')),/semantic_vector_identity_mismatch/);
 });
 
 test('hosted pending identity binds original source/run/day/inputs before any prepare or resume',async()=>{
