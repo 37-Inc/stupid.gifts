@@ -17,8 +17,28 @@ import type { OwnerBaseCatalogReview } from './owner-base-review.ts';
 export type PublicationIntent = Pick<CatalogReleaseManifest, 'releaseId' | 'codeSha' | 'catalogRevision'
   | 'vectorSyncWatermark' | 'priorReleaseId' | 'nextExpiry'> & { catalogSnapshotSha256: string; manifestSha256: string };
 export interface PublicationClaim { intentId: string; token: string; leaseUntil: string; intent: PublicationIntent }
+/** NEW code over one genuinely accepted catalog. This authorizes serving
+ * control only, never a replacement catalog receipt or product/vector writes. */
+export interface AcceptedCatalogAuthority {
+  schemaVersion:1;kind:'accepted-persistent-code-only';sealSha256:string;
+  publication:{releaseId:string;receiptSha256:string};request:CatalogBuildRequest;
+  observedAt:string;globalVectorWatermark:number;publicationReceiptWatermark:number;identityCount:number;
+}
+export function encodeAcceptedCatalogAuthority(value:AcceptedCatalogAuthority):string {
+  const hash=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
+  if(!value||Object.keys(value).sort().join(',')!=='globalVectorWatermark,identityCount,kind,observedAt,publication,publicationReceiptWatermark,request,schemaVersion,sealSha256'
+    ||value.schemaVersion!==1||value.kind!=='accepted-persistent-code-only'||!hash(value.sealSha256)
+    ||!value.publication||Object.keys(value.publication).sort().join(',')!=='receiptSha256,releaseId'
+    ||!KEY.test(value.publication.releaseId)||!hash(value.publication.receiptSha256)
+    ||![value.globalVectorWatermark,value.publicationReceiptWatermark,value.identityCount].every(n=>Number.isSafeInteger(n)&&n>=0)
+    ||value.identityCount<1||value.identityCount>CATALOG_IDENTITY_LIMITS.identities
+    ||!value.request||value.request.priorReleaseId!==value.publication.releaseId)throw Error('accepted_catalog_authority_invalid');
+  encodeBuildRequest(value.request);canonicalTime(value.observedAt);
+  if(value.observedAt<value.request.capturedAt||value.observedAt>=value.request.cutoff)throw Error('accepted_catalog_authority_invalid');
+  return canonicalJson(value);
+}
 type Outbox = { intent_id: string; release_id: string; intent_json: string; state: string; lease_token: string | null;
-  lease_until: string | null; attempts: number; dispatch_reference: string | null; error_code: string | null };
+  lease_until: string | null; attempts: number; dispatch_reference: string | null; error_code: string | null;completed_token:string|null };
 const KEY = /^[a-zA-Z0-9._-]{1,200}$/;
 const DATABASE_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
@@ -111,6 +131,31 @@ async function completed(db: CatalogD1, value: Outbox, token: string): Promise<v
     .bind(value.intent_id).all<{ completed_token: string | null }>();
   if (result.results[0]?.completed_token !== token || (await publicationStatus(db, value.release_id)).state !== 'published')
     throw new Error('publication_fenced_or_preflight_changed');
+}
+
+/** Original catalog authority remains the latest genuine catalog receipt. */
+export async function acceptedCatalogReceipt(db:CatalogD1,authority:AcceptedCatalogAuthority,options?:D1ReadOptions){
+  encodeAcceptedCatalogAuthority(authority);
+  const rows=(await db.prepare('SELECT * FROM publication_receipts WHERE release_id=?')
+    .bind(authority.publication.releaseId).all<Record<string,unknown>>(options)).results;
+  const receipt=rows[0],intent=receipt&&JSON.parse(String(receipt.manifest_json));
+  if(rows.length!==1||await digest(canonicalJson(receipt))!==authority.publication.receiptSha256
+    ||encode(intent)!==receipt.manifest_json||intent.catalogRevision!==authority.request.sourceRevision
+    ||intent.catalogSnapshotSha256!==authority.request.sourceDigest||receipt.catalog_revision!==intent.catalogRevision
+    ||receipt.release_id!==intent.releaseId||receipt.code_sha!==intent.codeSha)throw Error('accepted_catalog_receipt_changed');
+  return receipt;
+}
+export async function servingPublicationStatus(db:CatalogD1,releaseId:string,authority:AcceptedCatalogAuthority,options?:D1ReadOptions){
+  await acceptedCatalogReceipt(db,authority,options);
+  const value=await row(db,releaseId,options);
+  if(!value)return{state:'missing'};
+  const intent=intentFrom(value);
+  if(intent.catalogRevision!==authority.request.sourceRevision||intent.catalogSnapshotSha256!==authority.request.sourceDigest
+    ||intent.codeSha!==authority.request.codeSha||intent.priorReleaseId!==authority.publication.releaseId)
+    throw Error('accepted_catalog_receipt_changed');
+  if((await db.prepare('SELECT 1 FROM publication_receipts WHERE release_id=?').bind(releaseId).all(options)).results.length)
+    throw Error('accepted_catalog_unexpected_receipt');
+  return{state:value.state==='verified'&&value.completed_token?'published':value.state,intent};
 }
 
 /** Historical completion state, not a claim that this release is still active/fresh. */
@@ -376,4 +421,55 @@ export function completeActivatedPermanentPublication(db:CatalogD1,revision:Prun
 export function completeActivatedApprovedCatalogPublication(db:CatalogD1,revision:PrunedRevision,publication:PublicationClaim,permit:ActivationPermit,
   readDeployed:(intent:PublicationIntent)=>Promise<PublicationIntent>,now:()=>Date=()=>new Date()){
   return completeActivated(db,revision,publication,permit,readDeployed,now,undefined,false,true);
+}
+
+/** Compact final CAS after same-owner full catalog/native verification. No
+ * catalog row is inserted/updated; the outbox is serving acceptance only. */
+export async function completeActivatedServingPublication(db:CatalogD1,revision:PrunedRevision,publication:PublicationClaim,permit:ActivationPermit,
+  authority:AcceptedCatalogAuthority,readDeployed:(intent:PublicationIntent)=>Promise<PublicationIntent>,now:()=>Date=()=>new Date()){
+  const owner=permit.mutationOwner,intent=publication.intent,snapshot=revision.snapshot;
+  const encoded=encodeAcceptedCatalogAuthority(authority),requestBytes=encodeBuildRequest(authority.request);
+  if(!owner||owner.phase!=='activating'||owner.operationKey!==await digest(encoded)||revision.operationKey!==owner.operationKey
+    ||owner.environment!==authority.request.environment||owner.indexName!==revision.request.scope.indexName
+    ||permit.requestId!==await digest(requestBytes)||permit.releaseId!==intent.releaseId||permit.versionReference.length<1
+    ||snapshot.products.length<1||snapshot.products.some(p=>p.eligibleUntil!==null)
+    ||snapshot.products.length+snapshot.heldProducts.length!==authority.identityCount
+    ||revision.sourceRows.length!==authority.identityCount||intent.nextExpiry!==null
+    ||snapshot.catalogRevision!==authority.request.sourceRevision||intent.catalogRevision!==snapshot.catalogRevision
+    ||await digest(`${JSON.stringify(snapshot)}\n`)!==authority.request.sourceDigest
+    ||intent.catalogSnapshotSha256!==authority.request.sourceDigest||intent.codeSha!==authority.request.codeSha
+    ||intent.priorReleaseId!==authority.publication.releaseId)throw Error('serving_publication_fenced');
+  const original=await acceptedCatalogReceipt(db,authority),value=await row(db,intent.releaseId);
+  const build=(await db.prepare('SELECT * FROM catalog_build_requests WHERE request_id=?').bind(permit.requestId).all<Record<string,unknown>>()).results[0];
+  if(!value||!build||value.intent_id!==publication.intentId||value.intent_json!==encode(intent)
+    ||value.state!=='dispatched'||value.lease_token!==publication.token||value.lease_until!==publication.leaseUntil
+    ||value.dispatch_reference!==`version:${permit.versionReference}`||build.state!=='activating'
+    ||build.lease_token!==permit.token||build.run_reference!==permit.runReference||build.release_id!==permit.releaseId
+    ||build.version_reference!==permit.versionReference||build.request_json!==requestBytes)throw Error('serving_publication_fenced');
+  const columns=Object.keys(original);if(columns.some(k=>!/^[a-z_]+$/.test(k)))throw Error('serving_publication_fenced');
+  const check=()=>[
+    mutationAssertion(db,owner,['activating']),
+    db.prepare(`SELECT json(CASE WHEN EXISTS(SELECT 1 FROM publication_receipts WHERE ${columns.map(k=>`${k} IS ?`).join(' AND ')})
+      AND (SELECT coalesce(max(rowid),0) FROM publication_receipts)=?
+      AND NOT EXISTS(SELECT 1 FROM publication_receipts WHERE release_id=?)
+      AND (SELECT coalesce(max(sequence),0) FROM vector_sync_outbox)=?
+      AND NOT EXISTS(SELECT 1 FROM vector_sync_outbox WHERE status!='complete')
+      AND (SELECT count(*) FROM products)=?
+      AND EXISTS(SELECT 1 FROM catalog_build_requests WHERE request_id=? AND request_json=? AND state='activating'
+        AND lease_token=? AND run_reference=? AND release_id=? AND version_reference=?)
+      AND EXISTS(SELECT 1 FROM publication_outbox WHERE intent_id=? AND intent_json=? AND state='dispatched'
+        AND lease_token=? AND dispatch_reference=?) THEN 'true' ELSE 'serving_publication_fenced' END)`)
+      .bind(...columns.map(k=>original[k]),authority.publicationReceiptWatermark,intent.releaseId,authority.globalVectorWatermark,
+        authority.identityCount,permit.requestId,requestBytes,permit.token,permit.runReference,permit.releaseId,permit.versionReference,
+        publication.intentId,encode(intent),publication.token,`version:${permit.versionReference}`),
+  ];
+  await preflight(db,snapshot,intent,now());await db.batch(check());
+  // This trusted callback owns full current-row/native + exact live readback.
+  // The held owner and compact CAS fence the unchanged catalog on both sides.
+  if(encode(await readDeployed(intent))!==encode(intent))throw Error('publication_readback_mismatch');
+  await db.batch([...check(),db.prepare(`UPDATE publication_outbox SET state='verified',completed_token=?,lease_token=NULL,
+      lease_until=NULL,error_code=NULL,updated_at=? WHERE intent_id=? AND state='dispatched' AND lease_token=?`)
+    .bind(publication.token,now().toISOString(),publication.intentId,publication.token)]);
+  const accepted=await row(db,intent.releaseId);
+  if(accepted?.state!=='verified'||accepted.completed_token!==publication.token)throw Error('serving_publication_fenced');
 }

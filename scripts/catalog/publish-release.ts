@@ -29,7 +29,8 @@ import {readOnlyUploadEvidence,readOnlyTransportEvidence} from './upload-preflig
 import type {ReadOnlyUploadEvidence,ReadOnlyTransportEvidence} from './upload-preflight-proof.ts';
 import {assetUploadRetryEvidence} from './routine-upload-retry.ts';
 import type { PublicationIntent } from '../../lib/catalog/publication.ts';
-import { claimPublication, completeActivatedPublication, completeActivatedPermanentPublication, completeActivatedApprovedCatalogPublication, completePublication, enqueuePublication, encodePublicationIntent, publicationStatus, recordPublicationDispatch } from '../../lib/catalog/publication.ts';
+import { claimPublication, completeActivatedPublication, completeActivatedPermanentPublication, completeActivatedApprovedCatalogPublication, completeActivatedServingPublication,
+  completePublication, enqueuePublication, encodePublicationIntent, publicationStatus, servingPublicationStatus, recordPublicationDispatch } from '../../lib/catalog/publication.ts';
 import type { SiteAssetManifest } from '../../lib/catalog/types.ts';
 import type { ReleaseBuildContext } from '../staging/build.mts';
 import { assertBuildSource, validateBuildContext } from '../staging/build.mts';
@@ -45,6 +46,8 @@ import { createVectorizeRestAdapters } from './vectorize-rest.ts';
 import type { RunWorkspace, PublicationControl, ArtifactRef } from './run-workspace.ts';
 import { semanticBudgetConfig } from '../../workers/site/semantic-budget.ts';
 import { verifySemanticCatalogIdentities, DERIVED_SEARCH_PROFILE } from '../../lib/catalog/semantic-profile.ts';
+import {assertAcceptedCodeOnlyBinding,readAcceptedCodeOnlyCatalog,acceptedCodeOnlyOperationKey} from './accepted-code-only.ts';
+import type {AcceptedCodeOnlyRead,AcceptedCodeOnlyControl} from './accepted-code-only.ts';
 
 /** Explicit protected local operator path, NOT a scheduler or a cross-host lock.
  * The workspace holds concrete shared account/environment/database + Worker
@@ -66,6 +69,8 @@ export interface PublicationConfig {
   /** Exact current code-only deployment of the same catalog, independently
    * observed before the run. The prior above remains the real D1 receipt. */
   servingPrior?:DeploymentIdentity;
+  /** Serving-only release over this original genuine catalog authority. */
+  acceptedCatalog?:{releaseId:string;receiptSha256:string;sealSha256:string};
   homepage?:HomepageEdition;
   merchandising?:Merchandising;
   /** Omission preserves historical config hashes and default-off behavior. */
@@ -86,7 +91,7 @@ const exact=(v:object,keys:string)=>Object.keys(v).sort().join(',')===keys;
 const sameRef=(a:ArtifactRef|undefined,b:ArtifactRef|undefined)=>canonicalJson(a??null)===canonicalJson(b??null);
 const sha256=(value:string|Uint8Array)=>createHash('sha256').update(value).digest('hex');
 export function validatePublicationConfig(input:PublicationConfig):Readonly<PublicationConfig> {
-  if(!input||!exact(input,`accountId,codeSha,compatibilityDate,database,environment,${Object.hasOwn(input,'homepage')?'homepage,':''}identityOrigin,indexName,${Object.hasOwn(input,'merchandising')?'merchandising,':''}prior,${Object.hasOwn(input,'publicAnalytics')?'publicAnalytics,':''}releaseId,schemaVersion,${Object.hasOwn(input,'semanticSearch')?'semanticSearch,':''}${Object.hasOwn(input,'servingPrior')?'servingPrior,':''}sourceMode,sourceRoot,workerName`)
+  if(!input||!exact(input,`${Object.hasOwn(input,'acceptedCatalog')?'acceptedCatalog,':''}accountId,codeSha,compatibilityDate,database,environment,${Object.hasOwn(input,'homepage')?'homepage,':''}identityOrigin,indexName,${Object.hasOwn(input,'merchandising')?'merchandising,':''}prior,${Object.hasOwn(input,'publicAnalytics')?'publicAnalytics,':''}releaseId,schemaVersion,${Object.hasOwn(input,'semanticSearch')?'semanticSearch,':''}${Object.hasOwn(input,'servingPrior')?'servingPrior,':''}sourceMode,sourceRoot,workerName`)
     ||input.schemaVersion!==1||!['staging','production'].includes(input.environment)||!/^[a-f0-9]{32}$/.test(input.accountId)
     ||!RESOURCE.test(input.workerName)||input.environment==='staging'&&!WORKERS_DEV_NAME.test(input.workerName)
     ||!RESOURCE.test(input.indexName)||!input.database||!exact(input.database,'id,name')
@@ -110,6 +115,12 @@ export function validatePublicationConfig(input:PublicationConfig):Readonly<Publ
       ||!KEY.test(s.releaseId)||s.releaseId===input.releaseId||!KEY.test(s.catalogRevision)
       ||!/^[a-f0-9]{40}$/.test(s.codeSha)||!HASH.test(s.catalogSnapshotSha256)||!HASH.test(s.manifestSha256)
       ||!UUID.test(s.versionReference))throw new Error('publication_configuration_invalid');
+  }
+  if(Object.hasOwn(input,'acceptedCatalog')){
+    const accepted=input.acceptedCatalog;
+    if(!accepted||!exact(accepted,'receiptSha256,releaseId,sealSha256')||!KEY.test(accepted.releaseId)
+      ||!HASH.test(accepted.receiptSha256)||!HASH.test(accepted.sealSha256)||!input.servingPrior
+      ||input.prior?.releaseId!==accepted.releaseId)throw Error('publication_accepted_catalog_invalid');
   }
   if(Object.hasOwn(input,'semanticSearch')){
     const policy=input.semanticSearch;
@@ -138,6 +149,7 @@ export function validatePublicationConfig(input:PublicationConfig):Readonly<Publ
     ...(input.homepage?{homepage:readHomepageEdition(input.homepage)!}:{}),
     ...(input.merchandising?{merchandising:readMerchandising(input.merchandising)!}:{}),
     ...(input.servingPrior?{servingPrior:Object.freeze({...input.servingPrior})}:{}),
+    ...(input.acceptedCatalog?{acceptedCatalog:Object.freeze({...input.acceptedCatalog})}:{}),
     ...(Object.hasOwn(input,'semanticSearch')?{semanticSearch:Object.freeze({...input.semanticSearch!,
       ...(input.semanticSearch?.derivedCatalog?{derivedCatalog:Object.freeze({...input.semanticSearch.derivedCatalog})}:{})})}:{}),
     ...(Object.hasOwn(input,'publicAnalytics')?{publicAnalytics:Object.freeze({...input.publicAnalytics!})}:{})});
@@ -400,12 +412,25 @@ function intentFrom(manifest:SiteAssetManifest,bytes:Uint8Array):PublicationInte
  * Credentials never enter checkpoints, artifacts, command args or returned errors.
  */
 export async function executePublication(options:{db:CatalogD1&{providerIdentity:string};owner:MutationOwner;revision:PrunedRevision|null;published?:PublishedCatalogRead;permanent?:PermanentCatalogRevision;approvedCatalog?:ApprovedCohortRevision;requestId:string;runReference:string;
+  acceptedCatalog?:AcceptedCodeOnlyRead|AcceptedCodeOnlyControl;
   workspace:PublicationWorkspace;config:PublicationConfig;credentials:{cloudflareToken:string;identityAuthorization?:string};dependencies?:Dependencies;buildRecovery?:BuildRecoveryApproval;
   acceptedReceiptOnly?:true;
   finishAuthorization?:ReviewedUploadActivationInput['finishAuthorization'];
   routineCare?:boolean;
   reviewedUploadRetry?:{approval:ReviewedUploadActivationApproval;evidence:ArtifactRef;priorApproval?:ReviewedUploadActivationApprovalV1;transport?:{previous:ArtifactRef}}}):Promise<PublicationResult>{
   const {db,workspace,revision}=options;const config=validatePublicationConfig(options.config);const now=options.dependencies?.now??(()=>new Date());
+  const serving=options.acceptedCatalog;
+  if(Boolean(config.acceptedCatalog)!==Boolean(serving))throw Error('publication_accepted_catalog_invalid');
+  if(serving){
+    assertAcceptedCodeOnlyBinding(serving);
+    if(options.published||options.permanent||options.approvedCatalog||canonicalJson(revision)!==canonicalJson(serving.revision)
+      ||options.owner.operationKey!==acceptedCodeOnlyOperationKey(serving.authority)
+      ||options.requestId!==sha256(encodeBuildRequest(serving.authority.request))
+      ||canonicalJson(config.acceptedCatalog)!==canonicalJson({...serving.authority.publication,sealSha256:serving.authority.sealSha256})
+      ||serving.authority.request.codeSha!==config.codeSha||serving.authority.request.environment!==config.environment
+      ||config.servingPrior?.catalogRevision!==serving.authority.request.sourceRevision
+      ||config.servingPrior.catalogSnapshotSha256!==serving.authority.request.sourceDigest)throw Error('publication_accepted_catalog_invalid');
+  }
   if(options.buildRecovery)encodeBuildRecoveryApproval(options.buildRecovery);
   const reviewed=options.reviewedUploadRetry;
   if(options.finishAuthorization&&!reviewed?.transport&&!options.approvedCatalog?.persistent)throw new Error('publication_finish_authorization_invalid');
@@ -417,7 +442,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     ||revision?.nativePreservation&&!options.permanent)throw new Error('publication_permanent_input_invalid');
   if(options.approvedCatalog&&(options.permanent||options.published||!revision||canonicalJson(options.approvedCatalog)!==canonicalJson(revision)))
     throw new Error('publication_approved_input_invalid');
-  if(revision?.nativeHistory&&(!options.approvedCatalog?.persistent
+  if(revision?.nativeHistory&&!serving&&(!options.approvedCatalog?.persistent
     ||canonicalJson(revision.nativeHistory)!==canonicalJson(options.approvedCatalog.persistent.nativeHistory)))
     throw new Error('publication_approved_input_invalid');
   if(db.providerIdentity!==`cloudflare:${config.accountId}:${config.database.id}`)throw new Error('publication_database_scope_mismatch');
@@ -476,6 +501,16 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     checkpoint=await workspace.readCheckpoint({controlOnly:true});
   };
   try{
+    if(serving&&!revision){
+      // A resolved CAS may have committed after its response was lost. This
+      // body-free replay can ONLY reach the existing exact resolved return.
+      const finished=control&&(await db.prepare('SELECT state,lease_token,run_reference,release_id,version_reference FROM catalog_build_requests WHERE request_id=?')
+        .bind(control.requestId).all<Record<string,unknown>>()).results[0];
+      if(!control?.permit||control.stage!=='published'||!control.receiptSha256||finished?.state!=='resolved'
+        ||control.permit.mutationOwner?.operationKey!==acceptedCodeOnlyOperationKey(serving.authority)
+        ||finished.lease_token!==control.build.token||finished.run_reference!==control.runReference
+        ||finished.release_id!==config.releaseId||finished.version_reference!==control.versionReference)throw Error('publication_serving_settlement_scope');
+    }
     if(options.acceptedReceiptOnly&&(revision!==null||!control?.permit||control.intent?.nextExpiry!==null
       ||!options.finishAuthorization||!reviewed?.transport||await workspace.budgetRowsReadCeiling()===null))
       throw new Error('publication_receipt_settlement_scope');
@@ -599,6 +634,11 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     };
     const vectorProof=async(signal?:AbortSignal)=>{
       if(!revision)throw new Error('publication_revision_required');
+      // The accepted seal authenticates immutable native delivery bytes. An
+      // unchanged global watermark/no-pending barrier under this sole owner is
+      // sufficient for code-only reuse; do not download/rewrite the vectors.
+      if(serving){signal?.throwIfAborted();const proof=await readAcceptedCodeOnlyCatalog({db,owner,seal:serving.seal,
+        authority:serving.authority,runReference:options.runReference});signal?.throwIfAborted();return proof;}
       const adapters=createVectorizeRestAdapters({environment:config.environment,indexName:config.indexName,
         accountId:config.accountId,token:options.credentials.cloudflareToken,fetch:observationSend});
       if(options.permanent){
@@ -616,6 +656,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // Full-catalog scans are sequential owned D1 reads, not a short provider
     // observation. No proof survives this invocation or crosses an owner change.
     const permanentProof=async()=>{
+      if(serving){await readAcceptedCodeOnlyCatalog({db,owner,seal:serving.seal,authority:serving.authority,runReference:options.runReference});return;}
       if(!options.permanent&&!options.approvedCatalog?.persistent)return;
       const remaining=control!.permit?(options.routineCare?900_000:120_000):Date.parse(activationDeadline??control!.build.request.cutoff)-now().getTime();
       await withPublicationInventorySignal(Boolean(options.routineCare),remaining,async signal=>{
@@ -790,14 +831,18 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       }
     }
     const receipt=()=>({schemaVersion:1,environment:config.environment,accountId:config.accountId,workerName:config.workerName,
-      releaseId:config.releaseId,versionReference:control!.versionReference,requestId:control!.requestId,intent:control!.intent});
+      releaseId:config.releaseId,versionReference:control!.versionReference,requestId:control!.requestId,intent:control!.intent,
+      ...(serving?{kind:'serving-only',catalogPublication:serving.authority.publication}:{})});
+    const status=()=>serving?servingPublicationStatus(db,config.releaseId,serving.authority):publicationStatus(db,config.releaseId);
     // A lost resolve response must not reacquire a writer or reactivate. The
     // durable receipt was saved before resolve, whose D1 transaction proves idle.
     if(buildRow?.state==='resolved'&&buildRow.lease_token===control.build.token&&buildRow.run_reference===control.runReference
       &&buildRow.release_id===config.releaseId&&buildRow.version_reference===control.versionReference&&control.receiptSha256
-      &&(await publicationStatus(db,config.releaseId)).state==='published'){
-      const stored=(await db.prepare('SELECT manifest_json FROM publication_receipts WHERE release_id=?').bind(config.releaseId).all<{manifest_json:string}>()).results[0];
-      if(!stored||canonicalJson(JSON.parse(stored.manifest_json))!==canonicalJson(control.intent)
+      &&(await status()).state==='published'){
+      const storedRow=serving?undefined:(await db.prepare('SELECT manifest_json FROM publication_receipts WHERE release_id=?').bind(config.releaseId).all<{manifest_json:string}>()).results[0];
+      const stored=serving?(await servingPublicationStatus(db,config.releaseId,serving.authority)).intent
+        :storedRow?JSON.parse(storedRow.manifest_json):null;
+      if(!stored||canonicalJson(stored)!==canonicalJson(control.intent)
         ||sha256(canonicalJson(receipt()))!==control.receiptSha256)throw new Error('publication_receipt_mismatch');
       return{state:'published',owner:null,releaseId:config.releaseId,receiptSha256:control.receiptSha256,receipt:receipt()};
     }
@@ -818,7 +863,10 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         if(!matchesIdentity(await api.identity(signal),control!.intent!))throw new Error('publication_identity_mismatch');signal?.throwIfAborted();
         const adapters=createVectorizeRestAdapters({environment:config.environment,indexName:config.indexName,accountId:config.accountId,
           token:options.credentials.cloudflareToken,fetch:observationSend});
-        if(receiptOnly)await readAcceptedActivatedCatalogNative(db,control!.permit!,control!.vectorPlan,adapters,{intent:control!.intent!,signal});
+        // Serving-only full catalog/native proof runs outside this short
+        // deployment observation, under the same owner and final compact CAS.
+        if(serving){signal?.throwIfAborted();}
+        else if(receiptOnly)await readAcceptedActivatedCatalogNative(db,control!.permit!,control!.vectorPlan,adapters,{intent:control!.intent!,signal});
         else if(options.permanent)await readActivatedPermanentCatalogNative(db,control!.permit!,control!.vectorPlan,options.permanent,adapters,signal);
         else await readActivatedCatalogVectors(db,control!.permit!,control!.vectorPlan,adapters,
           {signal,published:options.published,permanent:options.permanent});signal?.throwIfAborted();
@@ -827,7 +875,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         const after=await api.deployed(signal);signal?.throwIfAborted();if(canonicalJson(after)!==canonicalJson(deployed))throw new Error('publication_activation_pending');
         return{environment:config.environment,settled:true,active:identity(control!.intent!,control!.versionReference!)};
       };
-      const accepted=(await publicationStatus(db,config.releaseId)).state==='published';
+      const accepted=(await status()).state==='published';
       if(receiptOnly){
         if(!accepted)throw new Error('publication_fresh_evidence_required');
         const sealed=await loadPackage(directory,config,control.packageSha256!,now(),control.permit);
@@ -846,10 +894,12 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
           // Approved persistent completion already checks all source/projection
           // rows on both sides of this callback. Retain one full private/held
           // inventory AFTER the independent native/deployment observation.
-          if(!options.approvedCatalog?.persistent)await permanentProof();
+          if(serving)await vectorProof();
+          else if(!options.approvedCatalog?.persistent)await permanentProof();
           await observed();await permanentProof();receiptInventoryOwner={...owner};return control!.intent!;
         };
-        if(options.approvedCatalog||control.publication!.leaseUntil<=now().toISOString())
+        if(serving)await completeActivatedServingPublication(db,revision,control.publication!,control.permit,serving.authority,readDeployed,now);
+        else if(options.approvedCatalog||control.publication!.leaseUntil<=now().toISOString())
           if(options.permanent)await completeActivatedPermanentPublication(db,revision,control.publication!,control.permit,readDeployed,now);
           else if(options.approvedCatalog)await completeActivatedApprovedCatalogPublication(db,revision,control.publication!,control.permit,readDeployed,now);
           else await completeActivatedPublication(db,revision,control.publication!,control.permit,readDeployed,now,options.published);
@@ -868,9 +918,11 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       // The explicitly admitted accepted receipt already commits those proofs;
       // it retains the bounded fresh native/deployment gate without rescanning.
       // Otherwise reuse only this invocation's exact unchanged-owner inventory.
-      if(!receiptOnly&&(!options.approvedCatalog?.persistent||canonicalJson(receiptInventoryOwner??null)!==canonicalJson(owner)))await permanentProof();
+      if(serving){if(canonicalJson(receiptInventoryOwner??null)!==canonicalJson(owner))await vectorProof();}
+      else if(!receiptOnly&&(!options.approvedCatalog?.persistent||canonicalJson(receiptInventoryOwner??null)!==canonicalJson(owner)))await permanentProof();
       let observation:Promise<DeploymentObservation>|undefined;
-      try{if(await resolveBuildActivation(db,control.permit,signal=>(observation=observed(signal)),{observationTimeoutMs:30_000})!=='resolved')
+      try{if(await resolveBuildActivation(db,control.permit,signal=>(observation=observed(signal)),{observationTimeoutMs:30_000,
+        ...(serving?{acceptedCatalog:serving.authority}:{})})!=='resolved')
         throw new Error('publication_activation_pending');}
       finally{if(observation){
         // Only concrete bounded read transports can own durable ledger cleanup.
@@ -883,20 +935,20 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     if(!revision||owner.phase!=='freezing')throw new Error('publication_revision_required');
     // The routine whole-catalog mode requires its genuine COMPLETE policy and
     // every native/absence proof BEFORE a build/upload, not only at completion.
-    if(options.approvedCatalog&&!(reviewed&&checkpoint?.checkpoint.pins.reviewedUploadActivationPending)){
+    if((options.approvedCatalog||serving)&&!(reviewed&&checkpoint?.checkpoint.pins.reviewedUploadActivationPending)){
       if(continuation)await permanentProof();await vectorProof();
     }
     assertBuildSource(config.sourceRoot,config.codeSha);
     if(control.stage==='claimed'){
       const context:ReleaseBuildContext={schemaVersion:1,sourceMode:config.sourceMode,releaseId:config.releaseId,codeSha:config.codeSha,
         catalogRevision:revision.snapshot.catalogRevision,catalogSnapshotSha256:sha256(`${JSON.stringify(revision.snapshot)}\n`),
-        generatedAt:revision.snapshot.generatedAt,vectorSyncWatermark:revision.vectorSyncWatermark,priorReleaseId:config.prior?.releaseId??null,
+        generatedAt:serving?.authority.observedAt??revision.snapshot.generatedAt,vectorSyncWatermark:revision.vectorSyncWatermark,priorReleaseId:config.prior?.releaseId??null,
         retainedManifestSha256:config.prior?.directory?config.prior.manifestSha256:null,...(config.homepage?{homepage:config.homepage}:{}),
         ...(config.merchandising?{merchandising:config.merchandising}:{})};
       validateBuildContext(context,revision.snapshot,config.codeSha,context.catalogSnapshotSha256,now());
-      let observedAt=revision.snapshot.generatedAt;
+      let observedAt=serving?.authority.observedAt??revision.snapshot.generatedAt;
       const deadlines=revision.snapshot.products.map(p=>p.eligibleUntil);
-      if(config.prior?.directory){
+      if(config.prior?.directory&&!serving){
         // Repackaging a permitted historical shard must not renew its original
         // observation/expiry. Identity-only prior mode reads/copies no old body.
         const bytes=await privateBytes(path.join(config.prior.directory,'asset-manifest.json'));
@@ -1059,7 +1111,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // exact durable control/package and has no second activation path.
     return executePublication({...options,owner,dependencies:options.dependencies});
   }catch(error){
-    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_|vector_)[a-z_]+$/.test(error.message)?error.message:'publication_pending';
+    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_|vector_|accepted_code_only_|accepted_catalog_|serving_publication_)[a-z_]+$/.test(error.message)?error.message:'publication_pending';
     return{state:'pending',owner,errorCode:code};
   }
 }

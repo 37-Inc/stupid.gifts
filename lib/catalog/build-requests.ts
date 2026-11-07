@@ -2,7 +2,9 @@ import type { CatalogSnapshot } from './types.ts';
 import type { CatalogD1 } from './storage/d1.ts';
 import { catalogDisplayDeadline, earliestDisplayExpiry } from './display.ts';
 import type { PublicationClaim, PublicationIntent } from './publication.ts';
-import { encodePublicationIntent, publicationStatus, publicationActivationGate } from './publication.ts';
+import { encodePublicationIntent, publicationStatus, publicationActivationGate, acceptedCatalogReceipt,
+  encodeAcceptedCatalogAuthority, servingPublicationStatus } from './publication.ts';
+import type {AcceptedCatalogAuthority} from './publication.ts';
 import { rollbackPreflight, visibleRevisionCountQuery } from './d1.ts';
 import { canonicalTime } from './snapshot.ts';
 import { canonicalJson } from './canonical-json.ts';
@@ -513,7 +515,7 @@ export async function readReviewedUploadActivation(db:CatalogD1,value:ReviewedUp
  * must prove settled provider/run state; a target identity alone is not a receipt.
  */
 export async function resolveBuildActivation(db: CatalogD1, permit: ActivationPermit,
-  readDeployment: (signal: AbortSignal) => Promise<DeploymentObservation>, options: { observationTimeoutMs?: number } = {}): Promise<'awaiting_receipt' | 'resolved' | 'not_activated'> {
+  readDeployment: (signal: AbortSignal) => Promise<DeploymentObservation>, options: { observationTimeoutMs?: number;acceptedCatalog?:AcceptedCatalogAuthority } = {}): Promise<'awaiting_receipt' | 'resolved' | 'not_activated'> {
   const timeout = options.observationTimeoutMs ?? 3000;
   if (!Number.isInteger(timeout) || timeout < 10 || timeout > 30_000) throw new Error('invalid_observation_timeout');
   const stored = await row(db, permit.requestId);
@@ -543,6 +545,27 @@ export async function resolveBuildActivation(db: CatalogD1, permit: ActivationPe
     .all<{ intent_json: string }>()).results[0];
   if (!outbox) throw new Error('build_publication_missing');
   if (observed.active && matches(observed.active, JSON.parse(outbox.intent_json)) && observed.active.versionReference === permit.versionReference) {
+    if(options.acceptedCatalog){
+      const authority=options.acceptedCatalog,bytes=encodeAcceptedCatalogAuthority(authority),owner=permit.mutationOwner;
+      if(!owner||owner.operationKey!==await digest(bytes)||encodeBuildRequest(authority.request)!==stored.request_json)
+        throw Error('serving_publication_fenced');
+      const status=await servingPublicationStatus(db,permit.releaseId,authority);
+      if(status.state!=='published')return'awaiting_receipt';
+      const original=await acceptedCatalogReceipt(db,authority),columns=Object.keys(original);
+      if(columns.some(k=>!/^[a-z_]+$/.test(k)))throw Error('serving_publication_fenced');
+      const result=await finish(db.prepare(`UPDATE catalog_build_requests SET state='resolved' WHERE request_id=? AND lease_token=? AND state='activating'
+        AND EXISTS(SELECT 1 FROM publication_receipts WHERE ${columns.map(k=>`${k} IS ?`).join(' AND ')})
+        AND (SELECT coalesce(max(rowid),0) FROM publication_receipts)=?
+        AND NOT EXISTS(SELECT 1 FROM publication_receipts WHERE release_id=?)
+        AND (SELECT coalesce(max(sequence),0) FROM vector_sync_outbox)=?
+        AND NOT EXISTS(SELECT 1 FROM vector_sync_outbox WHERE status!='complete')
+        AND (SELECT count(*) FROM products)=?
+        AND EXISTS(SELECT 1 FROM publication_outbox WHERE release_id=? AND intent_json=? AND state='verified' AND completed_token IS NOT NULL)`)
+        .bind(permit.requestId,permit.token,...columns.map(k=>original[k]),authority.publicationReceiptWatermark,
+          permit.releaseId,authority.globalVectorWatermark,authority.identityCount,permit.releaseId,outbox.intent_json));
+      if(result.success!==true||result.meta?.changes!==1)throw Error('build_fenced');
+      return'resolved';
+    }
     const receipt = (await db.prepare('SELECT manifest_json FROM publication_receipts WHERE release_id=?').bind(permit.releaseId)
       .all<{ manifest_json: string }>()).results[0];
     if (!receipt) return 'awaiting_receipt';
