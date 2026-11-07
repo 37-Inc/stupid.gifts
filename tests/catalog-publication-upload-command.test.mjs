@@ -222,7 +222,11 @@ for(const [single,stall]of [[false,false],[true,false],[false,true]])test(`pinne
   };
   const attempted=[];const observed=({request})=>{attempted.push({method:request.method,path:request.url.split('/client/v4')[1]?.split('?')[0]??'not-api'});};
   const requests=channel('http.server.request.start');requests.subscribe(observed);t.after(()=>requests.unsubscribe(observed));
-  await accountedPublicationUploadCommand({workspace:ws,scope,send})({...command,cwd:linuxUpload?fileURLToPath(new URL('..',import.meta.url)):dir,args:[wrangler,'versions','upload','--config',cfg,'--outdir',path.join(runtime,'out'),'--tag','owned-fixture'],
+  const execute=async wrapped=>{
+    try{await promisify(execFile)(wrapped.file,wrapped.args,{cwd:wrapped.cwd,env:wrapped.env,timeout:wrapped.timeoutMs,maxBuffer:1024*1024});}
+    catch(error){t.diagnostic(`Owned fake-credential Wrangler fixture: ${String(error.stderr??error.code)}`);throw error;}
+  };
+  await accountedPublicationUploadCommand({workspace:ws,scope,send,command:execute})({...command,cwd:linuxUpload?fileURLToPath(new URL('..',import.meta.url)):dir,args:[wrangler,'versions','upload','--config',cfg,'--outdir',path.join(runtime,'out'),'--tag','owned-fixture'],
     env:{PATH:process.env.PATH,HOME:path.join(runtime,'home'),TMPDIR:path.join(runtime,'tmp'),CI:'true',CLOUDFLARE_API_TOKEN:'OWNED_FAKE_TOKEN',CLOUDFLARE_ACCOUNT_ID:scope.accountId,
       WRANGLER_LOG_PATH:path.join(runtime,'logs'),...(linuxUpload?{WRANGLER_OUTPUT_FILE_PATH:path.join(runtime,'output.ndjson')}:{ }),...(stall?{NODE_OPTIONS:`--import ${new URL('file://'+preload).href}`}:{})},timeoutMs:30_000}).catch(error=>assert.fail(`${error.code}: ${JSON.stringify(attempted)}`));
   assert.equal(assetAttempts,2);assert.equal(versionAttempts,2);assert.equal(calls.length,7);assert.equal(calls.filter(call=>call.path.endsWith('/versions')).length,2);
