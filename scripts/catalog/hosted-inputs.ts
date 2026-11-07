@@ -32,6 +32,9 @@ export async function publishHostedInputs(store:CatalogObjectStore,files:Array<{
     try{const value=JSON.parse(Buffer.from(file.bytes).toString('utf8'));if(!value||typeof value!=='object')fail();}catch{fail();}
     const digest=hash(file.bytes),key=`inputs/files/${digest}.json`;
     await store.putImmutable(key,file.bytes);manifest.files.push({relative:file.relative,sha256:digest,key});
+    // Existing accepted pointers may outlive the current input bundle. Keep
+    // their unique bootstrap paths resolvable without copying/rebinding runs.
+    if(file.relative.startsWith('bootstrap/'))await store.putImmutable('operator/'+file.relative,file.bytes);
   }
   const bytes=json(manifest),digest=hash(bytes),ref:HostedInputsReference={schemaVersion:1,key:`inputs/${digest}.json`,sha256:digest};
   await store.putImmutable(ref.key,bytes);
