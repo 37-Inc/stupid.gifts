@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { headroom, observeHeadroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation, cleanupAcceptedPublication } from '../scripts/catalog/daily-operator.mjs';
+import { headroom, observeHeadroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation, cleanupAcceptedPublication,
+  routineAutomationPolicy,materializeRoutinePreparation,routineFreshnessPool,hydrateRoutineInputs } from '../scripts/catalog/daily-operator.mjs';
+import {sha256} from '../scripts/catalog/migration.ts';
 
 test('cleanup failures after acceptance are advisory, including open and close failures',async()=>{
   for(const failure of ['none','open','clean','close']){
@@ -23,9 +25,52 @@ test('scheduled identity prevents duplicate invocations while named runs can rep
   assert.equal(operatorInvocation(['prepare','--run','fresh-discovery'],calendar).runKey,'fresh-discovery');
   assert.equal(operatorInvocation(['--run','fresh-discovery','publish','a'.repeat(64)],calendar).approvalSha,'a'.repeat(64));
   assert.equal(operatorInvocation(['recover','a'.repeat(64),'--run','scheduled-2026-11-02'],calendar).command,'recover');
+  assert.equal(operatorInvocation(['resume','--run','scheduled-2026-11-02'],calendar).approvalSha,undefined);
+  assert.equal(operatorInvocation(['resume','a'.repeat(64),'--run','scheduled-2026-11-02'],calendar).approvalSha,'a'.repeat(64));
   assert.equal(operatorInvocation(['reconcile-availability','--run','availability-2026-11-02'],calendar).command,'reconcile-availability');
   for(const args of [['prepare','--run'],['prepare','--run','../escape'],['start','extra'],
     ['prepare','--run','one','--run','two'],['publish'],['unknown']])assert.throws(()=>operatorInvocation(args,calendar),/routine_command/);
+});
+
+test('automation is explicit opt-in and absent/disabled preserves the legacy config path',()=>{
+  assert.equal(routineAutomationPolicy(null),null);
+  assert.equal(routineAutomationPolicy({schemaVersion:1,enabled:false,discovery:true,homepage:true}),null);
+  assert.deepEqual(routineAutomationPolicy({schemaVersion:1,enabled:true,discovery:false,homepage:true}),
+    {schemaVersion:1,enabled:true,discovery:false,homepage:true});
+  for(const value of [{enabled:true},{schemaVersion:1,enabled:'true',discovery:true,homepage:true},
+    {schemaVersion:1,enabled:true,discovery:true,homepage:true,limit:10}])assert.throws(()=>routineAutomationPolicy(value));
+});
+
+test('one preparation bundle restores interrupted child writes with the original exact config and timestamps',async()=>{
+  const directory='/protected/run',inputs={context:{cutoff:'2026-11-06T18:00:00.000Z'},rights:{rightsById:{}}},hash=value=>sha256(JSON.stringify(value)+'\n'),
+    config={codeSha:'a'.repeat(40),runId:'original',inputs:Object.fromEntries(Object.entries(inputs).map(([name,value])=>[name,{path:directory+'/'+name+'.json',sha256:hash(value)}])),
+      cadence:{automation:{refreshIds:['B000000001']}}},operator={source:config.codeSha,helperSha256:'b'.repeat(64),runId:config.runId,configPath:directory+'/config.json',configSha256:hash(config)},
+    bundle={schemaVersion:1,kind:'routine-preparation',source:operator.source,helperSha256:operator.helperSha256,config,operator,inputs,
+      freshness:{refreshIds:['B000000001']},preparationReceipt:{original:true}},saved=new Map();let fail=true;
+  const put=async(file,value)=>{if(saved.has(file))assert.deepEqual(saved.get(file),value);else saved.set(file,structuredClone(value));
+    if(fail&&file.endsWith('/context.json')){fail=false;throw Error('synthetic lost write ACK');}};
+  await assert.rejects(materializeRoutinePreparation(directory,bundle,put));
+  assert.deepEqual(await materializeRoutinePreparation(directory,bundle,put),operator);
+  assert.deepEqual(saved.get(directory+'/context.json'),inputs.context);assert.deepEqual(saved.get(directory+'/config.json'),config);
+  for(const change of [b=>{b.config.inputs.rights.path='/outside/rights.json';},b=>{b.freshness.refreshIds=[];}]){
+    const altered=structuredClone(bundle);change(altered);await assert.rejects(materializeRoutinePreparation(directory,altered,put));}
+});
+
+test('freshness preparation pages metadata only and maps cleared stock/photo observations without ownership',async()=>{
+  const rows=Array.from({length:205},(_,n)=>({id:'B'+String(n).padStart(9,'0'),source:'amazon',is_active:n===2?0:1,
+    duplicate_of_product_id:n===3?'B000000001':null,availability_status:'IN_STOCK',availability_checked_at:'2026-11-01T00:00:00.000Z',photo_expiry:null}));let calls=0;
+  const db={prepare(sql){assert.match(sql,/ORDER BY p.id LIMIT 100/);assert.doesNotMatch(sql,/SELECT[^]*p\.public_display_json[^]*FROM/);
+    return{bind(after){return{async all(){calls++;return{results:rows.filter(row=>row.id>after).slice(0,100)};}};}};}};
+  const result=await routineFreshnessPool(db);assert.equal(result.length,205);assert.equal(calls,4);
+  assert.equal(result[2].isActive,false);assert.equal(result[3].duplicateOfProductId,'B000000001');assert.ok(result.every(p=>p.publiclyCleared));
+});
+
+test('fresh runner hydrates exact technical input refs and current semantic metadata before the driver',async()=>{
+  const ref=name=>({path:'/protected/'+name+'.json',sha256:'a'.repeat(64)}),inputs={previous:ref('seal'),context:ref('context'),rights:ref('rights')},calls=[];
+  const config={inputs,publication:{semanticSearch:{derivedCatalog:ref('semantic')}}};
+  await hydrateRoutineInputs(config,async(file,hash)=>calls.push({file,hash}));
+  assert.deepEqual(calls.map(c=>c.file),['/protected/seal.json','/protected/context.json','/protected/rights.json','/protected/semantic.json']);
+  assert.ok(calls.every(c=>c.hash==='a'.repeat(64)));
 });
 
 test('photo-only preparation requires an explicit stable label; later commands use the saved config',()=>{
