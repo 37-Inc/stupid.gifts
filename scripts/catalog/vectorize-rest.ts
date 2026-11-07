@@ -5,6 +5,8 @@ import { drainDeploymentObservation } from '../../lib/catalog/build-requests.ts'
 import { isAccountedPublicationFetch } from './publication-read-fetch.ts';
 
 const ownedReadbacks=new WeakSet<OwnedVectorAdapters['readback']|NonNullable<OwnedVectorAdapters['readbacks']>>();
+const ownedTransports=new WeakSet<OwnedVectorAdapters>();
+export function hasAccountedVectorTransport(adapters:OwnedVectorAdapters):boolean{return ownedTransports.has(adapters);}
 export function hasAccountedVectorReadback(adapters:Pick<OwnedVectorAdapters,'readback'|'readbacks'>):boolean{
   return ownedReadbacks.has(adapters.readback)&&(!adapters.readbacks||ownedReadbacks.has(adapters.readbacks));
 }
@@ -99,6 +101,6 @@ export function createVectorizeRestAdapters(options: MutationScope & {
     readbacks,
     async readback(publicId,signal){return(await readbacks([publicId],signal))[0];},
   };
-  if(isAccountedPublicationFetch(send)){ownedReadbacks.add(adapters.readback);ownedReadbacks.add(readbacks);}
+  if(isAccountedPublicationFetch(send)){ownedReadbacks.add(adapters.readback);ownedReadbacks.add(readbacks);ownedTransports.add(adapters);}
   return Object.freeze(adapters);
 }
