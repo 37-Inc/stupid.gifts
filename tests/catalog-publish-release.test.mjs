@@ -268,6 +268,12 @@ test('actual build/upload/activate/identity/native-proof/receipt/idle compositio
   assert.equal((await f.execute()).state,'published');assert.equal(f.counts().activateCalls,1);
 });
 
+test('permanent publication fetch scope errors are not misreported as transient provider outages',async t=>{
+  const f=await setup(t),result=await f.execute(f.db,{fetch:async()=>{throw new Error('publication_read_scope_invalid');}});
+  assert.equal(result.state,'pending');assert.equal(result.errorCode,'publication_read_scope_invalid');
+  assert.equal(f.counts().buildCalls,0);assert.equal(f.counts().uploadCalls,0);assert.equal(f.counts().activateCalls,0);
+});
+
 test('code-only serving prior retains the real catalog receipt through publication',async t=>{
   const f=await setup(t,{identityOnlyPrior:true});f.setServingPrior();
   const result=await f.execute();
