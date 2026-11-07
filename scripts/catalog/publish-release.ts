@@ -994,6 +994,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         vectorize:[{binding:'VECTORIZE',index_name:config.indexName},
           ...(config.semanticSearch?.derivedCatalog?[{binding:'SEMANTIC_VECTORIZE',index_name:config.semanticSearch.derivedCatalog.indexName}]:[])]}));
       const packageSha256=sha256(canonicalJson(await inventory(directory)));
+      await workspace.retainPublicationPackage?.(config.releaseId,packageSha256);
       await save({stage:'built',packageSha256});
     }
     const sealed=await loadPackage(directory,config,control.packageSha256!,now());

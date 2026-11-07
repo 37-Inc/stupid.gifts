@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {mkdtemp,chmod,rm,realpath,readFile,readdir,lstat} from 'node:fs/promises';
+import {mkdtemp,chmod,rm,realpath,readFile,readdir,lstat,mkdir,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {openRunWorkspace,readRunWorkspace} from '../scripts/catalog/run-workspace.ts';
 import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
+import {inventoryPublicationPackage} from '../scripts/catalog/publish-release.ts';
 
 const NOW='2026-11-06T12:00:00.000Z',LATER='2026-11-06T14:00:00.000Z',HASH='a'.repeat(64);
 const encode=value=>Buffer.from(canonicalJson(value)+'\n');
@@ -118,4 +119,51 @@ test('registered expiry removes only original expired bodies; locked/unexpired c
   assert.deepEqual(await restored.purgeExpired(),[]);
   assert.equal((await lstat(join(restored.directory,'manifest.json'))).mode&0o777,0o600);
   assert.ok(f.calls.filter(([method])=>method==='remove').every(([,key])=>/\/objects\/[a-f0-9]{64}\.json$/.test(key)));
+});
+
+async function packageFixture(t,large=false){
+  const f=await fixture(t);f.input.repository=join(f.parent,'source');await mkdir(f.input.repository,{mode:0o700});
+  const w=await f.open(),release='sealed-release',expiry='2026-11-06T12:20:00.000Z';
+  await w.preparePublicationDirectories(release,NOW,expiry);const root=join(w.directory,'packages',release);
+  await mkdir(join(root,'assets'),{recursive:true,mode:0o700});
+  const files={'entry.mts':Buffer.from('export default {fetch(){return new Response("fixture")}};'),
+    'wrangler.json':Buffer.from(JSON.stringify({main:join(root,'entry.mts')})),
+    'assets/image.bin':Buffer.alloc(large?32*1024*1024:300000,71)};
+  for(const [name,bytes]of Object.entries(files))await writeFile(join(root,name),bytes,{mode:0o600});
+  const inventory=await inventoryPublicationPackage(root),packageSha256=sha256(canonicalJson(inventory));
+  return{...f,w,root,files,release,expiry,packageSha256};
+}
+
+test('sealed exact package survives runner loss before/after upload with original paths, owner and finite expiry',async t=>{
+  const f=await packageFixture(t,true);await f.w.retainPublicationPackage(f.release,f.packageSha256);
+  await f.w.writeCheckpoint(null,{...cp(),state:{uploadedVersion:'synthetic-version',intent:'original unchanged intent'}});
+  await f.w.reserveBudget({...reservation,id:'upload-may-have-dispatched'});
+  const archived=[...f.objects.entries()].filter(([key])=>key.includes('/objects/'));
+  assert.ok(archived.length>130); // A real 32MiB file crosses the bounded archive-part seam.
+  for(const [,object]of archived){const body=JSON.parse(Buffer.from(object.bytes));
+    if(body.publicationReleaseId){assert.equal(Date.parse(body.observedAt),Date.parse(NOW));assert.equal(body.expiresAt,f.expiry);}}
+  await writeFile(join(f.w.directory,'publication-runtime',f.release,'transient-output.json'),'DO NOT COPY',{mode:0o600});
+  await f.w.close();await rm(f.input.directory,{recursive:true});
+  const restored=await f.open({mode:'resume'});
+  assert.equal(sha256(canonicalJson(await inventoryPublicationPackage(f.root))),f.packageSha256);
+  for(const [name,bytes]of Object.entries(f.files))assert.deepEqual(await readFile(join(f.root,name)),bytes);
+  assert.deepEqual((await restored.readCheckpoint()).checkpoint.owner,cp().owner);
+  assert.equal((await restored.readCheckpoint()).checkpoint.state.uploadedVersion,'synthetic-version');
+  assert.equal((await restored.budget()).unconfirmedRequests,1);
+  await assert.rejects(readFile(join(restored.directory,'publication-runtime',f.release,'transient-output.json')),/ENOENT/);
+  assert.deepEqual(await restored.purgeExpired(),[]);
+  f.setNow('2026-11-06T12:20:00.000Z');await restored.purgeExpired();
+  for(const [key,object]of archived)if(JSON.parse(Buffer.from(object.bytes)).publicationReleaseId)assert.equal(f.objects.has(key),false);
+  assert.ok(f.objects.has('runs/test-run/head.json'));assert.ok(f.objects.has('runs/test-run/manifest.json'));
+  assert.deepEqual((await restored.readCheckpoint({controlOnly:true})).checkpoint.owner,cp().owner);
+});
+
+test('package restore refuses conflicting local files and changed source, never overwrites or rebinds',async t=>{
+  const f=await packageFixture(t);await assert.rejects(f.w.retainPublicationPackage(f.release,'e'.repeat(64)),/publication_package/);
+  await f.w.retainPublicationPackage(f.release,f.packageSha256);await f.w.close();
+  await writeFile(join(f.root,'entry.mts'),'unrelated current edit',{mode:0o600});
+  await assert.rejects(f.open({mode:'resume'}),/immutable_conflict/);
+  assert.equal(await readFile(join(f.root,'entry.mts'),'utf8'),'unrelated current edit');
+  const otherSource=join(f.parent,'different-source');await mkdir(otherSource,{mode:0o700});
+  await assert.rejects(f.open({mode:'resume',repository:otherSource}),/publication_scope/);
 });
