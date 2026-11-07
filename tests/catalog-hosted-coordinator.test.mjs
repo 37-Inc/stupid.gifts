@@ -103,19 +103,20 @@ test('provider credential failure or mismatched scope stops shadow without start
     assert.equal(f.pointer(),null);assert.equal(f.files.size,0);assert.deepEqual(f.calls,[]);
   }
 });
-test('bounded index-visibility retries use only the same approved publication, never supplier phases again',async()=>{
+for(const errorCode of ['semantic_delta_pending','publication_provider_unavailable'])test(`bounded ${errorCode} retry uses the same approved publication, never supplier/model phases again`,async()=>{
   const f=fixture(),invoke=f.deps.invoke;let publishes=0;
   const result=await f.run({}, {invoke:async(directory,args)=>{
-    if(args[0]==='publish'&&publishes++===0){f.calls.push(args);f.phase='publishing';f.approvalPin=hash(canonicalJson(f.proposal));return{state:'pending',errorCode:'semantic_delta_pending'};}
+    if(args[0]==='publish'&&publishes++===0){f.calls.push(args);f.phase='publishing';f.approvalPin=hash(canonicalJson(f.proposal));return{state:'pending',errorCode};}
     return invoke(directory,args);}});
   assert.equal(result.state,'accepted');assert.deepEqual(f.calls.map(args=>args[0]),['prepare','start','review','publish','publish']);
   assert.deepEqual(f.waits,[45000]);assert.equal(f.calls[3][1],f.calls[4][1]);
 });
-test('unknown external dispatch stays pending with no automatic retry, fresh run or acceptance claim',async()=>{
+for(const errorCode of ['mutation_unknown','publication_activation_unknown','publication_upload_unknown'])test(`${errorCode} stays pending with no automatic retry, fresh run or acceptance claim`,async()=>{
   const f=fixture(),invoke=f.deps.invoke,result=await f.run({}, {invoke:async(directory,args)=>{
-    if(args[0]==='publish'){f.calls.push(args);return{state:'pending',errorCode:'mutation_unknown'};}return invoke(directory,args);}});
-  assert.equal(result.state,'attention');assert.equal(result.errorCode,'mutation_unknown');assert.equal(f.waits.length,0);
+    if(args[0]==='publish'){f.calls.push(args);return{state:'pending',errorCode};}return invoke(directory,args);}});
+  assert.equal(result.state,'attention');assert.equal(result.errorCode,errorCode);assert.equal(f.waits.length,0);
   assert.ok(JSON.parse(f.pointer()).pending);assert.equal(f.calls.filter(a=>a[0]==='start').length,1);
+  assert.equal(f.calls.filter(a=>a[0]==='publish').length,1);
 });
 test('visibility retries are finite and leave the same publication pending without a new provider run',async()=>{
   const f=fixture(),invoke=f.deps.invoke;

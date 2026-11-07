@@ -229,7 +229,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     else return{state:'attention',runKey:record.runKey,phase:status.phase,errorCode:'catalog_hosted_checkpoint_requires_attention'};
     if(result.state==='finalized')continue;
     if(result.reason==='awaiting_reviewed_approval')continue;
-    if(result.state==='pending'&&['semantic_delta_pending','not_visible'].includes(result.errorCode)&&visibilityRetries++<8){
+    // publication_provider_unavailable is GET-only; uncertain writes stay held.
+    if(result.state==='pending'&&['semantic_delta_pending','not_visible','publication_provider_unavailable'].includes(result.errorCode)&&visibilityRetries++<8){
       const pending=await deps.inspect(record,directory);
       if(pending.approvalPin&&['draining','freezing','publishing'].includes(pending.phase)){await deps.wait(45000);continue;}
     }
