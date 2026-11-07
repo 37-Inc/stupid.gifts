@@ -13,6 +13,8 @@ import { explicitMaintenanceTime, maintenanceDigest, maintenanceEmbeddingText, m
   maintenanceRow, maintenanceSlugs, maintenanceState, publishedMaintenanceProduct, snake } from './maintenance-state.ts';
 import { maintenanceTimeOrder, refreshPhotoRights } from './maintenance-state.ts';
 import type { Row, SemanticProduct } from './maintenance-state.ts';
+import { planProductFreshness } from './freshness-selection.ts';
+import type { FreshnessSelection } from './freshness-selection.ts';
 
 export interface MaintenanceIntent {
   rightsById?: Record<string, ProductRights>;
@@ -458,11 +460,39 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
     updateAmazonAffiliateUrl: (id: string,url: string) => serialize(async () => (await change('updateAmazonAffiliateUrl',[[id],url],(p,now) => {
       p.affiliateUrl=url; p.updatedAt=now; return true;
     }) as string[]).length),
-    getProductsForRevalidation: (selection: {limit:number;daily:true;featuredIds?:string[];photosOnly?:true}
+    // Explicit read-only planning seam. The existing ten-item selector below
+    // remains unchanged; a coordinator must pin this plan before dispatching it.
+    planProductFreshness: (selection: FreshnessSelection = {}) => serialize(async () => {
+      const products = (await catalogView([],false,true)).map(p => ({
+        id:p.id,source:p.source,isActive:p.isActive,publiclyCleared:true,
+        duplicateOfProductId:p.duplicateOfProductId,availabilityStatus:p.availabilityStatus,
+        availabilityCheckedAt:p.availabilityCheckedAt,
+        photoExpiresAt:typeof p.photoExpiresAt==='string'?p.photoExpiresAt:null,
+      }));
+      const now = String((await all<{now:string}>(`SELECT ${NOW} now`))[0].now);
+      const plan = planProductFreshness(products,now,selection);
+      await checkOwner();return plan;
+    }),
+    getProductsForRevalidation: (selection: {limit:number;daily:true;featuredIds?:string[];photosOnly?:true;selectedIds?:string[]}
       | {limit:number;staleDays:number;publishedStaleDays:number;publishedSlots:number;legacySlots:number;daily?:never}) => serialize(async () => {
       if(selection.daily){
         const {limit,featuredIds=[]}=selection;
         if(!Number.isInteger(limit)||limit<1||limit>10||featuredIds.length>100||featuredIds.some(id=>!(/^[A-Z0-9]{10}$/).test(id)))throw new Error('daily_selection_invalid');
+        if(selection.selectedIds!==undefined){
+          const ids=selection.selectedIds;
+          if(!Array.isArray(ids)||ids.length!==limit||new Set(ids).size!==ids.length
+            ||ids.some(id=>typeof id!=='string'||!(/^[A-Z0-9]{10}$/).test(id)))throw new Error('daily_selection_invalid');
+          await checkOwner();const rows=[];
+          // Only a coordinator's pinned plan may use this exact technical
+          // batch. A changed/missing member fails, never substitutes a gift.
+          for(const id of ids){
+            const full=await load(id),p=full?.product;
+            if(!full||!p||full.row.public_display_json===null||p.source!=='amazon'||!p.isActive||p.duplicateOfProductId)
+              throw new Error('daily_selection_changed');
+            rows.push({...maintenanceRow(p),has_embedding:full.present});
+          }
+          await checkOwner();return rows;
+        }
         // Public clearance is the stored display, not long-article readiness.
         // Keep six slots for the rest of the catalog so featured gifts cannot
         // monopolize every batch; sparse lanes lend their unused slots.

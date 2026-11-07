@@ -388,10 +388,10 @@ test('changed optional short copy is not carried under an old exact permanent gr
   }finally{f.close();}
 });
 
-test('all11 methods are usable via explicit D1 construction; immutable archive/identity and private versus public separation',async () => {
+test('maintenance methods and optional freshness planner retain immutable archive/identity and private versus public separation',async () => {
   const original=rawProduct(1);const f=await setup({products:[original],presence:{[uuid(1)]:true}});
   try {
-    assert.equal(Object.keys(f.store).length,11);assert.ok(Object.isFrozen(f.store));
+    assert.equal(Object.keys(f.store).length,12);assert.ok(Object.isFrozen(f.store));
     const archived=f.row(1).source_record_json; const p=input(1,{editorialStatus:'pending',editorialWriteup:null,price:0,rating:0,reviewCount:0,humorTags:[],embedding:null});
     const hash=editorialSourceHash(p);
     assert.deepEqual(await f.store.upsertProduct(p,hash),{inserted:false,slug:original.slug});
@@ -659,6 +659,56 @@ test('one weekly-due unavailable listing gets a stock recheck without enlarging 
     assert.equal(rows.some(p=>p.id===id(19)||p.id===id(20)),false);
     assert.deepEqual(await f.store.getProductsForRevalidation({...selection,photosOnly:true}),[]);
     assert.equal(f.epoch(),before);
+  }finally{f.close();}
+});
+
+test('due freshness planning is opt-in, complete, read-only and cannot expand the legacy ten-item dispatch',async()=>{
+  const products=Array.from({length:120},(_,n)=>rawProduct(n+1));
+  const excluded=rawProduct(999),inactive=rawProduct(998,{isActive:false});
+  const f=await setup({products:[...products,excluded,inactive]});
+  try{
+    markPublic(f,[...products,inactive]);
+    f.sqlite.prepare('UPDATE products SET availability_status=?,availability_checked_at=? WHERE id=?')
+      .run('OUT_OF_STOCK',null,id(120));
+    const before=f.epoch(),batches=f.counts().batches;
+    const plan=await f.store.planProductFreshness({exposedIds:[id(100)]});
+    assert.equal(plan.eligibleCount,120);assert.equal(plan.neededCount,120);
+    assert.equal(plan.entries[0].id,id(100));
+    assert.deepEqual(plan.entries.find(p=>p.id===id(120)).reasons,['legacy_availability_unknown']);
+    assert.equal(plan.entries.some(p=>[id(998),id(999)].includes(p.id)),false);
+    assert.deepEqual(await f.store.planProductFreshness({photosOnly:true}),{
+      ...plan,neededCount:0,entries:[],
+    });
+    assert.equal(f.epoch(),before);assert.equal(f.counts().batches,batches);
+    await assert.rejects(f.store.getProductsForRevalidation({daily:true,limit:120}),/daily_selection_invalid/);
+    assert.equal((await f.store.getProductsForRevalidation({daily:true,limit:10})).length,10);
+  }finally{f.close();}
+});
+
+test('pinned refresh chunks preserve exact plan order and reject changed or invalid members without reselection',async()=>{
+  const products=Array.from({length:12},(_,n)=>rawProduct(n+1));
+  const inactive=rawProduct(998,{isActive:false}),excluded=rawProduct(999);
+  const f=await setup({products:[...products,inactive,excluded]});
+  try{
+    markPublic(f,[...products,inactive]);
+    // Availability holds retain clearance and a stable source identity. They
+    // remain a legitimate weekly stock-recheck target, not a new admission.
+    f.sqlite.prepare('UPDATE products SET availability_status=? WHERE id=?').run('OUT_OF_STOCK',id(12));
+    const plan=await f.store.planProductFreshness(),selected=[id(12),id(8),id(3)];
+    assert.ok(selected.every(id=>plan.entries.some(p=>p.id===id)));
+    const before=f.epoch(),batches=f.counts().batches;
+    const rows=await f.store.getProductsForRevalidation({daily:true,limit:3,selectedIds:selected});
+    assert.deepEqual(rows.map(p=>p.id),selected);
+    assert.equal(rows[0].availability_status,'OUT_OF_STOCK');
+    assert.deepEqual(await f.store.getProductsForRevalidation({daily:true,limit:3,selectedIds:selected}),rows);
+    for(const ids of [[id(1),id(1)],[id(1)],[],['invalid',id(1)]])
+      await assert.rejects(f.store.getProductsForRevalidation({daily:true,limit:2,selectedIds:ids}),/daily_selection_invalid/);
+    for(const idToRead of [id(998),id(999),id(997)])
+      await assert.rejects(f.store.getProductsForRevalidation({daily:true,limit:1,selectedIds:[idToRead]}),/daily_selection_changed/);
+    f.sqlite.prepare('UPDATE products SET duplicate_of_product_id=? WHERE id=?').run(id(1),id(8));
+    await assert.rejects(f.store.getProductsForRevalidation({daily:true,limit:3,selectedIds:selected}),/daily_selection_changed/);
+    await assert.rejects(f.store.getProductsForRevalidation({daily:true,limit:11,selectedIds:products.slice(0,11).map(p=>p.id)}),/daily_selection_invalid/);
+    assert.equal(f.epoch(),before);assert.equal(f.counts().batches,batches);
   }finally{f.close();}
 });
 
