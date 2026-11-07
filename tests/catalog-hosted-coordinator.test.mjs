@@ -2,13 +2,17 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal} from '../scripts/catalog/hosted-coordinator.mjs';
+import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
+import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
 
 const SOURCE='a'.repeat(40),NEW_SOURCE='b'.repeat(40),HASH='c'.repeat(64),DAY='2026-11-06';
 const bytes=value=>Buffer.from(JSON.stringify(value)+'\n'),hash=value=>createHash('sha256').update(value).digest('hex');
 const ref={schemaVersion:1,key:'inputs/'+HASH+'.json',sha256:HASH};
 const missing=()=>{const e=Error('missing');e.code='ENOENT';throw e;};
+const providerReport=()=>({schemaVersion:1,kind:'cloudflare-runner-readiness',environment:CATALOG_SCOPE.environment,
+  resources:{accountId:CATALOG_SCOPE.accountId,databaseId:CATALOG_SCOPE.databaseId,databaseName:CATALOG_SCOPE.databaseName,indexName:CATALOG_SCOPE.indexName},
+  status:'checks_passed_execution_unavailable',executionAvailable:false,issues:[],metrics:{requests:5,reportedRowsRead:201,reportedRowsWritten:0}});
 function fixture(){
   const files=new Map(),events=[],calls=[],waits=[],restored=[],checkedOut=[];let pointer=null;
   const runtime={hosted:true,durable:{},base:'/private',care:'/private/daily-catalog-care',workspace:'/private/weekly-runs',state:{
@@ -25,6 +29,7 @@ function fixture(){
     publicTitle:'Desk chicken',description:'A tiny loud chicken.',imageUrl:'https://example.invalid/photo.jpg',
     publicAffiliateUrl:'https://www.amazon.com/dp/B000000001?tag=goose-gifts-37-20',persistent:true,sourceFactsHash:HASH}];
   f.deps={currentInputs:async()=>{events.push('current-inputs');return f.activeRef;},restoreInputs:async input=>{restored.push(input);},
+    shadowCheck:async()=>{events.push('provider-read-check');return providerReport();},
     checkout:async source=>{checkedOut.push(source);f.executingSource=source;return '/operators/'+source;},
     inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,config:f.config,approvalPin:f.approvalPin}),
     accepted:async()=>f.phase==='finalized'?f.accepted:null,
@@ -66,10 +71,37 @@ test('unpointed immutable intent is recovered after pointer ACK loss, not relabe
 });
 test('shadow reads exact inputs/source only, never writes pending or invokes/repairs an operator',async()=>{
   const f=fixture(),result=await f.run({mode:'shadow'});assert.equal(result.state,'shadow');assert.equal(result.workspace,'not_verified_readonly');
+  assert.equal(result.providerScopeVerified,true);assert.equal(result.providerChecksPassed,true);assert.equal(result.providerExecutionVerified,false);
+  assert.deepEqual(result.providerMetrics,{requests:5,reportedRowsRead:201,reportedRowsWritten:0});
   assert.equal(f.pointer(),null);assert.equal(f.files.size,0);assert.deepEqual(f.calls,[]);assert.deepEqual(f.restored,[ref]);
   await assert.rejects(f.run({}, {invoke:async()=>{throw Error('saved pending');}}));const before=f.pointer();
   const pendingShadow=await f.run({mode:'shadow',source:NEW_SOURCE});assert.equal(pendingShadow.pending,true);
   assert.deepEqual(f.pointer(),before);assert.equal(f.calls.length,0);
+  assert.equal(f.events.filter(e=>e==='provider-read-check').length,2);
+});
+test('shadow preflight fixes canonical read scope and only the explicit reviewed Cloudflare credential reference',async()=>{
+  const cloudflare={type:'environment',name:'STUPID_GIFTS_CLOUDFLARE_API_TOKEN'};let called=0;
+  const result=await checkHostedProviderShadow({credentials:{cloudflare,amazonId:'must not be inspected',openai:'must not be inspected'}},async(config,options)=>{
+    called++;assert.deepEqual(config,{schemaVersion:1,environment:'production',accountId:CATALOG_SCOPE.accountId,
+      database:{id:CATALOG_SCOPE.databaseId,name:CATALOG_SCOPE.databaseName},vectorIndex:{name:CATALOG_SCOPE.indexName,dimensions:1536,metric:'cosine'},
+      catalog:{associateTag:'goose-gifts-37-20',marketplace:'www.amazon.com'},cloudflareReadToken:cloudflare});
+    assert.deepEqual(options,{timeoutMs:10000});return providerReport();});
+  assert.equal(called,1);assert.deepEqual(result,providerReport());
+});
+test('blocked/unknown provider findings remain body-free and do not claim execution readiness or alter pending state',async()=>{
+  const f=fixture(),report={...providerReport(),status:'blocked',issues:['ownership_busy'],metrics:{requests:5,reportedRowsRead:null,reportedRowsWritten:null},
+    unexpectedProviderBody:'DO NOT OUTPUT',ownership:{owner_token:'DO NOT OUTPUT'}};
+  const result=await f.run({mode:'shadow'},{shadowCheck:async()=>report});
+  assert.equal(result.providerScopeVerified,true);assert.equal(result.providerChecksPassed,false);assert.equal(result.providerMetrics.reportedRowsRead,null);
+  assert.deepEqual(result.providerIssues,['ownership_busy']);assert.ok(!JSON.stringify(result).includes('DO NOT OUTPUT'));
+  assert.equal(f.pointer(),null);assert.equal(f.files.size,0);assert.equal(f.calls.length,0);
+});
+test('provider credential failure or mismatched scope stops shadow without starting/repairing a run',async()=>{
+  for(const check of [async()=>{throw Error('synthetic missing credential');},async()=>({...providerReport(),resources:{...providerReport().resources,databaseId:'foreign'}}),
+    async()=>({...providerReport(),metrics:{requests:5,reportedRowsRead:1,reportedRowsWritten:1}})]){
+    const f=fixture();await assert.rejects(f.run({mode:'shadow'},{shadowCheck:check}));
+    assert.equal(f.pointer(),null);assert.equal(f.files.size,0);assert.deepEqual(f.calls,[]);
+  }
 });
 test('bounded index-visibility retries use only the same approved publication, never supplier phases again',async()=>{
   const f=fixture(),invoke=f.deps.invoke;let publishes=0;

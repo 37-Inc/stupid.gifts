@@ -8,6 +8,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {automationRuntime,CATALOG_SCOPE} from './automation-runtime.mjs';
 import {currentHostedInputs,restoreHostedInputs} from './hosted-inputs.ts';
 import {canonicalJson} from '../../lib/catalog/canonical-json.ts';
+import {checkCloudflareRunner} from './check-cloudflare-runner.ts';
 
 const exec=promisify(execFile),HASH=/^[a-f0-9]{64}$/,SOURCE=/^[a-f0-9]{40}$/,ASIN=/^[A-Z0-9]{10}$/;
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url))),OPERATORS='/home/runner/stupid-gifts/operators';
@@ -19,6 +20,30 @@ async function optional(read){try{return await read();}catch(error){if(error.cod
 function day(value){const time=new Date(value+'T00:00:00Z');if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)
   ||!Number.isFinite(time.getTime())||time.toISOString().slice(0,10)!==value)fail('day');return value;}
 function inputsReference(value){if(!exact(value,'schemaVersion,key,sha256')||value.schemaVersion!==1||!HASH.test(value.sha256)||value.key!==`inputs/${value.sha256}.json`)fail('inputs_reference');return value;}
+/** Fixed existing read-only inspector: resolves only the reviewed Cloudflare
+ * environment reference, never merchant/model credentials or write authority. */
+export async function checkHostedProviderShadow(runtime,check=checkCloudflareRunner){
+  return check({schemaVersion:1,environment:CATALOG_SCOPE.environment,accountId:CATALOG_SCOPE.accountId,
+    database:{id:CATALOG_SCOPE.databaseId,name:CATALOG_SCOPE.databaseName},
+    vectorIndex:{name:CATALOG_SCOPE.indexName,dimensions:1536,metric:'cosine'},
+    catalog:{associateTag:'goose-gifts-37-20',marketplace:'www.amazon.com'},
+    cloudflareReadToken:runtime.credentials.cloudflare},{timeoutMs:10000});
+}
+function shadowProviderFields(result){
+  const resources={accountId:CATALOG_SCOPE.accountId,databaseId:CATALOG_SCOPE.databaseId,databaseName:CATALOG_SCOPE.databaseName,indexName:CATALOG_SCOPE.indexName};
+  const metric=value=>value===null||Number.isSafeInteger(value)&&value>=0;
+  if(result?.schemaVersion!==1||result.kind!=='cloudflare-runner-readiness'||result.environment!==CATALOG_SCOPE.environment
+    ||canonicalJson(result.resources??null)!==canonicalJson(resources)||result.executionAvailable!==false
+    ||!['blocked','checks_passed_execution_unavailable'].includes(result.status)||!Array.isArray(result.issues)
+    ||result.issues.some(value=>typeof value!=='string'||! /^[a-z0-9_:.]+$/.test(value))
+    ||!Number.isSafeInteger(result.metrics?.requests)||result.metrics.requests<0
+    ||!metric(result.metrics.reportedRowsRead)||!metric(result.metrics.reportedRowsWritten)
+    ||result.metrics.reportedRowsWritten!==null&&result.metrics.reportedRowsWritten!==0)fail('shadow_provider_result');
+  return{providerScopeVerified:true,providerScope:'d1_native_vector_readonly',providerExecutionVerified:false,
+    providerChecksPassed:result.status==='checks_passed_execution_unavailable'&&result.issues.length===0,
+    providerReadiness:result.status,providerIssues:[...result.issues],providerMetrics:{requests:result.metrics.requests,
+      reportedRowsRead:result.metrics.reportedRowsRead,reportedRowsWritten:result.metrics.reportedRowsWritten}};
+}
 export function hostedRunRecord(value){
   if(!exact(value,'schemaVersion,runKey,source,day,kind,inputsRef'+(value?.kind==='canary'?',canaryId':''))||value.schemaVersion!==1
     ||!SOURCE.test(value.source)||!['full','photos','canary'].includes(value.kind))fail('run_record');
@@ -77,6 +102,7 @@ function defaults(runtime,environment){
   const load=async(source,name)=>import(pathToFileURL(path.join(source,name)).href);
   return{
     currentInputs:()=>currentHostedInputs(runtime.durable),restoreInputs:ref=>restoreHostedInputs(runtime.durable,runtime.base,ref),
+    shadowCheck:()=>checkHostedProviderShadow(runtime),
     async checkout(source){
       const clean=hostedCommandEnvironment(environment,{credentials:false});
       await exec('git',['merge-base','--is-ancestor',source,environment.GITHUB_SHA],{cwd:ROOT,env:clean});
@@ -156,7 +182,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
   let resumed=Boolean(record);
   if(!record){
     if(mode==='shadow'){const inputsRef=inputsReference(await deps.currentInputs());await deps.restoreInputs(inputsRef);await deps.checkout(source);
-      return{state:'shadow',source,inputsVerified:true,workspace:'not_verified_readonly',pending:false};}
+      return{state:'shadow',source,inputsVerified:true,workspace:'not_verified_readonly',pending:false,...shadowProviderFields(await deps.shadowCheck())};}
     const runKey=mode==='full'?'scheduled-'+capturedDay:mode==='photos'?'photos-'+capturedDay:'canary-'+capturedDay+'-'+canaryId;
     const file=runtime.care+'/runs/'+runKey+'/hosted-run.json';let bytes=await optional(()=>runtime.state.bytes(file));
     if(bytes){record=hostedRunRecord(json(bytes));if(record.runKey!==runKey)fail('run_record');resumed=true;}
@@ -165,7 +191,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     pointerBytes=await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:{path:file,sha256:hash(bytes)}},pointerBytes);
   }
   await deps.restoreInputs(record.inputsRef);const directory=await deps.checkout(record.source);
-  if(mode==='shadow')return{state:'shadow',source:record.source,runKey:record.runKey,inputsVerified:true,workspace:'not_verified_readonly',pending:true};
+  if(mode==='shadow')return{state:'shadow',source:record.source,runKey:record.runKey,inputsVerified:true,workspace:'not_verified_readonly',pending:true,
+    ...shadowProviderFields(await deps.shadowCheck())};
   const finish=async result=>{await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:null},pointerBytes);return{...result,runKey:record.runKey,kind:record.kind,resumed};};
   const invoke=(command,extra=[])=>deps.invoke(directory,[command,...extra,'--run',record.runKey]);
   let visibilityRetries=0;
