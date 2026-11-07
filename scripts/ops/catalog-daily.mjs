@@ -12,6 +12,7 @@ import { executeCatalog, parseArgs, runCatalogWithBackend } from './prefetch-cat
 import { createPostgresCatalogMaintenanceStore } from './catalog-maintenance-postgres.mjs';
 import { createPostgresCatalogTelemetryStore, createRunItemCollector, createUsageLedger, finalizeUsageLedger, getGitRevision } from './catalog-telemetry.mjs';
 import { invalidateCatalogCaches } from './catalog-cache-invalidation.mjs';
+import {searchDemandTopic} from '../../lib/search-demand.ts';
 
 export const CATALOG_CADENCE_ROOT = join(homedir(), '.codex/private/goose-gifts-migration/weekly-runs');
 const ASIN = /^[A-Z0-9]{10}$/;
@@ -133,11 +134,16 @@ export async function dailyCatalogPhases(cadence, featuredIds = [], photosOnly =
  */
 export function validateCatalogAutomation(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
-    || Object.keys(value).sort().join(',') !== 'discovery,refreshIds,schemaVersion'
+    || Object.keys(value).sort().join(',') !== `discovery,${Object.hasOwn(value,'leadAsins')?'leadAsins,':''}refreshIds,schemaVersion${Object.hasOwn(value,'searchTopics')?',searchTopics':''}`
     || value.schemaVersion !== 1 || typeof value.discovery !== 'boolean'
     || !Array.isArray(value.refreshIds) || value.refreshIds.length > 10000
     || new Set(value.refreshIds).size !== value.refreshIds.length || value.refreshIds.some(id => typeof id !== 'string' || !ASIN.test(id)))
     throw new Error('catalog_automation_invalid');
+  if(value.leadAsins!==undefined&&(!Array.isArray(value.leadAsins)||value.leadAsins.length>10
+    ||new Set(value.leadAsins).size!==value.leadAsins.length||value.leadAsins.some(id=>typeof id!=='string'||!ASIN.test(id)))
+    ||value.searchTopics!==undefined&&(!Array.isArray(value.searchTopics)||value.searchTopics.length>2
+      ||new Set(value.searchTopics).size!==value.searchTopics.length||value.searchTopics.some(topic=>searchDemandTopic(topic)!==topic))
+    ||!value.discovery&&(value.leadAsins?.length||value.searchTopics?.length))throw new Error('catalog_automation_invalid');
   return structuredClone(value);
 }
 
@@ -155,7 +161,8 @@ export function automatedCatalogPhases(value, options = {}) {
       ...(photosOnly ? { photosOnly: true } : {}), discoveryNewOnly: false });
   }
   if (policy.discovery) phases.push({ ...parseArgs(['--theme-limit', '6', '--per-theme', '10', '--max-new', '60', '--backfill-limit', '0']),
-    discoveryNewOnly: true, enrichSelectedExisting: false, discoveryRunKey: runId, deactivateMissing: false });
+    discoveryNewOnly: true, enrichSelectedExisting: false, discoveryRunKey: runId, deactivateMissing: false,
+    ...(policy.leadAsins?.length?{discoveryLeadAsins:policy.leadAsins}:{}),...(policy.searchTopics?.length?{discoverySearchTopics:policy.searchTopics}:{}) });
   return phases;
 }
 

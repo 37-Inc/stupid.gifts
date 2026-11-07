@@ -55,7 +55,7 @@ export interface CloudflareWeeklyConfig {
   database:{id:string;name:string};vectorIndex:{name:string;dimensions:1536;metric:'cosine'};
   catalog:{associateTag:string;marketplace:'www.amazon.com'};backfillLimit:number;
   cadence?:{day:string;featuredIds:string[];runKey?:string;photosOnly?:true;admitAsins?:string[];
-    automation?:{schemaVersion:1;refreshIds:string[];discovery:boolean}};
+    automation?:{schemaVersion:1;refreshIds:string[];discovery:boolean;leadAsins?:string[];searchTopics?:string[]}};
   credentials:{cloudflare:CloudflareCredentialReference;amazonId:CatalogCredentialReference;amazonSecret:CatalogCredentialReference;amazonVersion:string;openai?:CatalogCredentialReference;stagingAuthSecret?:CatalogCredentialReference};
   limits:{requests:number;statements:number;reportedRowsRead?:number;reportedRowsWritten?:number};retention:RetentionPolicy;
   inputs:{previous:InputRef;context:InputRef;rights:InputRef;originalVectors?:InputRef};publication:PublicationConfig;

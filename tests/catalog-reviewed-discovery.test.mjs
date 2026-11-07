@@ -46,6 +46,21 @@ test('unknown collection dispatch does not silently refetch on the same stage',a
   for(let i=0;i<2;i++)await assert.rejects(executeCatalog(options,undefined,usage(),{}),/editorial_dispatch_uncertain/);
   assert.equal(supplier,1);
 });
+test('campaign and repeated search-topic leads share saved collection and one admission-before-enrichment pass',async t=>{
+  const campaign=item(7,'A ridiculous guitar-shaped desk object'),ordinary=item(8,'Animal-shaped kitchen tool'),saved=stages();
+  let gets=0,searches=0;const queries=[],written=[];
+  t.mock.method(amazon,'getItems',async ids=>{gets++;assert.deepEqual(ids,[campaign.id]);return[campaign];});
+  t.mock.method(amazon,'searchItems',async input=>{searches++;queries.push(input.keywords);return[ordinary];});
+  const options={...parseArgs(['--themes','ordinary one|ordinary two','--theme-limit','2','--backfill-limit','0','--skip-enrichment']),
+    discoveryNewOnly:true,discoveryRunKey:'mixed-leads',discoveryLeadAsins:[campaign.id],discoverySearchTopics:['funny guitar gift'],editorialStages:saved.stage,
+    discoveryEditor:{async reviewDiscovery(products){return products.map(p=>({id:p.id,decision:'admit',appeal:'giftable',imageMatches:true,reason:'A distinctive visual gift with an obvious joke.'}));}}};
+  const store={getActiveCatalogIdentities:async()=>[],getExistingEditorialWriteups:async()=>[],
+    upsertProduct:async p=>{written.push(p.id);return{inserted:true};},recordEditorialEvent:async()=>{}};
+  await executeCatalog(options,undefined,usage(),store);
+  assert.equal(gets,1);assert.equal(searches,2);assert.ok(queries.includes('funny guitar gift'));
+  assert.deepEqual(written,[campaign.id,ordinary.id]);
+  await executeCatalog(options,undefined,usage(),store);assert.equal(gets,1);assert.equal(searches,2);
+});
 test('reviewed discovery refuses missing saved-stage capability before a supplier request',async t=>{
   let calls=0;t.mock.method(amazon,'searchItems',async()=>{calls++;return[];});
   await assert.rejects(executeCatalog({...parseArgs([]),discoveryEditor:{reviewDiscovery:async()=>[]}},undefined,usage(),{}),/discovery_editor_capability_required/);

@@ -1835,9 +1835,13 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
     .map((theme) => theme.trim())
     .filter(Boolean);
   const themePool = options.themes || envThemes || DEFAULT_THEMES;
-  const themes = options.admitAsins ? ['owner-selected campaign gifts'] : options.themes
+  const ordinaryThemes = options.admitAsins ? ['owner-selected campaign gifts'] : options.themes
     ? themePool.slice(0, options.themeLimit)
     : selectRotatingThemes(themePool, options.themeLimit, new Date(), options.discoveryRunKey);
+  const themes=reviewedDiscovery&&options.discoverySearchTopics?.length
+    ?[...new Set([...options.discoverySearchTopics,...ordinaryThemes])].slice(0,options.themeLimit):ordinaryThemes;
+  const collections=[...(reviewedDiscovery&&options.discoveryLeadAsins?.length
+    ?[{theme:'saved campaign gift leads',asins:options.discoveryLeadAsins}]:[]),...themes.map(theme=>({theme}))];
   const seen = new Map();
   const candidates = [];
   const contradictoryDiscoveries=new Set();
@@ -1984,16 +1988,17 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   }
 
   const discoveryStartedAt = Date.now();
-  for (const theme of themes) {
+  for (const {theme,asins} of collections) {
     let found = [];
     try {
-      const collect=async()=>options.admitAsins
-        ? finalizeProducts((await observedAmazon('getItems', options.admitAsins, evidence))
-          .filter(product => options.admitAsins.includes(product.id)), theme, options)
+      const requestedAsins=asins??options.admitAsins;
+      const collect=async()=>requestedAsins
+        ? finalizeProducts((await observedAmazon('getItems', requestedAsins, evidence))
+          .filter(product => requestedAsins.includes(product.id)), theme, options)
         : await searchAmazonCandidates(theme, options, evidence);
       found=reviewedDiscovery
         ?(await options.editorialStages.run('discovery-collect',{
-          run:options.discoveryRunKey||telemetry.runId,theme,admitAsins:options.admitAsins||null,
+          run:options.discoveryRunKey||telemetry.runId,theme,admitAsins:requestedAsins||null,
           perTheme:options.perTheme,minPrice:options.minPrice,maxPrice:options.maxPrice},collect)).value
         :await collect();
       console.log(`${theme}: ${found.length} candidate discoveries`);
