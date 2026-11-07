@@ -75,7 +75,8 @@ export function hostedOperatorFailure(error){
   if(codes.includes('semantic_delta_pending'))return{state:'pending',errorCode:'semantic_delta_pending'};
   const code=codes.findLast(value=>/^(?:routine|run_workspace|catalog_[a-z0-9]+|publication|weekly|vector_[a-z0-9]+|cohort|prune|owned_[a-z0-9]+|search_[a-z0-9]+)_[a-z0-9_]{1,100}$/.test(value));
   if(code==='catalog_d1_identity_unavailable')return{state:'pending',errorCode:code}; // Initial GET only, before SQL dispatch.
-  return{state:'attention',errorCode:code??(error.killed?'catalog_hosted_operator_timeout':'catalog_hosted_operator_failed')};
+  const causeCode=code==='run_workspace_journal_uncertain'?codes.findLast(value=>/^catalog_object_store_[a-z_]{1,80}$/.test(value)):null;
+  return{state:'attention',errorCode:code??(error.killed?'catalog_hosted_operator_timeout':'catalog_hosted_operator_failed'),...(causeCode?{causeCode}:{})};
 }
 export function validateHostedProposal({bytes,sha256,runId,catalogRevision,summary,approvalPin}){
   if(!HASH.test(sha256)||hash(bytes)!==sha256)fail('proposal_digest');const value=json(bytes);
@@ -253,7 +254,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
       const pending=await deps.inspect(record,directory);
       if(pending.approvalPin&&['draining','freezing','publishing'].includes(pending.phase)){await deps.wait(45000);continue;}
     }
-    return{state:'attention',runKey:record.runKey,phase:result.phase??status.phase,errorCode:result.errorCode??result.reason??'catalog_hosted_run_pending'};
+    return{state:'attention',runKey:record.runKey,phase:result.phase??status.phase,errorCode:result.errorCode??result.reason??'catalog_hosted_run_pending',
+      ...(/^catalog_object_store_[a-z_]{1,80}$/.test(result.causeCode??'')?{causeCode:result.causeCode}:{})};
   }
   return{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_run_pending'};
 }

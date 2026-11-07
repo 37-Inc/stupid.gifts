@@ -31,6 +31,13 @@ run a local publisher while hosted care or a saved hosted publication is active.
   transport and must finish before the caller releases ownership. A slow journal
   must not abort a provider request before dispatch. Real provider timeouts still
   retain the original unknown charge; uncertain writes are never replayed.
+- Private R2 journal/artifact writes retain exact bytes and their original
+  atomic `If-Match`/`If-None-Match` condition. Transient failures may retry at
+  most three attempts after matching readback; a late earlier write still cannot
+  create another transition. Changed heads, corrupt/unreadable readback,
+  credentials and long throttles stop. A negative read alone is never treated
+  as proof that an in-flight write failed. Safe root error codes survive a
+  journal-uncertainty failure; provider bodies and secrets are not logged.
 - Exact owned native proofs use a finite background window before the short
   core queue observation, rather than counting remote journal latency against
   that observation. Core still rechecks the immutable policy, owner, full source,

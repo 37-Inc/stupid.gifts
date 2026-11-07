@@ -15,6 +15,8 @@ const providerReport=()=>({schemaVersion:1,kind:'cloudflare-runner-readiness',en
   status:'checks_passed_execution_unavailable',executionAvailable:false,issues:[],metrics:{requests:5,reportedRowsRead:201,reportedRowsWritten:0}});
 
 test('operator failure reports only the final safe machine code, never raw output or command arguments',()=>{
+  assert.deepEqual(hostedOperatorFailure({stderr:'catalog_object_store_unavailable\nrun_workspace_journal_uncertain\n'}),
+    {state:'attention',errorCode:'run_workspace_journal_uncertain',causeCode:'catalog_object_store_unavailable'});
   assert.deepEqual(hostedOperatorFailure({stderr:'secret URL https://example.invalid/private\nrun_workspace_durable_missing\n',
     stdout:'private supplier body',message:'command with secret'}),{state:'attention',errorCode:'run_workspace_durable_missing'});
   assert.deepEqual(hostedOperatorFailure({stderr:'semantic_delta_pending\n'}),{state:'pending',errorCode:'semantic_delta_pending'});

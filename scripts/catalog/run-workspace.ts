@@ -981,7 +981,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
     const info=await readManifest(directory,input);const manifest=JSON.parse(canonicalJson(info.manifest)) as WorkspaceManifest;
     // Runtime freeze prevents accidental caller scope/policy mutation.
     const freeze=(v:unknown):void=>{if(v&&typeof v==='object'){Object.values(v).forEach(freeze);Object.freeze(v);}};freeze(manifest);
-    const state=await loadState(directory,manifest,true,input.requestLimit);let closed=false,poisoned=false;let queue:Promise<unknown>=Promise.resolve();
+    const state=await loadState(directory,manifest,true,input.requestLimit);let closed=false,poisoned=false,poisonCause:unknown;let queue:Promise<unknown>=Promise.resolve();
     if(durability)requireRetainedPackage(state,state.checkpoint?.checkpoint??null);
     await verifyExecutionMetadata(directory,state,repository);
     if(state.execution)await acquireExecutionRoot(state.execution);
@@ -1005,7 +1005,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
     async function assertHeld(){if(closed)fail('closed');await pathWithoutLinks(input.directory);
       for(const guard of guards){const s=await protectedStat(guard.path,true);if(s.ino!==guard.stat.ino||s.dev!==guard.stat.dev)fail('directory_changed');}
       for(const l of locks){const s=await protectedStat(l.path,false);if(s.ino!==l.ino||s.dev!==l.dev||!same(await readJson(l.path),l.body))fail('lock_lost');}}
-    const serial=<T>(action:()=>Promise<T>,allowPoisoned=false):Promise<T>=>{const result=queue.then(async()=>{await assertHeld();if(poisoned&&!allowPoisoned)fail('journal_uncertain');return action();});queue=result.catch(()=>{});return result;};
+    const serial=<T>(action:()=>Promise<T>,allowPoisoned=false):Promise<T>=>{const result=queue.then(async()=>{await assertHeld();if(poisoned&&!allowPoisoned)throw new Error('run_workspace_journal_uncertain',{cause:poisonCause});return action();});queue=result.catch(()=>{});return result;};
     const now=()=>time((input.now||(()=>new Date().toISOString()))());
     async function usable(){const instant=Date.parse(now());if(state.purged.size||[...state.publications.values()].some(p=>p.purged)||usableUntil<=instant||usableAfter>instant)fail('expired');}
     async function append(event:Event){
@@ -1018,7 +1018,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       try{await immutable(join(directory,'events',`${String(next.sequence).padStart(6,'0')}.${digest}.json`),next);
         await durability?.commit(next);
         await replaceHead(directory,{sequence:state.count,sha256:state.head},{sequence:next.sequence,sha256:digest});
-      }catch(error){poisoned=true;throw error;}
+      }catch(error){poisoned=true;poisonCause??=error;throw error;}
       apply(state,event);state.count=next.sequence;state.head=digest;state.bytes+=bytes;
     }
     async function catalogSuccessor(){
@@ -1093,7 +1093,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
         // Keep the source lock until this durable relinquishment. Interrupted
         // deletion/append leaves the existing no-takeover lock blocking.
         await append({type:'publication-build-cleaned',releaseId});
-      }catch(error){poisoned=true;throw error;}
+      }catch(error){poisoned=true;poisonCause??=error;throw error;}
     }
     async function purgeExpired():Promise<WorkspaceStatus['expired']>{
       const instant=now(),plan:{artifact:PurgedArtifact;reference:string;missing?:boolean}[]=[];
@@ -1132,7 +1132,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
         }
         for(const {p,entries}of publications){await removeTree(entries);
           if(!p.buildCleaned)await append({type:'publication-build-cleaned',releaseId:p.retention.releaseId});}
-      }catch(error){poisoned=true;throw error;}
+      }catch(error){poisoned=true;poisonCause??=error;throw error;}
       return[...plan.map(({artifact:v,reference})=>({reference,kind:v.kind,expiresAt:v.expiresAt})),
         ...publications.filter(v=>v.entries.length).map(({p})=>({reference:`packages/${p.retention.releaseId}`,kind:'publication' as const,expiresAt:p.retention.expiresAt}))];
     }
