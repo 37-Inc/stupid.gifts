@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {AwsClient} from 'aws4fetch';
+import {setTimeout as wait} from 'node:timers/promises';
 
 export interface DurableObject {bytes:Uint8Array;etag:string}
 export interface CatalogObjectStore {
@@ -17,7 +18,8 @@ const fail=(code:string):never=>{throw Error('catalog_object_store_'+code);};
 
 /** One private bucket/prefix; no list/create-bucket, public URL or credential
  * discovery. Conditional writes are atomic in R2. SDK transport retries are
- * disabled; an uncertain write is reconciled against exact bytes before ACK.
+ * disabled; transient GETs have bounded retries. An uncertain write is
+ * reconciled against exact bytes before ACK, never blindly dispatched again.
  * https://developers.cloudflare.com/r2/api/s3/api/ */
 export function createCatalogR2Store(options:{accountId:string;bucket:string;prefix:string;
   accessKeyId:string;secretAccessKey:string;send?:typeof fetch;timeoutMs?:number}):CatalogObjectStore {
@@ -57,17 +59,34 @@ export function createCatalogR2Store(options:{accountId:string;bucket:string;pre
     if(hash(bytes)!==digest)fail('digest');return{bytes:new Uint8Array(bytes),etag};
   }
   async function get(key:string){
-    const response=await request(key,'GET');
-    if(response.status===404){await response.body?.cancel();return null;}
-    if(response.status!==200){await response.body?.cancel();return fail('read_refused');}
-    return object(response);
+    for(let attempt=0;;attempt++){
+      let delay=100*2**attempt;
+      try{
+        const response=await request(key,'GET');
+        if(response.status===404){await response.body?.cancel();return null;}
+        if(response.status===429||response.status>=500){
+          const header=response.headers.get('retry-after'),retry=header===null?NaN:/^\d+$/.test(header)?Number(header)*1000:Date.parse(header)-Date.now();
+          await response.body?.cancel();if(Number.isFinite(retry))delay=Math.max(0,retry);
+          if(delay>30000)fail('read_throttled');fail('unavailable');
+        }
+        if(response.status!==200){await response.body?.cancel();return fail('read_refused');}
+        return await object(response);
+      }catch(error){if(attempt===2||!(error instanceof Error)||error.message!=='catalog_object_store_unavailable')throw error;}
+      await wait(delay);
+    }
   }
   async function write(key:string,expectedEtag:string|null,body:Uint8Array){
     if(!(body instanceof Uint8Array)||body.byteLength>MAX_BYTES||expectedEtag!==null&&!validEtag(expectedEtag))fail('configuration');
-    const bytes=new Uint8Array(body),digest=hash(bytes);let status:number|undefined;
-    try{const response=await request(key,'PUT',{'Content-Type':'application/octet-stream','x-amz-meta-sha256':digest,
+    const bytes=new Uint8Array(body),digest=hash(bytes),md5=createHash('md5').update(bytes).digest();let status:number|undefined;
+    try{const response=await request(key,'PUT',{'Content-Type':'application/octet-stream','x-amz-meta-sha256':digest,'Content-MD5':md5.toString('base64'),
       ...(expectedEtag===null?{'If-None-Match':'*'}:{'If-Match':expectedEtag})},bytes);
-      status=response.status;await response.body?.cancel();
+      status=response.status;const etag=response.headers.get('etag');await response.body?.cancel();
+      // Single PUT only: R2 validates Content-MD5 and atomically commits the
+      // conditional write. A matching successful ACK is durable; avoid a
+      // redundant GET for every journal event/head. Lost/odd ACKs still use
+      // exact SHA-256+byte readback below, never another blind write.
+      // https://developers.cloudflare.com/r2/reference/consistency/
+      if(status===200&&etag==='"'+md5.toString('hex')+'"')return{bytes,etag};
     }catch{/* A lost ACK is settled by exact readback, never an overwrite. */}
     const actual=await get(key);
     if(actual&&hash(actual.bytes)===digest&&Buffer.from(actual.bytes).equals(Buffer.from(bytes)))return actual;
