@@ -881,6 +881,18 @@ test('weekly OAuth is Cloudflare-only and preflight preserves no-owner/no-worksp
   assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);
   await assert.rejects(fs.stat(f.options.workspace),{code:'ENOENT'});assert.equal(f.calls.search+f.calls.embedding+f.calls.activate,0);
 });
+test('hosted credentials require role-specific explicit names; old saved config bytes are unchanged',async t=>{
+  const f=await setup(t),before=JSON.stringify(f.config);
+  const names={cloudflare:'STUPID_GIFTS_CLOUDFLARE_API_TOKEN',amazonId:'STUPID_GIFTS_AMAZON_CREDENTIAL_ID',
+    amazonSecret:'STUPID_GIFTS_AMAZON_CREDENTIAL_SECRET',openai:'STUPID_GIFTS_OPENAI_API_KEY',
+    stagingAuthSecret:'STUPID_GIFTS_STAGING_AUTH_SECRET'};
+  const credentials={...f.config.credentials,...Object.fromEntries(Object.entries(names).map(([role,name])=>[role,{type:'environment',name}]))};
+  assert.doesNotThrow(()=>validateCloudflareWeeklyConfig({...f.config,credentials}));
+  for(const role of Object.keys(names))assert.throws(()=>validateCloudflareWeeklyConfig({...f.config,
+    credentials:{...credentials,[role]:{type:'environment',name:role==='cloudflare'?names.openai:names.cloudflare}}}),
+    /weekly_configuration_invalid|runner_check_config_invalid/);
+  assert.equal(JSON.stringify(f.config),before);
+});
 test('weekly OAuth start keeps merchant/model credentials on their exact Keychain refs and awaits approval before publication',async t=>{
   const f=await setup(t);f.config.credentials.cloudflare={type:'wrangler_oauth'};
   await fs.writeFile(f.options.configPath,JSON.stringify(f.config),{mode:0o600});
