@@ -51,12 +51,13 @@ export async function registerHostedCleanup(runtime,record){
 export async function cleanupHostedRuns(runtime,checkout,{now=()=>new Date().toISOString(),open=openRunWorkspace}={}){
   const q=await queue(runtime),ref=q.value.runs.find(r=>Date.parse(r.dueAt)<=Date.parse(now()));
   if(!ref)return{state:'current',queued:q.value.runs.length};
-  const manifest=await manifestFor(runtime,ref.runId);if(hash(canonicalJson(manifest))!==ref.manifestSha256||manifest.codeSha!==ref.source)fail();
-  const repository=await checkout(ref.source);if(repository!=='/home/runner/stupid-gifts/operators/'+ref.source)fail();
-  const workspace=await open({directory:runtime.workspace,repository,mode:'resume',runId:manifest.runId,codeSha:manifest.codeSha,
-    configSha256:manifest.configSha256,scope:manifest.scope,retention:manifest.retention,budgetCaps:manifest.budgetCaps,
-    expectedManifestSha256:ref.manifestSha256,requestLimit:'observe',durable:runtime.durable,now});
+  let workspace;
   try{
+    const manifest=await manifestFor(runtime,ref.runId);if(hash(canonicalJson(manifest))!==ref.manifestSha256||manifest.codeSha!==ref.source)fail();
+    const repository=await checkout(ref.source);if(repository!=='/home/runner/stupid-gifts/operators/'+ref.source)fail();
+    workspace=await open({directory:runtime.workspace,repository,mode:'resume',runId:manifest.runId,codeSha:manifest.codeSha,
+      configSha256:manifest.configSha256,scope:manifest.scope,retention:manifest.retention,budgetCaps:manifest.budgetCaps,
+      expectedManifestSha256:ref.manifestSha256,requestLimit:'observe',durable:runtime.durable,now});
     const cp=await workspace.readCheckpoint({controlOnly:true});
     const editorial=manifest.runId.match(/^homepage-(\d{4}-\d{2}-\d{2})-([a-f0-9]{8})$/);
     if(editorial){
@@ -66,5 +67,9 @@ export async function cleanupHostedRuns(runtime,checkout,{now=()=>new Date().toI
     const purged=(await workspace.purgeExpired()).length,remaining=await workspace.retainedBodies();
     q.value.runs=q.value.runs.filter(r=>r.runId!==ref.runId);if(remaining)q.value.runs.push(ref);await save(runtime,q);
     return{state:'cleaned',runId:ref.runId,purged,remaining};
-  }finally{await workspace.close();}
+  }catch(error){
+    // One broken historical source must not starve other due registrations.
+    q.value.runs=q.value.runs.filter(r=>r.runId!==ref.runId);q.value.runs.push(ref);
+    try{await save(runtime,q);}catch{/* Original durable registration remains. */}throw error;
+  }finally{await workspace?.close();}
 }

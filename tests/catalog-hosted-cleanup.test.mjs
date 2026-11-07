@@ -62,3 +62,10 @@ test('optional homepage journals use the same original-manifest queue and cleanu
       publicationSuccess:async()=>{throw Error('not a catalog publication');},purgeExpired:async()=>{purged=true;return[];},retainedBodies:async()=>false,close:async()=>{}};}});
   assert.equal(result.state,'cleaned');assert.equal(purged,true);assert.equal(JSON.parse(f.pointer()).runs.length,0);
 });
+test('a failed old cleanup retains its identity but does not starve another due workspace',async()=>{
+  const f=fixture();await registerHostedCleanup(f.runtime,f.record);
+  const second={...JSON.parse(f.objects.get('runs/fixture-run/manifest.json').bytes),runId:'second-original'};
+  f.objects.set('runs/second-original/manifest.json',{bytes:bytes(second)});await registerHostedWorkspaceCleanup(f.runtime,second);
+  await assert.rejects(cleanupHostedRuns(f.runtime,async()=>{throw Error('old source unavailable');},{now:()=>DUE,open:f.open}));
+  assert.deepEqual(JSON.parse(f.pointer()).runs.map(r=>r.runId),['second-original','fixture-run']);assert.equal(f.purged(),0);
+});
