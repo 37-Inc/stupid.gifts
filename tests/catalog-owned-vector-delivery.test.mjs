@@ -16,6 +16,8 @@ import { maintenanceEmbeddingText } from '../scripts/catalog/maintenance-state.t
 import { editorialSourceHash } from '../scripts/ops/catalog-editorial-core.mjs';
 import { beginBuildActivation, claimBuildRequest } from '../lib/catalog/build-requests.ts';
 import { enqueuePublication, claimPublication, recordPublicationDispatch } from '../lib/catalog/publication.ts';
+import {accountedPublicationFetch} from '../scripts/catalog/publication-read-fetch.ts';
+import {createVectorizeRestAdapters} from '../scripts/catalog/vectorize-rest.ts';
 
 const AT = Date.parse('2026-10-20T12:00:00.000Z');
 const at = ms => new Date(AT+ms).toISOString();
@@ -119,6 +121,22 @@ test('accepted is not complete; settled exact readback completes under the same 
   assert.deepEqual(f.sent[0].vector.values,values);assert.equal(nativeHash(f.sent[0].vector.values),nativeHash(values));
   const counts=f.counts();assert.deepEqual(await f.deliver(f.owner),complete);assert.deepEqual(f.counts(),counts);
   assert.throws(()=>f.sql.exec("UPDATE catalog_vector_deliveries SET evidence_json='[]'"),/immutable/);
+});
+test('owned native delivery excludes slow durable I/O from its outer provider clock',async t=>{
+  const f=await setup(t),events=[],vectors=new Map(),reference=uuid(80);let upserts=0;
+  const pause=()=>new Promise(resolve=>setTimeout(resolve,20));
+  const send=accountedPublicationFetch({async reserveBudget(){events.push('reserve');await pause();},
+    async settleBudget(_id,value){events.push(value.status);await pause();}},async(url,init)=>{
+    if(url.endsWith('/upsert')){const vector=JSON.parse(init.body);vectors.set(vector.id,vector);upserts++;return Response.json({success:true,result:{mutationId:reference}});}
+    if(url.endsWith('/info'))return Response.json({success:true,result:{dimensions:1536,processedUpToMutation:reference}});
+    assert.ok(url.endsWith('/get_by_ids'));
+    const found=JSON.parse(init.body).ids.flatMap(id=>{const v=vectors.get(id);return v?[`{"id":${JSON.stringify(id)},"values":[${v.values.map(n=>Object.is(n,-0)?'-0':n).join(',')}],"metadata":${JSON.stringify(v.metadata)}}`]:[];});
+    return new Response(`{"success":true,"result":[${found.join(',')}]}`);
+  },{...scope,accountId:'a'.repeat(32),databaseId:uuid(70),workerName:'fixture',identityOrigin:'https://fixture.invalid'});
+  const adapters=createVectorizeRestAdapters({...scope,accountId:'a'.repeat(32),token:'TEST_ONLY',fetch:send,timeoutMs:10});
+  const first=await f.deliver(f.owner,{adapters,timeoutMs:10});assert.equal(first.state,'pending');assert.equal(upserts,1);
+  const done=await f.deliver(first.owner,{adapters,timeoutMs:10});assert.equal(done.state,'complete');assert.equal(upserts,1);
+  assert.ok(!events.includes('unknown'));assert.equal(f.scope().external_pending,0);
 });
 test('lost provider response survives restart without blind replay, even when desired bytes are already visible',async t=>{
   const f=await setup(t);const dispatch=f.adapters.dispatch;

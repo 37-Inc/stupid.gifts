@@ -27,6 +27,19 @@ import safeCatalogPayload from '../static-site/public/safe/catalog.json' with {t
 import { publishedCatalogOperationKey, readPublishedCatalogVectors, readActivatedCatalogVectors } from '../scripts/catalog/owned-vector-delivery.ts';
 
 import {setup,at,scope,uuid} from './helpers/published-vector-fixture.mjs';
+test('owned published native proof excludes slow durable I/O from its outer observation clock',async t=>{
+  const accountId='a'.repeat(32),f=await setup(t,{providerIdentity:`cloudflare:${accountId}:${scope.indexName}`}),events=[];
+  const pause=()=>new Promise(resolve=>setTimeout(resolve,20));
+  const send=accountedPublicationReadFetch({async reserveBudget(){events.push('reserve');await pause();},
+    async settleBudget(_id,value){events.push(value.status);await pause();}},async(_url,init)=>{
+    const found=JSON.parse(init.body).ids.flatMap(id=>{const v=f.index.get(id);return v?[`{"id":${JSON.stringify(id)},"values":[${v.values.map(n=>Object.is(n,-0)?'-0':n).join(',')}],"metadata":${JSON.stringify(v.metadata)}}`]:[];});
+    return new Response(`{"success":true,"result":[${found.join(',')}]}`);
+  },{accountId,databaseId:uuid(70),workerName:'fixture',indexName:scope.indexName,identityOrigin:'https://fixture.invalid'});
+  const adapters=createVectorizeRestAdapters({...scope,accountId,token:'TEST_ONLY',fetch:send});
+  const timer=globalThis.setTimeout;t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>timer(fn,ms===3000?10:ms,...args));
+  assert.equal((await f.readonly(()=>readPublishedCatalogVectors({...f.options,adapters}))).settled,true);
+  assert.ok(events.length>0);assert.ok(!events.includes('unknown'));
+});
 test('published eight+two proof is read-only, preserves signed zero and settles a new normal code-only build exactly once',async t=>{
   const f=await setup(t),before=f.sql.prepare('SELECT * FROM products ORDER BY id').all(),dispatches=f.dispatches();
   assert.equal(f.revision.snapshot.products.length,8);assert.equal(f.revision.snapshot.heldProducts.length,2);
