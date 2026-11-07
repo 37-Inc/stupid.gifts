@@ -58,6 +58,11 @@ async function linuxCommand(command:PublicationCommand,{socketPath,prefix}:Uploa
     ||[command.cwd,path.dirname(config)].some(source=>source===writable||inside(source,writable)))throw unavailable();
   await privateDirectory(runtime);
   for(const directory of [tmp,log,out,path.join(tmp,'home')])await privateDirectory(directory);
+  // Pinned Wrangler creates its build scratch relative to the config, even
+  // with TMPDIR/outdir set. Expose only this private scratch, not the package.
+  const wranglerTmp=path.join(path.dirname(config),'.wrangler');
+  if(wranglerTmp===command.cwd||inside(wranglerTmp,command.cwd))throw unavailable();
+  await privateDirectory(wranglerTmp);
   const fd=await open(output,constants.O_WRONLY|constants.O_APPEND|constants.O_CREAT|constants.O_NOFOLLOW,0o600);
   try{const stat=await fd.stat();if(!stat.isFile()||stat.uid!==process.getuid?.()||stat.nlink!==1||(stat.mode&0o777)!==0o600)throw unavailable();}
   finally{await fd.close();}
@@ -81,6 +86,7 @@ async function linuxCommand(command:PublicationCommand,{socketPath,prefix}:Uploa
   }
   await bind(socketPath);
   for(const directory of [tmp,log,out])await bind(directory,true);
+  await bind(wranglerTmp,true);
   await bind(output,true);
   args.push('--chdir',command.cwd,'--',node,relay,socketPath,prefix,node,...command.args);
   return{...command,file:BWRAP,args,env:{...command.env,HOME:path.join(tmp,'home')}};
