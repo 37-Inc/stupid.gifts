@@ -278,6 +278,38 @@ test('slow owned journal I/O does not expire publication provider clocks or repe
   assert.ok(!events.includes('unknown'));assert.equal(f.counts().uploadCalls,1);assert.equal(f.counts().activateCalls,1);
 });
 
+for(const fault of [null,'native','owner'])test(`owned activation resolution separates journal latency and preserves ${fault??'healthy'} proof`,async t=>{
+  const f=await setup(t),pause=()=>new Promise(resolve=>setTimeout(resolve,30)),events=[];
+  const base=`https://api.cloudflare.com/client/v4/accounts/${f.config.accountId}/d1/database/${id}`;
+  const db=await createCatalogD1Rest({accountId:f.config.accountId,databaseId:id,databaseName:f.config.database.name,token:'FIXTURE_ONLY',
+    requestLimit:'observe',accounting:{scope:{accountId:f.config.accountId,databaseId:id,databaseName:f.config.database.name},
+      initial:{httpRequests:0,sqlStatements:0,knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:0},
+      async reserve(){await pause();},async settle(_id,value){events.push(value.status);await pause();}},
+    fetch:async(url,init)=>{
+      if(url===base)return Response.json({success:true,result:{uuid:id,name:f.config.database.name,read_replication:{mode:'disabled'}}});
+      assert.equal(url,`${base}/query`);const result=[];f.sql.exec('BEGIN');
+      try{for(const query of JSON.parse(init.body).batch){const before=f.sql.prepare('SELECT total_changes() n').get().n;
+        const rows=f.sql.prepare(query.sql).all(...query.params).map(row=>({...row})),changes=f.sql.prepare('SELECT total_changes() n').get().n-before;
+        result.push({success:true,results:rows,meta:{served_by_primary:true,rows_read:rows.length,rows_written:changes,changes}});
+      }f.sql.exec('COMMIT');}catch(error){f.sql.exec('ROLLBACK');throw error;}return Response.json({success:true,result});
+    }});
+  const send=accountedPublicationReadFetch({async reserveBudget(){},async settleBudget(){}},async(url,init)=>{
+    if(f.checkpoint().control.publication?.stage==='published'&&url.endsWith('/get_by_ids')){
+      if(fault==='native')return Response.json({success:true,result:[]});
+      if(fault==='owner')f.sql.prepare('UPDATE catalog_mutation_scopes SET generation=generation+1').run();
+    }
+    return f.fetch(url,init);
+  },
+    {accountId:f.config.accountId,databaseId:id,workerName:f.config.workerName,indexName:f.config.indexName,identityOrigin:f.config.identityOrigin});
+  const timer=globalThis.setTimeout;t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>
+    timer(fn,ms===30_000&&f.checkpoint().control.publication?.stage==='published'?100:ms,...args));
+  const result=await f.execute(db,{observationFetch:send});
+  assert.equal(result.state,fault?'pending':'published',JSON.stringify(result));assert.ok(events.length>0);assert.ok(!events.includes('unknown'));
+  assert.equal(f.counts().uploadCalls,1);assert.equal(f.counts().activateCalls,1);
+  assert.equal(f.sql.prepare('SELECT state FROM catalog_build_requests').get().state,fault?'activating':'resolved');
+  if(!fault)assert.equal(await readMutationOwner(f.db,scope),null);
+});
+
 test('permanent publication fetch scope errors are not misreported as transient provider outages',async t=>{
   const f=await setup(t),result=await f.execute(f.db,{fetch:async()=>{throw new Error('publication_read_scope_invalid');}});
   assert.equal(result.state,'pending');assert.equal(result.errorCode,'publication_read_scope_invalid');
