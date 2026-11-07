@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/catalog-hosted-proof.yml'
+      - '.github/catalog-bwrap.apparmor'
       - 'scripts/catalog/publication-upload*'
       - 'tests/catalog-publication-upload*'
 
@@ -27,7 +28,10 @@ jobs:
         with:
           node-version: '22.23.1'
       - name: Install isolated uploader runtime
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap
+          sudo apparmor_parser -r .github/catalog-bwrap.apparmor
       - name: Prove Linux isolation without provider credentials
         env:
           CATALOG_LINUX_SANDBOX_TESTS: '1'
