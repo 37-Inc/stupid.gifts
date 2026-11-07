@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { channel } from 'node:diagnostics_channel';
 import { accountedPublicationUploadCommand, isAccountedPublicationUploadCommand, PublicationUploadCommandError } from '../scripts/catalog/publication-upload-command.ts';
+import { publicationUploadIsolation } from '../scripts/catalog/publication-upload-isolation.ts';
 
 const mac={skip:process.platform!=='darwin'},scope={accountId:'a'.repeat(32),workerName:'owned-upload-fixture'};
 const route=`/accounts/${scope.accountId}/workers/scripts/${scope.workerName}`;
@@ -22,7 +23,8 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const response=(result,status=200,headers={})=>Response.json({success:status===200,result,...(status===200?{}:{errors:[{code:10000,message:'Owned transient fixture'}]})},{status,headers});
 function ledger(){const events=[];return{events,async assertHeld(){},async reserveBudget(value){events.push({reserve:value});},async settleBudget(id,value){events.push({id,...value});}};}
 const command={file:process.execPath,args:[wrangler,'versions','upload'],cwd:os.tmpdir(),env:{},timeoutMs:30_000};
-function factory(ws,send,run){return accountedPublicationUploadCommand({workspace:ws,scope,send,command:run});}
+const fixtureIsolation={...publicationUploadIsolation('darwin'),async available(){}};
+function factory(ws,send,run){return accountedPublicationUploadCommand({workspace:ws,scope,send,command:run,isolation:fixtureIsolation});}
 const endpoint=wrapped=>wrapped.env.CLOUDFLARE_API_BASE_URL;
 const settled=ws=>ws.events.filter(event=>event.status);
 
@@ -42,7 +44,7 @@ test('non-upload build/verify commands pass through without opening a bridge or 
   assert.equal(actual,value);assert.deepEqual(ws.events,[]);
 });
 
-test('exact routes preserve JWT/multipart/status/retry headers and charge each remote attempt',mac,async()=>{
+test('exact routes preserve JWT/multipart/status/retry headers and charge each remote attempt',async()=>{
   const ws=ledger(),calls=[];const bytes=Buffer.alloc(1024*1024,65);
   await factory(ws,async(url,init)=>{calls.push({url,init});return response({},calls.length===1?503:200,{'Retry-After':'0'});},async wrapped=>{
     assert.equal(wrapped.file,'/usr/bin/sandbox-exec');assert.match(wrapped.args[1],/deny network-outbound/);
@@ -61,7 +63,7 @@ test('exact routes preserve JWT/multipart/status/retry headers and charge each r
   assert.equal(ws.events.filter(event=>event.reserve).length,2);assert.deepEqual(settled(ws).map(event=>event.status),['known','known']);
 });
 
-test('asset transfer timeout returns retryable503 without killing Wrangler or refunding usage',mac,async t=>{
+test('asset transfer timeout returns retryable503 without killing Wrangler or refunding usage',async t=>{
   const ws=ledger(),timer=globalThis.setTimeout;let calls=0;
   t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>timer(fn,ms===180_000?20:ms,...args));
   await factory(ws,async(_url,init)=>{
@@ -78,7 +80,7 @@ test('asset transfer timeout returns retryable503 without killing Wrangler or re
   assert.equal(ws.events.filter(e=>e.reserve).length,2);
 });
 
-test('uncertain version write remains fenced and records a body-free reason',mac,async()=>{
+test('uncertain version write remains fenced and records a body-free reason',async()=>{
   const ws=ledger();
   await assert.rejects(factory(ws,async()=>{throw new Error('private transport detail');},async wrapped=>{
     await fetch(endpoint(wrapped)+route+'/versions?bindings_inherit=strict',{method:'POST',body:'version fixture'});
@@ -86,7 +88,7 @@ test('uncertain version write remains fenced and records a body-free reason',mac
   assert.deepEqual(settled(ws).map(e=>e.status),['unknown']);
 });
 
-test('caller provisioning flags cannot override the forced no-provision command',mac,async()=>{
+test('caller provisioning flags cannot override the forced no-provision command',async()=>{
   for(const flags of [['--experimental-provision'],['--experimental-provision=true'],['--experimentalProvision=true'],['--x-provision=true'],
     ['--experimental-provision=false','--experimental-provision=true']]){
     const ws=ledger();await assert.rejects(factory(ws,async()=>assert.fail('No send'),async()=>assert.fail('No child'))({...command,args:[...command.args,...flags]}),
@@ -94,7 +96,7 @@ test('caller provisioning flags cannot override the forced no-provision command'
   }
 });
 
-test('an incomplete incoming body is actively closed at the deadline before any reservation',mac,async t=>{
+test('an incomplete incoming body is actively closed at the deadline before any reservation',async t=>{
   const ws=ledger(),timer=globalThis.setTimeout;t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>timer(fn,ms===180_000?20:ms,...args));
   await assert.rejects(factory(ws,async()=>assert.fail('No remote request'),async wrapped=>{
     await new Promise(resolve=>{const req=httpRequest(`${endpoint(wrapped)}${route}/assets-upload-session`,{method:'POST',headers:{'Content-Length':'100'}});
@@ -102,7 +104,7 @@ test('an incomplete incoming body is actively closed at the deadline before any 
   })(command),PublicationUploadCommandError);assert.deepEqual(ws.events,[]);
 });
 
-test('unexpected writes and resource/query drift fail before any remote dispatch',mac,async()=>{
+test('unexpected writes and resource/query drift fail before any remote dispatch',async()=>{
   for(const [method,suffix]of [['POST',`${route}/deployments`],['PATCH',`${route}/script-settings`],['GET',`${route}/secrets?extra=1`],
     ['POST',`${route}/versions?bindings_inherit=strict&extra=1`],['POST',`/accounts/${'b'.repeat(32)}/workers/assets/upload?base64=true`],
     ['POST',`/accounts/${scope.accountId}/workers/scripts/foreign/assets-upload-session`]]){
@@ -113,7 +115,7 @@ test('unexpected writes and resource/query drift fail before any remote dispatch
   }
 });
 
-test('budget denial sends nothing, has no refund/settlement, and fails the command held',mac,async()=>{
+test('budget denial sends nothing, has no refund/settlement, and fails the command held',async()=>{
   const ws=ledger();ws.reserveBudget=async()=>{throw new Error('Owned cap exhausted');};
   await assert.rejects(factory(ws,async()=>assert.fail('No send after denied reservation'),async wrapped=>{
     await(await fetch(`${endpoint(wrapped)}${route}/assets-upload-session`,{method:'POST',body:'{}'})).arrayBuffer();
@@ -135,14 +137,14 @@ test('actual child deadline joins an aborted remote attempt and delayed unknown 
   releaseSettle();await rejected;await request.catch(()=>{});const count=ws.events.length;await pause(10);assert.equal(ws.events.length,count);
 });
 
-test('oversized replies retain one unknown charge, never a false successful completion',mac,async()=>{
+test('oversized replies retain one unknown charge, never a false successful completion',async()=>{
   const ws=ledger();await assert.rejects(factory(ws,async()=>new Response(new Uint8Array(2*1024*1024+1)),async wrapped=>{
     await(await fetch(`${endpoint(wrapped)}${route}/assets-upload-session`,{method:'POST',body:'{}'})).arrayBuffer();
   })(command),PublicationUploadCommandError);
   assert.equal(ws.events.filter(event=>event.reserve).length,1);assert.deepEqual(settled(ws).map(event=>event.status),['unknown']);
 });
 
-test('only session metadata accepts measured551929B and exact2MiB; content/version replies keep512KiB',mac,async()=>{
+test('only session metadata accepts measured551929B and exact2MiB; content/version replies keep512KiB',async()=>{
   for(const [suffix,size,ok]of [[`${route}/assets-upload-session`,551929,true],[`${route}/assets-upload-session`,2*1024*1024,true],
     [`${route}/assets-upload-session`,2*1024*1024+1,false],[`${route}/versions?bindings_inherit=strict`,512*1024,true],
     [`${route}/versions?bindings_inherit=strict`,512*1024+1,false],[`/accounts/${scope.accountId}/workers/assets/upload?base64=true`,512*1024+1,false]]){
@@ -157,9 +159,9 @@ test('only session metadata accepts measured551929B and exact2MiB; content/versi
     assert.equal(ws.events.filter(e=>e.reserve).length,1);assert.deepEqual(settled(ws).map(e=>e.status),[ok?'known':'unknown']);
   }
 });
-test('a service whose name is assets-upload-session does not receive the metadata response allowance',mac,async()=>{
+test('a service whose name is assets-upload-session does not receive the metadata response allowance',async()=>{
   const ws=ledger(),named={...scope,workerName:'assets-upload-session'};
-  await assert.rejects(accountedPublicationUploadCommand({workspace:ws,scope:named,send:async()=>new Response(new Uint8Array(512*1024+1)),
+  await assert.rejects(accountedPublicationUploadCommand({workspace:ws,scope:named,isolation:fixtureIsolation,send:async()=>new Response(new Uint8Array(512*1024+1)),
     command:async wrapped=>{await(await fetch(`${endpoint(wrapped)}/accounts/${scope.accountId}/workers/services/assets-upload-session`)).arrayBuffer();}})(command),
   error=>error.code==='publication_upload_unknown');assert.deepEqual(settled(ws).map(e=>e.status),['unknown']);
 });
