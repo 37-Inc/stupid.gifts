@@ -32,6 +32,7 @@ import {createBrowseRelease} from '../static-site/lib/browse.ts';
 import {createOgRelease} from '../static-site/lib/og.ts';
 import {siteIdentityFor} from '../static-site/lib/site-identity.ts';
 import {guides} from '../static-site/lib/guides.ts';
+import {codeOnlyAuthority} from '../scripts/catalog/code-only-operator.mjs';
 import safeCatalogPayload from '../static-site/public/safe/catalog.json' with {type:'json'};
 
 async function fixture(t,{codeSha='8'.repeat(40)}={}){
@@ -88,6 +89,10 @@ async function fixture(t,{codeSha='8'.repeat(40)}={}){
 
 test('accepted persistent reader proves >20 identities without source/native writes or renewed observations',async t=>{
   const f=await fixture(t);assert.equal(f.input.revision.sourceRows.length,32);
+  const prepared=codeOnlyAuthority({seal:f.seal,codeSha:f.authority.request.codeSha,observedAt:f.authority.observedAt,cutoff:f.authority.request.cutoff,
+    globalVectorWatermark:f.authority.globalVectorWatermark,publicationReceiptWatermark:f.authority.publicationReceiptWatermark});
+  assert.equal(prepared.identityCount,32);assert.equal(prepared.request.capturedAt,f.input.revision.snapshot.generatedAt);
+  assert.equal(prepared.publication.receiptSha256,f.seal.publication.receiptSha256);
   assert.ok(f.input.revision.snapshot.products.length>20);assert.ok(f.input.revision.snapshot.products.every(p=>p.eligibleUntil===null));
   assertAcceptedCodeOnlyBinding(f.input);const before=canonicalJson(f.input);
   await f.read();f.unchanged();assert.equal(canonicalJson(f.input),before);

@@ -918,8 +918,9 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
     if(state.execution)await acquireExecutionRoot(state.execution);
     await verifySuccessMetadata(directory,state);
     const completedRelease=state.success?.receipt.release_id??(
-      state.checkpoint?.checkpoint.phase==='finalized'&&state.checkpoint.checkpoint.owner===null
+      ['published','finalized'].includes(state.checkpoint?.checkpoint.phase??'')&&state.checkpoint?.checkpoint.owner===null
       &&state.checkpoint.checkpoint.control?.publication?.stage==='published'
+      &&hash(state.checkpoint.checkpoint.control.publication.receiptSha256)
         ?state.checkpoint.checkpoint.control.publication.intent?.releaseId:null);
     if(cleanupOnly&&!completedRelease)fail('cleanup_requires_completed_publication');
     for(const p of state.publications.values())if(p.retention.sourceRoot!==(state.execution?.effective.sourceRoot??repository))fail('publication_scope');
