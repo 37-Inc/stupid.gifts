@@ -259,6 +259,8 @@ export interface WeeklyDriverOptions {
   /** Separately reviewed continuation of one retained, failed upload. */
   reviewedUploadRetry?:{path:string;sha256:string};
   cadenceOnly?:boolean;
+  /** Runtime storage adapter only; not serialized into historical manifests. */
+  durable?:RunWorkspaceOptions['durable'];
 }
 type Dependencies={repository?:string;fetch?:typeof fetch;resolveToken?:(ref:KeychainRef)=>Promise<string>;resolveWranglerOAuth?:()=>Promise<string>;now?:()=>string;
   /** Hosted adapter mirrors new immutable objects and this accepted head before
@@ -358,6 +360,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     ?await reviewed(options.reviewedUploadRetry.path,options.reviewedUploadRetry.sha256,repo) as Parameters<typeof executePublication>[0]['reviewedUploadRetry']:undefined;
   const scope={environment:config.environment,indexName:config.vectorIndex.name};const resolveToken=dependencies.resolveToken||resolveReadToken;
   const workspaceOptions:RunWorkspaceOptions={directory:options.workspace,repository:adoption?original.publication.sourceRoot:repo,mode:options.command==='start'?'create':'resume',
+    ...(options.durable?{durable:options.durable}:{}),
     runId:original.runId,configSha256:options.configSha256,codeSha:original.codeSha,
     scope:{...scope,accountId:config.accountId,databaseId:config.database.id,databaseName:config.database.name,workerName:config.publication.workerName},
     retention:original.retention,budgetCaps:{httpRequests:original.limits.requests,sqlStatements:original.limits.statements},
