@@ -96,7 +96,7 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
     const pointerPath=care+'/last-success.json',pointerBytes=await store.bytes(pointerPath),prior=JSON.parse(pointerBytes.toString('utf8')),
       seal=await store.json(prior.control.path,prior.control.sha256);catalogSuccessorBytes(seal);
     const token=await resolveWranglerOAuth(),plan=await currentD1Plan(token),limits=routineLimits(plan),capacity=await observeHeadroom(token,undefined,null,fetch,plan),
-      db=await createCatalogD1ReadOnlyRest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,
+      db=await createCatalogD1ReadOnlyRest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,requestLimit:'observe',
         limits:{requests:20,statements:30,reportedRowsRead:20000,reportedRowsWritten:1}});
     const rows=await db.batch([db.prepare('SELECT coalesce(max(sequence),0) n FROM vector_sync_outbox'),
       db.prepare('SELECT coalesce(max(rowid),0) n FROM publication_receipts'),db.prepare('SELECT * FROM publication_receipts WHERE release_id=?').bind(seal.publication.releaseId),

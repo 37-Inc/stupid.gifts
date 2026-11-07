@@ -13,6 +13,10 @@ test('code-only route requires an explicit stable label and has no supplier/reco
   for(const args of [[],['start'],['start','--run'],['--run','../escape'],['--run','x','--run','y'],['--run','x','--admit-asins','B000000001'],
     ['--run','x','recover'],['--run','x','publish'],['--run','x','start','extra']])assert.throws(()=>codeOnlyInvocation(args),/code_only_arguments/);
 });
+test('code-only preparation observes usage estimates rather than restoring an internal publication quota',async()=>{
+  const source=await fs.readFile(new URL('../scripts/catalog/code-only-operator.mjs',import.meta.url),'utf8');
+  assert.match(source,/createCatalogD1ReadOnlyRest\(\{[^}]*requestLimit:'observe'/s);
+});
 
 test('new serving config preserves accepted presentation but separates catalog authority from current serving code',()=>{
   const hash='a'.repeat(64),version='01234567-89ab-cdef-0123-456789abcdef',source='b'.repeat(40),scope={environment:'production',
