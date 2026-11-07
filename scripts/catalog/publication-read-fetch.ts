@@ -113,6 +113,7 @@ function accountedFetch(ws:Pick<RunWorkspace,'reserveBudget'|'settleBudget'>,sen
           if(controller.signal.aborted){void value.body?.cancel().catch(()=>{});throw new Error('publication_read_aborted');}return value;});
         response=await Promise.race([pending,aborted]);
       }catch{
+        clearTimeout(timer);
         await ws.settleBudget(id,{status:'unknown',usage:null});throw new Error('publication_read_unavailable');
       }finally{clearTimeout(timer);}
       // Settlement failure is not retried or relabelled as a second settlement.
