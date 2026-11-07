@@ -4,7 +4,7 @@ import { mkdtemp, realpath, chmod, mkdir, readFile, writeFile, readdir, lstat, s
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { openRunWorkspace, readRunWorkspace, WORKSPACE_BLOB_LIMITS, assertPublicationCleanupEntryCount } from '../scripts/catalog/run-workspace.ts';
+import { openRunWorkspace, openPublicationBuildCleanup, readRunWorkspace, WORKSPACE_BLOB_LIMITS, assertPublicationCleanupEntryCount } from '../scripts/catalog/run-workspace.ts';
 import { canonicalJson, sha256 } from '../scripts/catalog/migration.ts';
 import { encodeBuildRequest } from '../lib/catalog/build-requests.ts';
 import {encodePublicationIntent} from '../lib/catalog/publication.ts';
@@ -129,7 +129,7 @@ test('routine usage observation retains every charge beyond HTTP and SQL estimat
   assert.equal((await resumed.budget()).sqlStatements,4);
   await resumed.close();
   const report=await readRunWorkspace({...f.input,mode:'resume'});
-  assert.equal(report.budget.httpRequests,4);assert.equal(report.budget.unconfirmedRequests,2);
+  assert.equal(report.budget.httpRequests,5);assert.equal(report.budget.unconfirmedRequests,2);
 });
 
 test('expiry refuses body/new content without renewing on replay, but keeps control metadata and budget usable',async t=>{
@@ -686,6 +686,39 @@ test('verified package cleanup frees the same checkout for a second run; old exp
   for(const path of f.outputPaths)assert.equal(await readFile(join(path,'nested/merchant.json'),'utf8'),'TEST ONLY EXPIRED MERCHANT COPY');
   const pending=await f.open({mode:'resume',runId:'second-run'});await pending.purgeExpired();
   for(const path of f.outputPaths)await assert.rejects(lstat(path),{code:'ENOENT'});
+});
+
+test('completed output cleanup holds only source ownership while another source can publish',async t=>{
+  const f=await publicationFixture(t),w=await f.open();
+  await w.preparePublicationDirectories('test-release',NOW,null);await f.outputs(w,'test-release');
+  await w.writeCheckpoint(null,{...cp(),phase:'finalized',control:{publication:{...publication(),stage:'published',deploymentId:'test-deployment'}}});
+  const before=await w.budget();await w.close();
+  const cleanup=await openPublicationBuildCleanup({...f.input,mode:'resume'});
+  try{
+    assert.deepEqual(Object.keys(cleanup).sort(),['cleanPublicationBuild','close']);
+    assert.equal((await readdir(join(f.input.directory,'locks'))).length,1);
+    await assert.rejects(f.open({mode:'resume'}),/locked/); // same source stays protected
+    const other=join(f.parent,'other-source');await mkdir(other,{mode:0o700});
+    const next=await f.open({runId:'next-run',repository:other});
+    await assert.rejects(cleanup.cleanPublicationBuild('different-release'),/cleanup_release/);
+    await cleanup.cleanPublicationBuild('test-release');await cleanup.cleanPublicationBuild('test-release');
+    for(const output of f.outputPaths)await assert.rejects(lstat(output),{code:'ENOENT'});
+    assert.equal(await readFile(join(w.directory,'packages/test-release/nested/merchant.json'),'utf8'),'TEST ONLY EXPIRED MERCHANT COPY');
+    await next.close();
+  }finally{await cleanup.close();}
+  const after=await readRunWorkspace({...f.input,mode:'resume'});assert.deepEqual(after.budget,before);
+  assert.equal(after.checkpoint.checkpoint.phase,'finalized');
+});
+
+test('source-only cleanup refuses unfinished publications and keeps ordinary shared locks unchanged',async t=>{
+  const f=await publicationFixture(t),w=await f.open();
+  await w.preparePublicationDirectories('test-release',NOW,null);await f.outputs(w,'test-release');
+  await assert.rejects(openPublicationBuildCleanup(f.input),/cleanup_requires_completed_publication/);
+  assert.equal((await readdir(join(f.input.directory,'locks'))).length,3);
+  await w.close();
+  await assert.rejects(openPublicationBuildCleanup({...f.input,mode:'resume'}),/cleanup_requires_completed_publication/);
+  assert.equal((await readdir(join(f.input.directory,'locks'))).length,0);
+  assert.equal(await readFile(join(f.outputPaths[0],'nested/merchant.json'),'utf8'),'TEST ONLY EXPIRED MERCHANT COPY');
 });
 
 test('registered publication cleanup rejects symlinks/hardlinks and retains unrelated source paths',async t=>{

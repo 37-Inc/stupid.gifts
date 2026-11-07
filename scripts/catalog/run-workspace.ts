@@ -744,14 +744,28 @@ export async function readRunWorkspace(input:RunWorkspaceOptions):Promise<Worksp
  * and hosts do not share these files. No PID/age takeover, heartbeat, provider
  * credential, or global authority: callers still need the exact D1 owner. */
 export async function openRunWorkspace(input:RunWorkspaceOptions):Promise<RunWorkspace> {
+  return openWorkspace(input);
+}
+
+/** Completed source outputs need only their source lock, not the shared D1 and
+ * Worker locks. This capability cannot fetch, mutate, publish or purge evidence.
+ * The original journal/source binding is still independently checked. */
+export async function openPublicationBuildCleanup(input:RunWorkspaceOptions):Promise<Pick<RunWorkspace,'cleanPublicationBuild'|'close'>> {
+  if(input.mode!=='resume')fail('cleanup_requires_completed_publication');
+  const workspace=await openWorkspace(input,true);
+  return Object.freeze({cleanPublicationBuild:workspace.cleanPublicationBuild,close:workspace.close});
+}
+
+async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promise<RunWorkspace> {
   input={...input,scope:structuredClone(input.scope),retention:structuredClone(input.retention),budgetCaps:structuredClone(input.budgetCaps)};
   options(input);await pathWithoutLinks(input.directory);await assertProtectedDestination(input.directory,input.repository);
   await protectedStat(dirname(input.directory),true);
   const repository=await realpath(input.repository);
   await privateDirectory(input.directory,true);await privateDirectory(join(input.directory,'locks'),true);
-  const resources:Array<Record<string,string>>=[{accountId:input.scope.accountId,environment:input.scope.environment,databaseId:input.scope.databaseId},
+  const resources:Array<Record<string,string>>=[...(!cleanupOnly?[
+    {accountId:input.scope.accountId,environment:input.scope.environment,databaseId:input.scope.databaseId},
     {accountId:input.scope.accountId,environment:input.scope.environment,workerName:input.scope.workerName},
-    {sourceRoot:repository}];
+  ]:[]),{sourceRoot:repository}];
   const locks:{path:string;ino:number;dev:number;body:unknown}[]=[];const token=randomUUID();
   async function acquire(resource:Record<string,string>){
     if(locks.some(lock=>same((lock.body as {resource:unknown}).resource,resource)))return;
@@ -784,6 +798,11 @@ export async function openRunWorkspace(input:RunWorkspaceOptions):Promise<RunWor
     await verifyExecutionMetadata(directory,state,repository);
     if(state.execution)await acquireExecutionRoot(state.execution);
     await verifySuccessMetadata(directory,state);
+    const completedRelease=state.success?.receipt.release_id??(
+      state.checkpoint?.checkpoint.phase==='finalized'&&state.checkpoint.checkpoint.owner===null
+      &&state.checkpoint.checkpoint.control?.publication?.stage==='published'
+        ?state.checkpoint.checkpoint.control.publication.intent?.releaseId:null);
+    if(cleanupOnly&&!completedRelease)fail('cleanup_requires_completed_publication');
     for(const p of state.publications.values())if(p.retention.sourceRoot!==(state.execution?.effective.sourceRoot??repository))fail('publication_scope');
     let usableUntil=Infinity,usableAfter=-Infinity;
     // Verify every registered body once on open; held-lock operations retain
@@ -868,6 +887,7 @@ export async function openRunWorkspace(input:RunWorkspaceOptions):Promise<RunWor
       }
     }
     async function cleanPublicationBuild(releaseId:string){
+      if(cleanupOnly&&releaseId!==completedRelease)fail('cleanup_release');
       const p=state.publications.get(releaseId);if(!p||p.purged)fail('publication_directories');if(p.buildCleaned)return;
       const entries=await tree(buildPaths());
       try{await removeTree(entries);
