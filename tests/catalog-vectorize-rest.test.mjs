@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createVectorizeRestAdapters, hasAccountedVectorReadback } from '../scripts/catalog/vectorize-rest.ts';
+import { createVectorizeRestAdapters, hasAccountedVectorReadback,hasAccountedVectorTransport } from '../scripts/catalog/vectorize-rest.ts';
 import { accountedPublicationReadFetch } from '../scripts/catalog/publication-read-fetch.ts';
 import { nativeHash, visible } from '../scripts/catalog/vector-outbox.ts';
 
@@ -17,6 +17,8 @@ test('owned cleanup joins only the actual factory single AND optional batched re
     {accountId,workerName:'test-worker',indexName:config.indexName,databaseId:publicId,identityOrigin:'https://fixture.example.invalid'});
   const adapters=createVectorizeRestAdapters({...config,fetch:send});
   assert.equal(hasAccountedVectorReadback(adapters),true);
+  assert.equal(hasAccountedVectorTransport(adapters),true);
+  assert.equal(hasAccountedVectorTransport({...adapters}),false);
   assert.equal(hasAccountedVectorReadback({readback:adapters.readback}),true);
   assert.equal(hasAccountedVectorReadback({...adapters,readback:async()=>null}),false);
   assert.equal(hasAccountedVectorReadback({...adapters,readbacks:async()=>[]}),false);

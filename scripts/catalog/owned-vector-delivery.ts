@@ -10,7 +10,7 @@ import { encodePublicationIntent, encodePublishedCatalogBinding } from '../../li
 import type { PublicationIntent, PublishedCatalogBinding } from '../../lib/catalog/publication.ts';
 import { validateCatalogSnapshot,publicProductRightsExpiry,persistentDisplayRights } from '../../lib/catalog/snapshot.ts';
 import {persistentPublicProduct} from '../../lib/catalog/display.ts';
-import { hasAccountedVectorReadback } from './vectorize-rest.ts';
+import { hasAccountedVectorReadback,hasAccountedVectorTransport } from './vectorize-rest.ts';
 import { pruneExistingRevision, prunedVectorIds, prunedVectorPlan, settleCapturedRevision, capturedRevisionBuildRequest } from '../../lib/catalog/prune-existing-revision.ts';
 import type { HistoricalNativeBinding, NativeHistoryBinding, PrunedRevision, PrunedVectorObservation, PrunedVectorPlan } from '../../lib/catalog/prune-existing-revision.ts';
 import type { PermanentCatalogRevision } from '../../lib/catalog/freeze-permanent-catalog.ts';
@@ -103,7 +103,10 @@ function gate(owner: MutationOwner, pending: boolean) {
 function owned(db: CatalogD1, owner: MutationOwner, pending: boolean) {
   const query = gate(owner, pending); return assertion(db, query.sql, query.params);
 }
-async function bounded<T>(operation: (signal: AbortSignal) => Promise<T>, timeout: number): Promise<T> {
+async function bounded<T>(operation: (signal: AbortSignal) => Promise<T>, timeout: number,transportOwnsTimeout=false): Promise<T> {
+  // The genuine accounted transport bounds headers/body separately from its
+  // durable journal I/O. Do not add a second clock around that bookkeeping.
+  if(transportOwnsTimeout)return operation(new AbortController().signal);
   const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
   try { return await Promise.race([operation(controller.signal), new Promise<never>((_, reject) => {
     timer = setTimeout(() => { controller.abort(); reject(new Error('vector_provider_timeout')); }, timeout);
@@ -266,7 +269,7 @@ async function execute(options: { db: CatalogD1; owner: MutationOwner; id: strin
   if (row.dispatch_token) {
     let observation;
     try { observation = await bounded(signal => adapters.resolve({ deliveryId: id, attempt: row!.attempts,
-      reference: row!.mutation_reference }, signal), timeout); }
+      reference: row!.mutation_reference }, signal), timeout,hasAccountedVectorTransport(adapters)); }
     catch { return pendingResult(db, input, row, 'provider_failed'); }
     if (observation.state === 'pending') return pendingResult(db, input, row, 'mutation_unknown');
     if (!REF.test(observation.reference) || (observation.state === 'settled' && row.mutation_reference
@@ -292,7 +295,7 @@ async function execute(options: { db: CatalogD1; owner: MutationOwner; id: strin
     row = (await journal(db,id))!;
   }
   let actual: SyncVector | null;
-  try { actual = await bounded(signal => adapters.readback(request.publicId, signal), timeout); }
+  try { actual = await bounded(signal => adapters.readback(request.publicId, signal), timeout,hasAccountedVectorTransport(adapters)); }
   catch { return pendingResult(db, input, row, 'provider_failed'); }
   const isVisible = visible(request.vector, actual);
   const fresh = !request.vector || request.kind==='historical_restore'
@@ -311,7 +314,7 @@ async function execute(options: { db: CatalogD1; owner: MutationOwner; id: strin
     row = (await journal(db,id))!;
     let accepted;
     try { accepted = await bounded(signal => adapters.dispatch({ deliveryId: id, attempt: row!.attempts,
-      publicId: request.publicId, vector: structuredClone(request.vector) }, signal), timeout); }
+      publicId: request.publicId, vector: structuredClone(request.vector) }, signal), timeout,hasAccountedVectorTransport(adapters)); }
     catch { return pendingResult(db, input, row, 'mutation_unknown'); }
     if (!accepted || !REF.test(accepted.reference)) return pendingResult(db, input, row, 'mutation_unknown');
     // A lost D1 response here leaves the persisted dispatch token, so retry still
@@ -916,7 +919,8 @@ async function reuseReadback(adapters:Pick<OwnedVectorAdapters,'readback'|'readb
   signal?.throwIfAborted();const controller=new AbortController();let rejectAbort:(error:Error)=>void=()=>{};
   const aborted=new Promise<never>((_,reject)=>{rejectAbort=reject;});
   const abort=(error=new Error('vector_provider_timeout'))=>{controller.abort();rejectAbort(error);};
-  const cancel=()=>abort();signal?.addEventListener('abort',cancel,{once:true});const timer=setTimeout(cancel,timeout);
+  const cancel=()=>abort();signal?.addEventListener('abort',cancel,{once:true});
+  const timer=hasAccountedVectorReadback(adapters)?undefined:setTimeout(cancel,timeout);
   const pending=(async()=>{const entries=[...vectors];
     for(let offset=0;offset<entries.length;offset+=10){controller.signal.throwIfAborted();
       const groups:Array<Array<[string,SyncVector|null]>>=[];
