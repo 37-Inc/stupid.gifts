@@ -24,6 +24,7 @@ export function createVectorizeRestAdapters(options: MutationScope & {
     || token.length > 4096 || /\s/.test(token) || !Number.isInteger(timeout) || timeout < 10 || timeout > 30_000)
     throw new Error('invalid_vectorize_configuration');
   const send = options.fetch ?? fetch;
+  const accounted=isAccountedPublicationFetch(send);
   const base = `https://api.cloudflare.com/client/v4/accounts/${accountId}/vectorize/v2/indexes/${indexName}`;
   async function request(path: string, signal: AbortSignal, body?: string, ndjson = false): Promise<unknown> {
     signal.throwIfAborted();
@@ -32,10 +33,13 @@ export function createVectorizeRestAdapters(options: MutationScope & {
     const aborted=new Promise<never>((_,reject)=>{rejectAbort=reject;});
     const abort = () => {controller.abort();cancellation??=reader?.cancel().catch(()=>{});rejectAbort(new Error('vector_provider_failed'));};
     signal.addEventListener('abort',abort,{once:true});
-    const timer=setTimeout(abort,timeout);
+    // The accounted sender bounds provider headers separately from durable
+    // reservation/settlement. Its body clock starts once that sender returns.
+    let timer=accounted?undefined:setTimeout(abort,timeout);
     try {
       pending=(async()=>{const response=await(sent=send(`${base}/${path}`,{method:body===undefined?'GET':'POST',redirect:'error',signal:controller.signal,
         headers:{Authorization:`Bearer ${token}`,...(body===undefined?{}:{'Content-Type':ndjson?'application/x-ndjson':'application/json'})},body}));
+      if(accounted)timer=setTimeout(abort,timeout);
       if(controller.signal.aborted||!response.ok||!response.body){void response.body?.cancel().catch(()=>{});throw new Error();}
       reader=response.body.getReader();const chunks:Uint8Array[]=[];let size=0;
       try { for(;;){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;

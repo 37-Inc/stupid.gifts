@@ -267,6 +267,16 @@ test('actual build/upload/activate/identity/native-proof/receipt/idle compositio
   assert.equal(f.checkpoint().state.driverState,'preserved');assert.doesNotMatch(JSON.stringify(f.checkpoint()),/PRIVATE|example.invalid|clockwork spoon/);
   assert.equal((await f.execute()).state,'published');assert.equal(f.counts().activateCalls,1);
 });
+test('slow owned journal I/O does not expire publication provider clocks or repeat writes',async t=>{
+  const f=await setup(t),events=[],pause=()=>new Promise(resolve=>setTimeout(resolve,30));
+  const send=accountedPublicationFetch({async reserveBudget(){events.push('reserve');await pause();},
+    async settleBudget(_id,value){events.push(value.status);await pause();}},f.fetch,
+    {accountId:f.config.accountId,databaseId:id,workerName:f.config.workerName,indexName:f.config.indexName,identityOrigin:f.config.identityOrigin});
+  const timer=globalThis.setTimeout;t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>timer(fn,ms===2500?10:ms,...args));
+  const result=await f.execute(f.db,{fetch:send,observationFetch:send});
+  assert.equal(result.state,'published',JSON.stringify(result));assert.ok(events.length>0);
+  assert.ok(!events.includes('unknown'));assert.equal(f.counts().uploadCalls,1);assert.equal(f.counts().activateCalls,1);
+});
 
 test('permanent publication fetch scope errors are not misreported as transient provider outages',async t=>{
   const f=await setup(t),result=await f.execute(f.db,{fetch:async()=>{throw new Error('publication_read_scope_invalid');}});

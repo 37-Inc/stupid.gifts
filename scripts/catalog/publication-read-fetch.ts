@@ -97,7 +97,7 @@ function accountedFetch(ws:Pick<RunWorkspace,'reserveBudget'|'settleBudget'>,sen
     let rejectAbort:(error:Error)=>void=()=>{};
     const aborted=new Promise<never>((_,reject)=>{rejectAbort=reject;});
     const abort=()=>{controller.abort();rejectAbort(new Error('publication_read_aborted'));};
-    init.signal?.addEventListener('abort',abort,{once:true});const timer=setTimeout(abort,10_000);
+    init.signal?.addEventListener('abort',abort,{once:true});let timer:ReturnType<typeof setTimeout>|undefined;
     // Observe rejection even while an asynchronous durable reservation is pending.
     void aborted.catch(()=>{});
     try{
@@ -106,12 +106,16 @@ function accountedFetch(ws:Pick<RunWorkspace,'reserveBudget'|'settleBudget'>,sen
       let response:Response;
       try{
         controller.signal.throwIfAborted();
+        // Durable journal I/O has its own bounded transport. Start the provider
+        // clock only after its reservation is saved, and stop before settlement.
+        timer=setTimeout(abort,10_000);
         const pending=send(input,{...init,signal:controller.signal}).then(value=>{
           if(controller.signal.aborted){void value.body?.cancel().catch(()=>{});throw new Error('publication_read_aborted');}return value;});
         response=await Promise.race([pending,aborted]);
       }catch{
+        clearTimeout(timer);
         await ws.settleBudget(id,{status:'unknown',usage:null});throw new Error('publication_read_unavailable');
-      }
+      }finally{clearTimeout(timer);}
       // Settlement failure is not retried or relabelled as a second settlement.
       await ws.settleBudget(id,{status:'known',usage:{rowsRead:0,rowsWritten:0}});return response;
     }finally{clearTimeout(timer);init.signal?.removeEventListener('abort',abort);}

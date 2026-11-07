@@ -296,9 +296,12 @@ function provider(config:PublicationConfig,token:string,send:typeof fetch,identi
     const aborted=new Promise<never>((_,reject)=>{rejectAbort=reject;});
     const abort=()=>{controller.abort();cancellation??=reader?.cancel().catch(()=>{});rejectAbort(new Error());};
     signal?.addEventListener('abort',abort,{once:true});
+    const accounted=isAccountedPublicationFetch(readSend),startTimer=()=>{timer=setTimeout(abort,body===undefined?readTimeoutMs:2500);};
+    if(!accounted)startTimer();
     try{pending=(async()=>{const response=await(sent=readSend(url,{method:body===undefined?'GET':'POST',redirect:'error',signal:controller.signal,
       headers:identity?{...(identityAuthorization?{Authorization:identityAuthorization}:{}), 'Cache-Control':'no-cache'}:
         {Authorization:`Bearer ${token}`,...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})}));
+      if(accounted)startTimer();
       if(controller.signal.aborted){void response.body?.cancel().catch(()=>{});throw new Error();}
       if(response.status===404&&allow404){await response.body?.cancel();return null;}
       if(!response.ok||!response.body)throw new Error();reader=response.body.getReader();const chunks:Uint8Array[]=[];let size=0;
@@ -306,7 +309,7 @@ function provider(config:PublicationConfig,token:string,send:typeof fetch,identi
         if(size>512*1024){await reader.cancel();throw new Error();}chunks.push(part.value);}}finally{reader.releaseLock();}
       const raw=JSON.parse(Buffer.concat(chunks).toString('utf8'));
       if(identity)return raw;if(!raw||raw.success!==true||!Object.hasOwn(raw,'result'))throw new Error();return raw.result;
-    })();return await Promise.race([pending,aborted,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{abort();reject(new Error());},body===undefined?readTimeoutMs:2500);})]);
+    })();return await Promise.race([pending,aborted]);
     }catch(error){if(error instanceof Error&&error.message==='publication_read_scope_invalid')throw error;
       throw new Error(body===undefined?'publication_provider_unavailable':'publication_activation_unknown');}
     finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);if(controller.signal.aborted&&pending&&(body===undefined||isAccountedPublicationFetch(readSend))){

@@ -18,6 +18,8 @@ test('operator failure reports only the final safe machine code, never raw outpu
   assert.deepEqual(hostedOperatorFailure({stderr:'secret URL https://example.invalid/private\nrun_workspace_durable_missing\n',
     stdout:'private supplier body',message:'command with secret'}),{state:'attention',errorCode:'run_workspace_durable_missing'});
   assert.deepEqual(hostedOperatorFailure({stderr:'semantic_delta_pending\n'}),{state:'pending',errorCode:'semantic_delta_pending'});
+  assert.deepEqual(hostedOperatorFailure({stderr:'vector_provider_failed\n'}),{state:'attention',errorCode:'vector_provider_failed'});
+  assert.deepEqual(hostedOperatorFailure({stderr:'catalog_d1_result_unknown\n'}),{state:'attention',errorCode:'catalog_d1_result_unknown'});
   assert.deepEqual(hostedOperatorFailure({stderr:'unknown secret',killed:true}),{state:'attention',errorCode:'catalog_hosted_operator_timeout'});
 });
 function fixture(){

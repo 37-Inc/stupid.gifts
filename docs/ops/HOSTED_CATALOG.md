@@ -19,6 +19,11 @@ Codex timer, activate daily discovery, or authorize two production writers.
   external request. Restore verifies hashes and does not copy local locks or
   rewrite historical source bindings. Original expiry registrations govern body
   cleanup; controls, accounting and history remain.
+- Provider header/body timeouts exclude the coordinator's own durable journal
+  reservation and settlement. Those writes retain their separate bounded R2
+  transport and must finish before the caller releases ownership. A slow journal
+  must not abort a provider request before dispatch. Real provider timeouts still
+  retain the original unknown charge; uncertain writes are never replayed.
 - Hosted source paths are stable at `/home/runner/stupid-gifts/operators/<SHA>`;
   private state is under `/home/runner/.codex/private/goose-gifts-migration`.
   Finish existing Mac-bound runs locally. Never pretend they were hosted runs.
