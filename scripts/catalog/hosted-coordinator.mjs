@@ -73,7 +73,7 @@ function parsedOutput(stdout){
 export function hostedOperatorFailure(error){
   const codes=String(error.stderr??'').split('\n').map(line=>line.trim());
   if(codes.includes('semantic_delta_pending'))return{state:'pending',errorCode:'semantic_delta_pending'};
-  const code=codes.findLast(value=>/^(?:routine|run_workspace|catalog_[a-z0-9]+|publication|weekly|vector_provider)_[a-z0-9_]{1,100}$/.test(value));
+  const code=codes.findLast(value=>/^(?:routine|run_workspace|catalog_[a-z0-9]+|publication|weekly|vector_[a-z0-9]+|cohort|prune|owned_[a-z0-9]+|search_[a-z0-9]+)_[a-z0-9_]{1,100}$/.test(value));
   return{state:'attention',errorCode:code??(error.killed?'catalog_hosted_operator_timeout':'catalog_hosted_operator_failed')};
 }
 export function validateHostedProposal({bytes,sha256,runId,catalogRevision,summary,approvalPin}){

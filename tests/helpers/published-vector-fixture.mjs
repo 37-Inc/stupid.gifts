@@ -13,7 +13,7 @@ import { editorialSourceHash } from '../../scripts/ops/catalog-editorial-core.mj
 import { canonicalJson, sha256 } from '../../scripts/catalog/migration.ts';
 import { createSealedSnapshotEnvelope } from '../../scripts/catalog/export-d1-snapshot.ts';
 import { deliverOwnedOutboxEvent, reuseOwnedApprovedCohortVectorProof, settleOwnedApprovedCohortVectorProof,
-  publishedCatalogOperationKey, readActivatedCatalogVectors } from '../../scripts/catalog/owned-vector-delivery.ts';
+  prepareOwnedApprovedCohortPlan, publishedCatalogOperationKey, readActivatedCatalogVectors } from '../../scripts/catalog/owned-vector-delivery.ts';
 
 export const AT=Date.parse('2026-10-20T12:00:00.000Z'),at=ms=>new Date(AT+ms).toISOString();
 export const scope={environment:'staging',indexName:'published-proof'},source='b'.repeat(64),uuid=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
@@ -28,7 +28,7 @@ export function product(n,fresh=false){return{id:`B${String(n).padStart(9,'0')}`
 export const rights=p=>Object.fromEntries(Object.entries({title:p.title,description:p.wittyDescription,imageUrl:p.imageUrl,affiliateUrl:p.affiliateUrl,
   wittyDescription:p.wittyDescription,editorialWriteup:p.editorialWriteup,humorTags:JSON.stringify(p.humorTags)})
   .map(([k,value])=>[k,{basis:'owned',reference:`test-only/${p.id}/${k}`,value}]));
-export async function setup(t,{providerIdentity='fixture:published-index',codeSha='f'.repeat(40),originalVersion,migrationThrough=99,merchant=false,initialTime=AT}={}){
+export async function setup(t,{providerIdentity='fixture:published-index',codeSha='f'.repeat(40),originalVersion,migrationThrough=99,merchant=false,initialTime=AT,fullPlan=false,settleProof=settleOwnedApprovedCohortVectorProof}={}){
   const at=ms=>new Date(initialTime+ms).toISOString();
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());sql.exec('PRAGMA foreign_keys=ON');
   for(const name of(await readdir(new URL('../../migrations/d1/',import.meta.url))).filter(n=>/^\d{4}.*\.sql$/.test(n)&&Number(n.slice(0,4))<=migrationThrough).sort())
@@ -87,9 +87,11 @@ export async function setup(t,{providerIdentity='fixture:published-index',codeSh
   const approval={schemaVersion:1,...mode,changes},request={previous,context,scope,codeSha:'e'.repeat(40),approval,approvalSha256:sha256(canonicalJson(approval))};
   await releaseMutationOwnership(db,cursor.current);const owner=await claimMutationOwnership(db,scope,
     {phase:'freezing',ownerReference:'original-publish',operationKey:approvedCohortOperationKey(request)});
-  const prepared=await prepareApprovedCohort(db,owner,request),revision=prepared.revision;
-  const reused=await reuseOwnedApprovedCohortVectorProof({db,owner:prepared.owner,revision,adapters});assert.equal(reused.state,'complete');
-  const queued=await settleOwnedApprovedCohortVectorProof({db,owner:reused.owner,revision,adapters});
+  const prepared=fullPlan?await prepareOwnedApprovedCohortPlan({db,owner,request,adapters}):await prepareApprovedCohort(db,owner,request),revision=prepared.revision;
+  const reused=fullPlan?{owner:prepared.owner,deliveryId:sql.prepare("SELECT delivery_id FROM catalog_vector_deliveries WHERE json_extract(request_json,'$.kind')='approved-cohort-plan'").get().delivery_id}
+    :await reuseOwnedApprovedCohortVectorProof({db,owner:prepared.owner,revision,adapters});
+  if(fullPlan)assert.deepEqual(prepared.remainingIds,[]);else assert.equal(reused.state,'complete');
+  const queued=await settleProof({db,owner:reused.owner,revision,adapters});
   const build=await claimBuildRequest(db,queued.requestId,'fixture:original-build',new Date(clock));
   const f={sql,db,index,adapters,revision,metrics,now:()=>new Date(clock),advance(ms){clock+=ms;},dispatches:()=>dispatches,
     async readonly(fn){const before=sql.prepare('SELECT total_changes() n').get().n;proofOnly=true;try{return await fn();}

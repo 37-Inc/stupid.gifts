@@ -475,7 +475,7 @@ async function readPrunedVectors(db: CatalogD1, owner: MutationOwner, revision: 
 async function safe<T>(operation: () => Promise<T>): Promise<T> {
   try { return await operation(); } catch (error) {
     throw new Error(error instanceof Error && /^(vector_[a-z_]+|cohort_[a-z_]+|automation_cohort_[a-z_]+|prune_[a-z_]+|invalid_owned_[a-z_]+|invalid_vector_timeout)$/.test(error.message)
-      ? error.message : 'vector_delivery_failed');
+      ? error.message : 'vector_delivery_failed',{cause:error});
   }
 }
 export function deliverOwnedOutboxEvent(options: Parameters<typeof outboxDelivery>[0]): Promise<DeliveryResult> {
@@ -1131,10 +1131,24 @@ export function settleOwnedApprovedCohortVectorProof(options:{db:CatalogD1;owner
       const rows=await planJournals(db,owner,revision.snapshot.catalogRevision);
       await assertPlanSource(db,owner,revision);
       let pending:Promise<PrunedVectorObservation>|undefined;
-      try{return await settleCapturedRevision(db,owner,revision,(_plan,signal)=>(pending=readPlanVectors(db,owner,rows,plan,adapters,revision,signal,30000)),
-        {deliveryId:policy.delivery_id,requestSha256:sha256(policy.request_json)});}
+      try{
+        const proof={deliveryId:policy.delivery_id,requestSha256:sha256(policy.request_json)};
+        if(isCatalogD1Rest(db)&&hasAccountedVectorReadback(adapters)){
+          // Real provider reads have their own header/body bounds, while every
+          // SQL request also journals durable accounting. Validate the complete
+          // native proof under a finite background bound, not the short core
+          // observation clock. Core independently rechecks this exact policy,
+          // owner, full source/projection, prior receipt, watermark and cutoff
+          // before its atomic queue/epoch write. No proof is cached across calls.
+          const observed=await bounded(signal=>(pending=readPlanVectors(db,owner,rows,plan,adapters,revision,signal,30000)),900_000);
+          return await settleCapturedRevision(db,owner,revision,async(_plan,signal)=>{
+            signal.throwIfAborted();return observed;
+          },proof);
+        }
+        return await settleCapturedRevision(db,owner,revision,(_plan,signal)=>(pending=readPlanVectors(db,owner,rows,plan,adapters,revision,signal,30000)),proof);
+      }
       finally{if(pending){
-        // Network deadlines still abort at30s. Only our concrete adapters may
+        // Provider/background deadlines still abort. Only concrete adapters may
         // join their own durable accounting beyond arbitrary-adapter cleanup.
         if(isCatalogD1Rest(db)&&hasAccountedVectorReadback(adapters))await pending.catch(()=>{});
         else await drainDeploymentObservation(pending);
