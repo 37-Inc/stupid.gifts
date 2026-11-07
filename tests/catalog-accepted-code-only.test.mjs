@@ -8,16 +8,17 @@ import {permanentCatalogFixture} from './helpers/permanent-catalog-fixture.mjs';
 import {scope,uuid} from './helpers/published-vector-fixture.mjs';
 import {preparePermanentCatalog,settlePermanentCatalog} from '../lib/catalog/freeze-permanent-catalog.ts';
 import {approvedCohortOperationKey} from '../lib/catalog/freeze-approved-cohort.ts';
-import {claimMutationOwnership} from '../lib/catalog/mutation-fence.ts';
+import {claimMutationOwnership,releaseMutationOwnership} from '../lib/catalog/mutation-fence.ts';
 import {enqueueBuildRequest,claimBuildRequest,beginBuildActivation,resolveBuildActivation} from '../lib/catalog/build-requests.ts';
 import {enqueuePublication,claimPublication,recordPublicationDispatch,completeActivatedPermanentPublication,
   completeActivatedApprovedCatalogPublication,completeActivatedServingPublication,servingPublicationStatus} from '../lib/catalog/publication.ts';
 import {prunedVectorPlan,prunedVectorIds} from '../lib/catalog/prune-existing-revision.ts';
 import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
 import {createPermanentCatalogSeal} from '../scripts/catalog/permanent-catalog-seal.ts';
-import {createPublishedApprovedCatalogSeal,catalogSuccessorBytes} from '../scripts/catalog/approved-catalog-seal.ts';
+import {createPublishedApprovedCatalogSeal,catalogSuccessorBytes,readApprovedPrior} from '../scripts/catalog/approved-catalog-seal.ts';
+import {createD1CatalogMaintenanceStore} from '../scripts/catalog/maintenance-d1.ts';
 import {createSealedSnapshotEnvelope} from '../scripts/catalog/export-d1-snapshot.ts';
-import {prepareOwnedApprovedCohortPlan,settleOwnedApprovedCohortVectorProof,readActivatedCatalogVectors} from '../scripts/catalog/owned-vector-delivery.ts';
+import {prepareOwnedApprovedCohortPlan,settleOwnedApprovedCohortVectorProof,readActivatedCatalogVectors,deliverOwnedApprovedCohortVector} from '../scripts/catalog/owned-vector-delivery.ts';
 import {readAcceptedCodeOnlyCatalog,acceptedCodeOnlyOperationKey,assertAcceptedCodeOnlyBinding,acceptedCodeOnlyControl} from '../scripts/catalog/accepted-code-only.ts';
 import {executePublication} from '../scripts/catalog/publish-release.ts';
 import {openRunWorkspace} from '../scripts/catalog/run-workspace.ts';
@@ -38,7 +39,7 @@ import safeCatalogPayload from '../static-site/public/safe/catalog.json' with {t
 async function fixture(t,{codeSha='8'.repeat(40)}={}){
   const f=await permanentCatalogFixture(t,{count:32,afterExpiry:true});
   const prepared=await preparePermanentCatalog(f.db,f.owner,f.request),initial=prepared.revision;
-  async function publish(revision,queued,releaseId,prior,version,permanent=false){
+  async function publish(revision,queued,releaseId,prior,version,permanent=false,servingPrior){
     const build=await claimBuildRequest(f.db,queued.requestId,releaseId,f.now());
     const intent={releaseId,catalogRevision:revision.snapshot.catalogRevision,codeSha:revision.request.codeSha,
       catalogSnapshotSha256:revision.packet.receipt.snapshot_sha256,manifestSha256:'a'.repeat(64),vectorSyncWatermark:revision.vectorSyncWatermark,
@@ -47,7 +48,7 @@ async function fixture(t,{codeSha='8'.repeat(40)}={}){
     const publication=await claimPublication(f.db,revision.snapshot,releaseId,f.now());
     await recordPublicationDispatch(f.db,revision.snapshot,publication,'version:'+version,f.now());
     const permit=await beginBuildActivation(f.db,build,revision.snapshot,publication,version,
-      async()=>({environment:scope.environment,settled:true,active:prior}),f.now(),queued.owner);
+      async()=>({environment:scope.environment,settled:true,active:servingPrior??prior}),f.now(),queued.owner,servingPrior);
     const plan=prunedVectorPlan(revision),read=()=>readActivatedCatalogVectors(f.db,permit,{catalogRevision:plan.catalogRevision,
       planSha256:sha256(canonicalJson(plan)),ids:prunedVectorIds(plan)},f.adapters,permanent?{permanent:revision}:{});
     const complete=permanent?completeActivatedPermanentPublication:completeActivatedApprovedCatalogPublication;
@@ -80,7 +81,7 @@ async function fixture(t,{codeSha='8'.repeat(40)}={}){
   const input=await read(),products=canonicalJson(f.sql.prepare('SELECT * FROM products ORDER BY id').all()),
     native=canonicalJson([...f.index]),journals=canonicalJson(f.sql.prepare('SELECT * FROM catalog_vector_deliveries ORDER BY delivery_id').all()),
     receipts=canonicalJson(f.sql.prepare('SELECT * FROM publication_receipts ORDER BY release_id').all()),pointer=canonicalJson(seal);
-  return{...f,seal,authority,owner,input,accepted,read,unchanged(){
+  return{...f,seal,authority,owner,input,accepted,read,publishCatalog:publish,unchanged(){
     assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM products ORDER BY id').all()),products);
     assert.equal(canonicalJson([...f.index]),native);assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM catalog_vector_deliveries ORDER BY delivery_id').all()),journals);
     assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM publication_receipts ORDER BY release_id').all()),receipts);assert.equal(canonicalJson(seal),pointer);
@@ -134,6 +135,63 @@ test('serving completion and uncertain activation resolution preserve latest cat
     environment:scope.environment,settled:true,active:{...intent,versionReference:'serving-version'}};},{acceptedCatalog:f.authority}),'resolved');
   assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'idle');f.unchanged();
   assert.equal(f.sql.prepare('SELECT state FROM catalog_build_requests WHERE request_id=?').get(queued.requestId).state,'resolved');
+});
+
+test('ordinary catalog successor accepts skipped code-only ownership generation without replacing prior authority',async t=>{
+  for(const changed of [false,true])await t.test(changed?'one genuine journaled product change':'unchanged refresh cohort',async t=>{
+    const f=await fixture(t),r=f.input.revision,oldSeal=canonicalJson(f.seal),oldGeneration=f.seal.persistent.generation,
+      request=await enqueueBuildRequest(f.db,f.authority.request),build=await claimBuildRequest(f.db,request.requestId,'code-only',f.now());
+    const intent={releaseId:'serving-before-successor',catalogRevision:r.snapshot.catalogRevision,codeSha:f.authority.request.codeSha,
+      catalogSnapshotSha256:f.seal.snapshotSha256,manifestSha256:'b'.repeat(64),vectorSyncWatermark:r.vectorSyncWatermark,
+      priorReleaseId:f.seal.publication.releaseId,nextExpiry:null};
+    await enqueuePublication(f.db,r.snapshot,intent,f.now());const publication=await claimPublication(f.db,r.snapshot,intent.releaseId,f.now());
+    await recordPublicationDispatch(f.db,r.snapshot,publication,'version:'+uuid(420),f.now());
+    const permit=await beginBuildActivation(f.db,build,r.snapshot,publication,uuid(420),async()=>({environment:scope.environment,settled:true,
+      active:{...f.accepted.intent,versionReference:f.accepted.versionReference}}),f.now(),f.owner);
+    await completeActivatedServingPublication(f.db,r,publication,permit,f.authority,async()=>intent,f.now);
+    const serving={releaseId:intent.releaseId,codeSha:intent.codeSha,catalogRevision:intent.catalogRevision,
+      catalogSnapshotSha256:intent.catalogSnapshotSha256,manifestSha256:intent.manifestSha256,versionReference:uuid(420)};
+    assert.equal(await resolveBuildActivation(f.db,permit,async()=>({environment:scope.environment,settled:true,active:serving}),{acceptedCatalog:f.authority}),'resolved');
+    f.unchanged();assert.equal(f.owner.generation,oldGeneration+1);
+
+    f.advance(1000);const name='ordinary-after-code',writing=await claimMutationOwnership(f.db,scope,{phase:'writing',ownerReference:name,operationKey:sha256(name)}),
+      cursor={current:writing},context={envelopeSha256:sha256(f.seal.envelopeJson+'\n'),snapshotSha256:f.seal.snapshotSha256,
+        projectionSha256:f.seal.projectionReceipt.projection_sha256,sourceExportSha256:f.seal.projectionReceipt.source_export_sha256,
+        vectorSyncWatermark:r.vectorSyncWatermark,publicationReceiptWatermark:f.authority.publicationReceiptWatermark,
+        priorPublication:f.seal.publication,cutoff:new Date(f.now().getTime()+3600000).toISOString()},
+      previous=await readApprovedPrior(f.db,writing,f.seal,context),changes=[];
+    assert.equal(writing.generation,oldGeneration+2);
+    if(changed){
+      const store=createD1CatalogMaintenanceStore({db:f.db,owner:writing,ownerCursor:cursor,runId:name,catalogRevision:name,preservePermanentListings:true,
+        intent:()=>({reviewedDeleteReference:'LOCAL exact duplicate review; no supplier/model observation'})});
+      // A real maintenance operation proves the generation-linked change path;
+      // an arbitrary SQL edit would still be refused by the prior seal reader.
+      await store.markCatalogDuplicate('B000000032','B000000001','LOCAL verified duplicate design');
+      const row={...f.sql.prepare('SELECT * FROM products WHERE id=?').get('B000000032')},op=f.sql.prepare('SELECT * FROM catalog_maintenance_operations WHERE run_id=? ORDER BY next_epoch DESC LIMIT 1').get(name);
+      assert.equal(op.generation,oldGeneration+2);
+      changes.push({publicId:row.public_id,operationId:op.operation_id,inputSha256:op.input_sha256,productSha256:sha256(canonicalJson(row)),displaySha256:sha256(row.public_display_json??'null')});
+    }
+    await releaseMutationOwnership(f.db,cursor.current);
+    const approval={schemaVersion:1,runId:name,catalogRevision:name,changes},nextRequest={scope,codeSha:'9'.repeat(40),previous,predecessor:f.seal,context,
+      approval,approvalSha256:sha256(canonicalJson(approval))},freezing=await claimMutationOwnership(f.db,scope,{phase:'freezing',ownerReference:name,operationKey:approvedCohortOperationKey(nextRequest)});
+    assert.equal(freezing.generation,oldGeneration+3);
+    const prepared=await prepareOwnedApprovedCohortPlan({db:f.db,owner:freezing,request:nextRequest,adapters:f.adapters});
+    assert.equal(prepared.revision.persistent.generation,freezing.generation);
+    let owner=prepared.owner;
+    for(const publicId of prepared.remainingIds){let delivery;
+      for(let attempt=0;attempt<3;attempt++){delivery=await deliverOwnedApprovedCohortVector({db:f.db,owner,revision:prepared.revision,publicId,adapters:f.adapters});
+        owner=delivery.owner;if(delivery.state==='complete')break;}
+      assert.equal(delivery.state,'complete');
+    }
+    const queued=await settleOwnedApprovedCohortVectorProof({db:f.db,owner,revision:prepared.revision,adapters:f.adapters}),
+      accepted=await f.publishCatalog(prepared.revision,queued,name,{...f.accepted.intent,versionReference:f.accepted.versionReference},uuid(421),false,serving),
+      successor=await createPublishedApprovedCatalogSeal(f.db,prepared.revision,accepted.publication);
+    assert.equal(successor.persistent.generation,oldGeneration+3);assert.equal(successor.publication.releaseId,name);
+    assert.equal(f.sql.prepare('SELECT release_id FROM publication_receipts ORDER BY rowid DESC LIMIT 1').get().release_id,name);
+    assert.equal(f.sql.prepare('SELECT count(*) n FROM publication_receipts WHERE release_id=?').get(intent.releaseId).n,0);
+    assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'idle');
+    assert.equal(f.sql.prepare('SELECT count(*) n FROM products').get().n,32);assert.equal(canonicalJson(f.seal),oldSeal);
+  });
 });
 
 // Real publisher/control/accounting/upload-bridge composition; only external
