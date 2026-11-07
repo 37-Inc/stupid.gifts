@@ -32,7 +32,7 @@ const {canonicalJson,sha256}=await load('scripts/catalog/migration.ts');
 const {runCloudflareWeekly,weeklyCommandSummary,validateCloudflareWeeklyConfig}=await load('scripts/catalog/run-cloudflare-weekly.ts');
 const {resolveWranglerOAuth}=await load('scripts/catalog/check-cloudflare-runner.ts');
 const {createCatalogD1ReadOnlyRest}=await load('scripts/catalog/d1-write-rest.ts');
-const {openRunWorkspace}=await load('scripts/catalog/run-workspace.ts');
+const {openRunWorkspace,openPublicationBuildCleanup}=await load('scripts/catalog/run-workspace.ts');
 const {mutationAssertion}=await load('lib/catalog/mutation-fence.ts');
 const {pacificCatalogCalendar,validCatalogRunKey}=await load('scripts/ops/catalog-daily.mjs');
 const HASH=/^[a-f0-9]{64}$/;
@@ -226,6 +226,17 @@ export async function remember(result,entry,config,directory){
   const temporary=directory+'/next-success.json';await put(temporary,next);await fs.rename(temporary,pointer);
   }finally{await w.close();}
 }
+/** Acceptance is durable before source-only output cleanup. Opening/closing a
+ * cleanup handle can fail too; neither turns an accepted release into failure. */
+export async function cleanupAcceptedPublication(options,releaseId,open=openPublicationBuildCleanup,warn=console.warn){
+  let workspace,pending=false;
+  try{workspace=await open(options);await workspace.cleanPublicationBuild(releaseId);}
+  catch{pending=true;}
+  finally{try{await workspace?.close();}catch{pending=true;}}
+  const result={cleanupPending:pending,releaseAccepted:true};
+  if(pending)warn(JSON.stringify(result));
+  return result;
+}
 export function operatorInvocation(argv,calendar){
   const args=[...argv],photoFlag=args.indexOf('--photos-only'),photosOnly=photoFlag>=0;
   if(photosOnly)args.splice(photoFlag,1);
@@ -288,9 +299,7 @@ else{
       recovering?{repository:config.publication.sourceRoot}:{});
     await remember(result,entry,config,directory);console.log(JSON.stringify(weeklyCommandSummary(result)));
     if(result.state==='finalized'){
-      const w=await openRunWorkspace(entry.workspace);
-      try{await w.cleanPublicationBuild(config.runId);}
-      catch{console.warn(JSON.stringify({cleanupPending:true,releaseAccepted:true}));}finally{await w.close();}
+      await cleanupAcceptedPublication(entry.workspace,config.runId);
     }
   }else refuse('command');
 }

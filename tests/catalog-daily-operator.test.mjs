@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { headroom, observeHeadroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation } from '../scripts/catalog/daily-operator.mjs';
+import { headroom, observeHeadroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation, cleanupAcceptedPublication } from '../scripts/catalog/daily-operator.mjs';
+
+test('cleanup failures after acceptance are advisory, including open and close failures',async()=>{
+  for(const failure of ['none','open','clean','close']){
+    const calls=[],warnings=[];
+    const open=async()=>{calls.push('open');if(failure==='open')throw Error('synthetic failure');return{
+      async cleanPublicationBuild(id){assert.equal(id,'release');calls.push('clean');if(failure==='clean')throw Error('synthetic failure');},
+      async close(){calls.push('close');if(failure==='close')throw Error('synthetic failure');},
+    };};
+    assert.deepEqual(await cleanupAcceptedPublication({},'release',open,message=>warnings.push(JSON.parse(message))),
+      {cleanupPending:failure!=='none',releaseAccepted:true});
+    assert.deepEqual(calls,failure==='open'?['open']:['open','clean','close']);
+    assert.equal(warnings.length,failure==='none'?0:1);
+  }
+});
 
 test('scheduled identity prevents duplicate invocations while named runs can repeat on the same day',()=>{
   const calendar={day:'2026-11-02'};
