@@ -69,6 +69,10 @@ export function planProductFreshness(products: readonly FreshnessProduct[], obse
     const photoExpiry = instant(p.photoExpiresAt);
     if (photoExpiry !== null) add('photo_due', photoExpiry - FRESHNESS_POLICY.photoLeadHours * 3_600_000);
     if (!selection.photosOnly) {
+      // Exposed gifts with missing/ambiguous stock evidence must not fall into
+      // the slower quiet rotation merely because they lack a positive status.
+      if(!unavailable&&hot.has(p.id)&&(checked===null||!purchasable))
+        add('hot_stock_due',checked===null?null:checked+FRESHNESS_POLICY.hotDays*DAY);
       if (unavailable) add(checked === null ? 'legacy_availability_unknown' : 'unavailable_recheck',
         checked === null ? null : checked + FRESHNESS_POLICY.unavailableDays * DAY);
       else if (checked === null || !purchasable)

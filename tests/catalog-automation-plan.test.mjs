@@ -21,3 +21,8 @@ test('photo-only plan never includes unrelated stock/rotation work',()=>{
   const products=[product(1),{...product(2),photoExpiresAt:'2026-11-06T18:00:00.000Z'}];
   assert.deepEqual(planRoutineAutomation(products,at,{photosOnly:true}).refreshIds,[products[1].id]);
 });
+test('hot gifts with unknown or undated stock never disappear behind quiet rotation',()=>{
+  const products=Array.from({length:100},(_,n)=>({...product(n),availabilityStatus:'UNKNOWN',availabilityCheckedAt:null}));
+  const hot=products.at(-1).id,r=planRoutineAutomation(products,at,{exposedIds:[hot]});
+  assert.ok(r.refreshIds.includes(hot));assert.ok(r.plan.entries.find(p=>p.id===hot).reasons.includes('hot_stock_due'));
+});
