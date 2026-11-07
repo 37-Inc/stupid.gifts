@@ -23,6 +23,12 @@ run a local publisher while hosted care or a saved hosted publication is active.
 - A fresh runner also recreates private temporary publication parents when a
   build stopped before its package was sealed. This reuses the original
   registration and deadlines; it does not fetch again or renew content.
+- Routine background publishing keeps its original build token and attempt
+  history under the unchanged, non-expiring mutation-owner fence. Saving a large
+  package does not require another timed build claim. The original source cutoff,
+  publication lease, exact dispatched version and atomic source/owner checks stay
+  mandatory. Legacy dispatchers and explicit historical recoveries keep their
+  existing timed-lease rules; uncertain uploads are never bypassed.
 - Completed hosted runs enter a small `cleanup-runs` housekeeping pointer before
   their pending intent is cleared. Each existing wake revisits one due original
   workspace using its immutable source/config and registered deadlines. Only

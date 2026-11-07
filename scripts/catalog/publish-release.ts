@@ -471,6 +471,10 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     validatePublicationFinishAuthority(f,control.build.request.cutoff,control.versionReference!);
     continuation={approvalReference:f.authorizationSha256,approvedAt:f.reviewedAt,publicationUntil:f.activationDeadline};
   }
+  // Routine care already holds a non-expiring exclusive mutation fence. Keep
+  // its original build token/attempt history; archiving is not a new build claim.
+  // Legacy dispatchers and explicit historical recovery retain timed leases.
+  const ownedBackground=options.routineCare===true&&!reviewed&&!serving&&!options.buildRecovery&&!continuation&&!options.permanent&&!options.published;
   let owner=options.owner;const directory=path.join(workspace.directory,'packages',config.releaseId);
   // Preserve the original failed command's logs/output byte-for-byte. The
   // continuation remains inside the already registered retention directory.
@@ -804,13 +808,14 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         .bind(config.releaseId,config.releaseId);
       await db.batch([mutationAssertion(db,owner,['freezing']),exact(buildRow),undispatched(),mutationAssertion(db,owner,['freezing'])]);
       const at=canonicalTime(String(buildRow.observed_at));
+      if(ownedBackground&&(old.request.cutoff<=at||old.request.cutoff<=now().toISOString()))throw Error('publication_build_reclaim_fenced');
       if(preflightPending&&(canonicalTime(old.leaseUntil)<=at||old.leaseUntil<=now().toISOString()))throw new Error('publication_upload_review_required');
       if(!operatorRecovered&&(preflightPending||canonicalTime(old.leaseUntil)<=at&&control.stage==='built'))await verifyBuiltPackage();
       if(preflightPending&&!operatorRecovered){
         if(await api.findVersion(control.uploadMarker)!==null)throw new Error('publication_upload_review_required');
         await db.batch([mutationAssertion(db,owner,['freezing']),exact(buildRow),undispatched(),mutationAssertion(db,owner,['freezing'])]);
       }
-      if(canonicalTime(old.leaseUntil)<=at){
+      if(!ownedBackground&&canonicalTime(old.leaseUntil)<=at){
         const leaseMs=options.approvedCatalog?.persistent?3600000:900000;
         const attempts=Number(buildRow.attempts),leaseUntil=new Date(Math.min(Date.parse(at)+leaseMs,Date.parse(activationDeadline??old.request.cutoff))).toISOString();
         if(!Number.isInteger(attempts)||attempts<1||attempts>=3||leaseUntil<=at)throw new Error('publication_build_reclaim_fenced');
@@ -1020,7 +1025,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     if(!options.routineCare)await workspace.cleanPublicationBuild(config.releaseId);
     // A large static build/guarded cleanup may outlive its original lease.
     // Re-enter the existing capped, fenced built-stage reclaim BEFORE upload.
-    if(control.stage==='built'&&control.build.leaseUntil<=now().toISOString())
+    if(!ownedBackground&&control.stage==='built'&&control.build.leaseUntil<=now().toISOString())
       return executePublication({...options,owner,dependencies:options.dependencies});
     const intent=intentFrom(sealed.manifest,sealed.bytes);
     if(control.intent&&canonicalJson(control.intent)!==canonicalJson(intent))throw new Error('publication_package_changed');
@@ -1110,7 +1115,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       }else{
         if(continuation)await permanentProof();
         permit=await beginBuildActivation(db,control.build,sealed.snapshot,control.publication!,control.versionReference!,
-          signal=>(observation=readPrior(signal)),now(),owner,config.servingPrior,continuation,{observationTimeoutMs:30_000});
+          signal=>(observation=readPrior(signal)),now(),owner,config.servingPrior,continuation,{observationTimeoutMs:30_000,...(ownedBackground?{ownedBackground:true as const}:{})});
       }
     }
     finally{if(observation){

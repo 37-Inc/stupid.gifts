@@ -202,8 +202,8 @@ async function setup(t,{real=false,prior=true,identityOnlyPrior=false,environmen
         prior?[{id:priorDeployment,versions:[{version_id:mode.servingVersion??activePriorVersion,percentage:100}],annotations:{'workers/message':'owned fixture prior'}}]:[]});
     }throw new Error(`Unexpected fixture HTTP ${url}`);
   };
-  const execute=(database=db,dependencies={},buildRecovery,reviewedUploadRetry,finishAuthorization)=>executePublication({db:database,owner:checkpoint.owner,revision:mode.noRevision?null:revision,requestId,runReference:'fixture-run',workspace,config,
-    credentials:{cloudflareToken:'PRIVATE_TOKEN',identityAuthorization:'Basic PRIVATE'},dependencies:{fetch,command,now:()=>new Date(clock),...dependencies},buildRecovery,reviewedUploadRetry,finishAuthorization});
+  const execute=(database=db,dependencies={},buildRecovery,reviewedUploadRetry,finishAuthorization,routineCare=false)=>executePublication({db:database,owner:checkpoint.owner,revision:mode.noRevision?null:revision,requestId,runReference:'fixture-run',workspace,config,
+    credentials:{cloudflareToken:'PRIVATE_TOKEN',identityAuthorization:'Basic PRIVATE'},dependencies:{fetch,command,now:()=>new Date(clock),...dependencies},buildRecovery,reviewedUploadRetry,finishAuthorization,routineCare});
   return{db,sql,owner,revision,fetch,command,get workspace(){return workspace;},config,execute,mode,uploadedConfigs,commandEnvironments,checkpoint:()=>checkpoint,now:()=>new Date(clock),advance(ms){clock+=ms;},after(fn){afterBatch=fn;},
     setServingPrior(){
       const original=priorRelease.intent;
@@ -376,6 +376,59 @@ test('sealed built package resumes with only exact expired lease reclaimed, with
     assert.equal(f.counts().uploadCalls,1);assert.equal(f.counts().activateCalls,1);assert.equal(await readMutationOwner(f.db,scope),null);
     assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM products').all()),products);
   });
+});
+test('routine background publication keeps its exact fenced claim after a long package build, even after three old attempts',async t=>{
+  const {f,old,packageSha256}=await stoppedBuilt(t,{retentionMs:3*3600000});
+  f.advance(65*60000);f.sql.prepare('UPDATE catalog_build_requests SET attempts=3').run();await f.reopen();
+  const products=canonicalJson(f.sql.prepare('SELECT * FROM products').all());
+  const result=await f.execute(f.db,{},undefined,undefined,undefined,true);
+  assert.equal(result.state,'published',JSON.stringify(result));
+  const row=f.sql.prepare('SELECT * FROM catalog_build_requests').get();assert.equal(row.attempts,3);assert.equal(row.lease_token,old.token);
+  assert.equal(row.operator_recovery_json,null);assert.equal(f.checkpoint().control.publication.packageSha256,packageSha256);
+  assert.equal(f.counts().buildCalls,1);assert.equal(f.counts().uploadCalls,1);assert.equal(f.counts().activateCalls,1);
+  assert.equal(await readMutationOwner(f.db,scope),null);assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM products').all()),products);
+});
+for(const fault of ['owner','token','package','dispatch','pending'])test(`routine background publication retains ${fault} fencing after lease expiry`,async t=>{
+  const {f,packageDirectory}=await stoppedBuilt(t,{retentionMs:3*3600000});f.advance(65*60000);
+  if(fault==='owner')f.sql.exec('UPDATE catalog_mutation_scopes SET mutation_epoch=mutation_epoch+1');
+  if(fault==='token')f.sql.prepare('UPDATE catalog_build_requests SET lease_token=?').run(version);
+  if(fault==='package')await fs.appendFile(path.join(packageDirectory,'assets/index.html'),'changed');
+  if(fault==='dispatch')f.sql.exec("UPDATE catalog_build_requests SET dispatch_reference='unknown-dispatch'");
+  if(fault==='pending'){
+    const pin=await f.workspace.putArtifact({unknown:true},{kind:'publication',observedAt:f.now().toISOString()}),saved=await f.workspace.readCheckpoint();
+    await f.workspace.writeCheckpoint(saved.sha256,{...saved.checkpoint,pins:{...saved.checkpoint.pins,publicationUploadPending:pin}});
+  }
+  const before=canonicalJson(f.sql.prepare('SELECT * FROM catalog_build_requests').all());
+  assert.equal((await f.execute(f.db,{},undefined,undefined,undefined,true)).state,'pending');
+  assert.equal(f.counts().uploadCalls,0);assert.equal(f.counts().activateCalls,0);
+  assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM catalog_build_requests').all()),before);
+});
+test('routine background publication keeps the original source cutoff before upload',async t=>{
+  const {f}=await stoppedBuilt(t,{retentionMs:3*3600000,cutoffMs:30*60000});f.advance(65*60000);
+  const before=canonicalJson(f.sql.prepare('SELECT * FROM catalog_build_requests').all());
+  assert.equal((await f.execute(f.db,{},undefined,undefined,undefined,true)).state,'pending');
+  assert.equal(f.counts().uploadCalls,0);assert.equal(f.counts().activateCalls,0);
+  assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM catalog_build_requests').all()),before);
+});
+test('routine background publication does not relax the publication claim lease',async t=>{
+  const {f}=await stoppedBuilt(t,{retentionMs:3*3600000});f.advance(65*60000);
+  const result=await f.execute(f.db,{command:async command=>{await f.command(command);if(command.args.includes('upload'))f.advance(16*60000);}},undefined,undefined,undefined,true);
+  assert.equal(result.state,'pending');assert.equal(f.counts().uploadCalls,1);assert.equal(f.counts().activateCalls,0);
+});
+test('routine background publication atomically rejects owner drift during deployment observation',async t=>{
+  const {f,old}=await stoppedBuilt(t,{retentionMs:3*3600000});f.advance(65*60000);let changed=false;
+  const result=await f.execute(f.db,{fetch:async(url,init)=>{
+    const response=await f.fetch(url,init);
+    if(!changed&&String(url).endsWith('/deployments')&&f.checkpoint().control.publication.stage==='activating'){
+      changed=true;f.sql.exec('UPDATE catalog_mutation_scopes SET mutation_epoch=mutation_epoch+1');
+    }return response;
+  }},undefined,undefined,undefined,true);
+  assert.equal(changed,true);assert.equal(result.state,'pending');assert.equal(f.counts().uploadCalls,1);assert.equal(f.counts().activateCalls,0);
+  const row=f.sql.prepare('SELECT * FROM catalog_build_requests').get();assert.equal(row.state,'building');assert.equal(row.lease_token,old.token);assert.equal(row.attempts,1);
+});
+test('background activation requires an actual freezing mutation owner before any database work',async()=>{
+  await assert.rejects(beginBuildActivation(null,{},null,{},version,async()=>{assert.fail('no observation');},new Date(AT),undefined,undefined,undefined,
+    {observationTimeoutMs:3000,ownedBackground:true}),/build_background_owner_required/);
 });
 test('cleanup that consumes the build lease reclaims before the sole upload',async t=>{
   const f=await setup(t,{real:true,retentionMs:3600000}),clean=f.workspace.cleanPublicationBuild;
