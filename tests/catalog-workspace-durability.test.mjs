@@ -73,6 +73,15 @@ test('lost remote CAS ACK is reconciled by exact readback',async t=>{
   assert.equal(f.calls.filter(([method])=>method==='cas').length,2); // initial head + reservation, no redispatch
 });
 
+test('provider dispatch cannot pass an unfinished remote reservation CAS',async t=>{
+  const f=await fixture(t),w=await f.open(),original=f.store.compareAndSwap.bind(f.store);let release,entered,dispatched=false;
+  const barrier=new Promise(resolve=>{release=resolve;}),reached=new Promise(resolve=>{entered=resolve;});
+  f.store.compareAndSwap=async(...args)=>{entered();await barrier;return original(...args);};
+  const action=(async()=>{await w.reserveBudget(reservation);dispatched=true;})();await reached;
+  assert.equal(dispatched,false);assert.equal(JSON.parse(Buffer.from(f.objects.get('runs/test-run/head.json').bytes)).sequence,0);
+  release();await action;assert.equal(dispatched,true);assert.equal((await w.budget()).unconfirmedRequests,1);
+});
+
 for(const fault of ['before','after-unreadable'])test(`same local resume reconciles ${fault} without local-only repair or losing a charge`,async t=>{
   const f=await fixture(t),w=await f.open();f.setFault(fault);let dispatched=false;
   await assert.rejects(async()=>{await w.reserveBudget(reservation);dispatched=true;},/unknown/);assert.equal(dispatched,false);
@@ -96,7 +105,7 @@ for(const corruption of ['missing','body','event','manifest'])test(`restore refu
   const f=await fixture(t),w=await f.open(),ref=await w.putArtifact({fixture:'canonical body'},{kind:'phase',observedAt:NOW});
   await w.writeCheckpoint(null,cp());await w.close();
   await assert.rejects(f.open({directory:join(f.parent,'wrong-source'),mode:'resume',codeSha:'c'.repeat(40)}),/manifest_mismatch/);
-  const key=corruption==='event'?[...f.objects.keys()].find(key=>key.includes('/events/'))
+  const key=corruption==='event'?[...f.objects.keys()].find(key=>key.includes('/events/')&&JSON.parse(Buffer.from(f.objects.get(key).bytes)).event.type==='artifact')
     :corruption==='manifest'?'runs/test-run/manifest.json':`runs/test-run/${ref.reference}`;
   if(corruption==='missing')f.objects.delete(key);
   else{const object=f.objects.get(key),value=JSON.parse(Buffer.from(object.bytes));
@@ -166,4 +175,27 @@ test('package restore refuses conflicting local files and changed source, never 
   assert.equal(await readFile(join(f.root,'entry.mts'),'utf8'),'unrelated current edit');
   const otherSource=join(f.parent,'different-source');await mkdir(otherSource,{mode:0o700});
   await assert.rejects(f.open({mode:'resume',repository:otherSource}),/publication_scope/);
+});
+
+for(const crash of ['before-body','after-body-before-head'])test(`runner loss ${crash} preserves cleanup identity without activating a missing/incomplete body`,async t=>{
+  const f=await fixture(t),w=await f.open();await w.reserveBudget(reservation);
+  const put=f.store.putImmutable.bind(f.store),cas=f.store.compareAndSwap.bind(f.store);let stopped=false;
+  if(crash==='before-body')f.store.putImmutable=async(key,bytes)=>{
+    if(!stopped&&key.includes('/objects/')){stopped=true;throw Error('synthetic_runner_loss');}return put(key,bytes);};
+  else f.store.compareAndSwap=async(key,expected,bytes)=>{
+    const next=JSON.parse(Buffer.from(bytes)),eventKey=`runs/test-run/events/${String(next.sequence).padStart(6,'0')}.${next.sha256}.json`;
+    const event=f.objects.get(eventKey);
+    if(!stopped&&event&&JSON.parse(Buffer.from(event.bytes)).event.type==='artifact'){stopped=true;throw Error('synthetic_runner_loss');}
+    return cas(key,expected,bytes);};
+  const value={fixture:'one original response'},ref={sha256:sha256(canonicalJson(value)),reference:`objects/${sha256(canonicalJson(value))}.json`};
+  await assert.rejects(w.putArtifact(value,{kind:'phase',observedAt:NOW}),/synthetic_runner_loss/);
+  await w.close();await rm(f.input.directory,{recursive:true});f.store.putImmutable=put;f.store.compareAndSwap=cas;
+  const restored=await f.open({mode:'resume'});assert.equal((await restored.budget()).unconfirmedRequests,1);
+  await assert.rejects(restored.readArtifact(ref),/unregistered_artifact/);
+  assert.deepEqual(await restored.purgeExpired(),[]);
+  assert.equal(f.objects.has(`runs/test-run/${ref.reference}`),crash==='after-body-before-head');
+  f.setNow(LATER);const expired=await restored.purgeExpired();assert.equal(expired.length,1);
+  assert.equal(f.objects.has(`runs/test-run/${ref.reference}`),false);
+  assert.ok([...f.objects.values()].some(v=>{try{return JSON.parse(Buffer.from(v.bytes)).event?.type==='body-registered';}catch{return false;}}));
+  assert.ok(f.objects.has('runs/test-run/manifest.json'));assert.equal((await restored.budget()).unconfirmedRequests,1);
 });
