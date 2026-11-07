@@ -98,7 +98,9 @@ test('hosted pending identity binds original source/run/day/inputs before any pr
   const runtime={care,state:{async readPointer(name,file){assert.equal(name,'pending-run');assert.equal(file,care+'/pending-run.json');return Buffer.from(JSON.stringify(pointer));},
     async bytes(file){assert.equal(file,pointer.pending.path);return body;}}};
   assert.deepEqual(await routineHostedPending(runtime,source,runKey),record);
-  await assert.rejects(routineHostedPending(runtime,'c'.repeat(40),runKey));await assert.rejects(routineHostedPending(runtime,source,'scheduled-2026-11-06'));
+  await assert.rejects(routineHostedPending(runtime,'c'.repeat(40),runKey));
+  assert.deepEqual(await routineHostedPending(runtime,'c'.repeat(40),runKey,{recovery:true}),record);
+  await assert.rejects(routineHostedPending(runtime,source,'scheduled-2026-11-06'));
   const original=pointer.pending.sha256;pointer.pending.sha256='d'.repeat(64);await assert.rejects(routineHostedPending(runtime,source,runKey));pointer.pending.sha256=original;
   const stopped={care,state:{async readPointer(){throw Error('read unknown');},async bytes(){assert.fail('Unknown pointer never becomes absence');}}};
   await assert.rejects(routineHostedPending(stopped,source,runKey),/read unknown/);

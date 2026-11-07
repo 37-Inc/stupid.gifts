@@ -68,6 +68,14 @@ function parsedOutput(stdout){
     if(value&&(typeof value.state==='string'||SOURCE.test(value.source)&&HASH.test(value.configSha256)&&typeof value.runId==='string'))records.push(value);}catch{/* never echo raw child output */}
   if(!records.length)fail('operator_output');return records.at(-1);
 }
+/** Child diagnostics are machine codes only, never command lines, provider
+ * bodies or raw output (which may contain credentials). */
+export function hostedOperatorFailure(error){
+  const codes=String(error.stderr??'').split('\n').map(line=>line.trim());
+  if(codes.includes('semantic_delta_pending'))return{state:'pending',errorCode:'semantic_delta_pending'};
+  const code=codes.findLast(value=>/^(?:routine|run_workspace|catalog_[a-z]+|publication|weekly)_[a-z0-9_]{1,100}$/.test(value));
+  return{state:'attention',errorCode:code??(error.killed?'catalog_hosted_operator_timeout':'catalog_hosted_operator_failed')};
+}
 export function validateHostedProposal({bytes,sha256,runId,catalogRevision,summary,approvalPin}){
   if(!HASH.test(sha256)||hash(bytes)!==sha256)fail('proposal_digest');const value=json(bytes);
   if(!exact(value,'schemaVersion,runId,catalogRevision,changes')||value.schemaVersion!==1||value.runId!==runId
@@ -116,8 +124,7 @@ function defaults(runtime,environment){
     async invoke(directory,args){
       try{const result=await exec(process.execPath,['--import','tsx','scripts/catalog/daily-operator.mjs',...args],{
         cwd:directory,env:hostedCommandEnvironment(environment),timeout:90*60000,maxBuffer:5*1024*1024});return parsedOutput(result.stdout);}
-      catch(error){if(/\bsemantic_delta_pending\b/.test(String(error.stderr??'')))return{state:'pending',errorCode:'semantic_delta_pending'};
-        fail('operator_failed');}
+      catch(error){return hostedOperatorFailure(error);}
     },
     async inspect(record,directory){
       const operator=await optional(async()=>json(await runtime.state.bytes(stateFile(record.runKey)+'/operator.json')));
@@ -140,7 +147,7 @@ function defaults(runtime,environment){
       const local=await Promise.all(['manifest.json','head.json'].map(name=>optional(()=>lstat(path.join(runtime.workspace,'runs',config.runId,name)))));
       if(remote.every(v=>v===null)&&local.every(v=>v===null))return{prepared:true,started:false,config};
       if(remote.some(v=>v===null))fail('workspace_uncertain');
-      const {openRunWorkspace}=await load(directory,'scripts/catalog/run-workspace.ts');
+      const {openRunWorkspace}=await import('./run-workspace.ts');
       const workspace=await openRunWorkspace({directory:runtime.workspace,repository:directory,mode:'resume',runId:config.runId,
         codeSha:record.source,configSha256:operator.configSha256,scope:CATALOG_SCOPE,retention:config.retention,
         budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe',durable:runtime.durable});
@@ -195,6 +202,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     ...shadowProviderFields(await deps.shadowCheck())};
   const finish=async result=>{await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:null},pointerBytes);return{...result,runKey:record.runKey,kind:record.kind,resumed};};
   const invoke=(command,extra=[])=>deps.invoke(directory,[command,...extra,'--run',record.runKey]);
+  const publish=(status,sha)=>record.source!==source&&['freezing','publishing','attention','published'].includes(status.phase)
+    ?deps.invoke(ROOT,['recover',sha,'--run',record.runKey]):invoke('publish',[sha]);
   let visibilityRetries=0;
   for(let transitions=0;transitions<16;transitions++){
     const status=await deps.inspect(record,directory);
@@ -220,11 +229,11 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
       if(review.state!=='requires_agent_review'||review.proposalPath!==file)fail('review_output');
       const checked=validateHostedProposal({bytes:await runtime.state.bytes(file),sha256:review.proposalSha256,
         runId:status.config.runId,catalogRevision:status.config.catalogRevision,summary:review.summary});
-      result=await invoke('publish',[checked.sha256]);
+      result=await publish(status,checked.sha256);
     }else if(status.approvalPin){
       const bytes=await runtime.state.bytes(runtime.care+'/runs/'+record.runKey+'/reviewed-proposal.json');
       const checked=validateHostedProposal({bytes,sha256:hash(bytes),runId:status.config.runId,catalogRevision:status.config.catalogRevision,approvalPin:status.approvalPin});
-      result=await invoke('publish',[checked.sha256]);
+      result=await publish(status,checked.sha256);
     }else if(['created','phases_running'].includes(status.phase))result=await invoke('resume');
     else return{state:'attention',runKey:record.runKey,phase:status.phase,errorCode:'catalog_hosted_checkpoint_requires_attention'};
     if(result.state==='finalized')continue;

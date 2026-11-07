@@ -73,6 +73,22 @@ test('lost remote CAS ACK is reconciled by exact readback',async t=>{
   assert.equal(f.calls.filter(([method])=>method==='cas').length,2); // initial head + reservation, no redispatch
 });
 
+test('same-runner resume reuses hash-verified immutable bytes but still checks the remote head and manifest',async t=>{
+  const f=await fixture(t),w=await f.open();await w.putArtifact({fixture:'cached'},{kind:'phase',observedAt:NOW});
+  await w.writeCheckpoint(null,cp());await w.reserveBudget(reservation);await w.close();f.calls.length=0;
+  const resumed=await f.open({mode:'resume'});assert.equal((await resumed.budget()).unconfirmedRequests,1);
+  assert.deepEqual(f.calls.filter(([method])=>method==='get').map(([,key])=>key),
+    ['runs/test-run/head.json','runs/test-run/manifest.json','runs/test-run/head.json']);
+});
+
+for(const target of ['event','body'])test(`same-runner resume refuses a tampered cached ${target}`,async t=>{
+  const f=await fixture(t),w=await f.open(),ref=await w.putArtifact({fixture:'unchanged'},{kind:'phase',observedAt:NOW});await w.close();
+  const file=target==='body'?join(w.directory,ref.reference):join(w.directory,'events',(await readdir(join(w.directory,'events')))[0]);
+  const value=JSON.parse(await readFile(file));if(target==='body')value.value.fixture='tampered';else value.sequence=999;
+  await writeFile(file,encode(value),{mode:0o600});
+  await assert.rejects(f.open({mode:'resume'}),/artifact_hash|journal_chain|body_registration/);
+});
+
 test('provider dispatch cannot pass an unfinished remote reservation CAS',async t=>{
   const f=await fixture(t),w=await f.open(),original=f.store.compareAndSwap.bind(f.store);let release,entered,dispatched=false;
   const barrier=new Promise(resolve=>{release=resolve;}),reached=new Promise(resolve=>{entered=resolve;});
