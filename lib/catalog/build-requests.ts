@@ -260,8 +260,14 @@ async function priorMatches(db: CatalogD1, request: CatalogBuildRequest, active:
  */
 export async function beginBuildActivation(db: CatalogD1, claim: CatalogBuildClaim, snapshot: CatalogSnapshot,
   publication: PublicationClaim, versionReference: string, readDeployment: (signal: AbortSignal) => Promise<DeploymentObservation>, now = new Date(), mutationOwner?: MutationOwner,
-  servingPrior?: DeploymentIdentity,continuation?:PermanentPublicationAuthority,options?:{observationTimeoutMs:number}): Promise<ActivationPermit> {
+  servingPrior?: DeploymentIdentity,continuation?:PermanentPublicationAuthority,options?:{observationTimeoutMs:number;ownedBackground?:true}): Promise<ActivationPermit> {
   if (typeof versionReference !== 'string' || !REFERENCE.test(versionReference)) throw new Error('invalid_build_reference');
+  const background=options?.ownedBackground===true;
+  if(background&&(!mutationOwner||mutationOwner.phase!=='freezing'))throw Error('build_background_owner_required');
+  // A routine background build keeps the exact non-expiring writer fence and
+  // original token, rather than renewing a timer while archiving. Only its build
+  // lease may be elapsed: source cutoff, publication lease, exact version and
+  // the final atomic owner/source/prior predicates below are unchanged.
   const stored = await row(db, claim.requestId);
   if (!stored || stored.state !== 'building' || stored.lease_token !== claim.token
     || stored.request_json !== encodeBuildRequest(claim.request) || stored.run_reference !== claim.runReference) throw new Error('build_fenced');
@@ -298,9 +304,9 @@ export async function beginBuildActivation(db: CatalogD1, claim: CatalogBuildCla
       AND (SELECT coalesce(max(sequence),0) FROM vector_sync_outbox WHERE source_revision=?)=?
       AND NOT EXISTS(SELECT 1 FROM vector_sync_outbox WHERE source_revision=? AND status!='complete')
       AND (? IS NULL OR ?>${NOW}) AND ${mutation.sql}`)
-    .bind(intent.releaseId, versionReference, claim.requestId, stored.request_json, claim.token, claim.runReference,continuation?1:0,
+    .bind(intent.releaseId, versionReference, claim.requestId, stored.request_json, claim.token, claim.runReference,continuation||background?1:0,
       ...gate.params, request.environment, receiptEpoch, ...imports.params, publication.intentId, intent.releaseId, encodePublicationIntent(intent), publication.token,
-      continuation?1:0,continuation?1:0,`version:${versionReference}`,
+      continuation?1:0,continuation||background?1:0,`version:${versionReference}`,
       intent.catalogRevision, intent.catalogSnapshotSha256, snapshot.products.length, ...visible.params, snapshot.products.length,
       intent.catalogRevision, intent.vectorSyncWatermark, intent.catalogRevision, intent.nextExpiry, intent.nextExpiry, ...mutation.params);
   if (mutationOwner) {

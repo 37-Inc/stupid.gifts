@@ -22,6 +22,12 @@ Codex timer, activate daily discovery, or authorize two production writers.
 - A fresh runner also recreates private temporary publication parents when a
   build stopped before its package was sealed. This reuses the original
   registration and deadlines; it does not fetch again or renew content.
+- Routine background publishing keeps its original build token and attempt
+  history under the unchanged, non-expiring mutation-owner fence. Saving a large
+  package does not require another timed build claim. The original source cutoff,
+  publication lease, exact dispatched version and atomic source/owner checks stay
+  mandatory. Legacy dispatchers and explicit historical recoveries keep their
+  existing timed-lease rules; uncertain uploads are never bypassed.
 - Provider header/body timeouts exclude the coordinator's own durable journal
   reservation and settlement. Those writes retain their separate bounded R2
   transport and must finish before the caller releases ownership. A slow journal
