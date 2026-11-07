@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {AwsClient} from 'aws4fetch';
+import {setTimeout as wait} from 'node:timers/promises';
 
 export interface DurableObject {bytes:Uint8Array;etag:string}
 export interface CatalogObjectStore {
@@ -17,7 +18,8 @@ const fail=(code:string):never=>{throw Error('catalog_object_store_'+code);};
 
 /** One private bucket/prefix; no list/create-bucket, public URL or credential
  * discovery. Conditional writes are atomic in R2. SDK transport retries are
- * disabled; an uncertain write is reconciled against exact bytes before ACK.
+ * disabled; transient GETs have bounded retries. An uncertain write is
+ * reconciled against exact bytes before ACK, never blindly dispatched again.
  * https://developers.cloudflare.com/r2/api/s3/api/ */
 export function createCatalogR2Store(options:{accountId:string;bucket:string;prefix:string;
   accessKeyId:string;secretAccessKey:string;send?:typeof fetch;timeoutMs?:number}):CatalogObjectStore {
@@ -57,10 +59,21 @@ export function createCatalogR2Store(options:{accountId:string;bucket:string;pre
     if(hash(bytes)!==digest)fail('digest');return{bytes:new Uint8Array(bytes),etag};
   }
   async function get(key:string){
-    const response=await request(key,'GET');
-    if(response.status===404){await response.body?.cancel();return null;}
-    if(response.status!==200){await response.body?.cancel();return fail('read_refused');}
-    return object(response);
+    for(let attempt=0;;attempt++){
+      let delay=100*2**attempt;
+      try{
+        const response=await request(key,'GET');
+        if(response.status===404){await response.body?.cancel();return null;}
+        if(response.status===429||response.status>=500){
+          const header=response.headers.get('retry-after'),retry=header===null?NaN:/^\d+$/.test(header)?Number(header)*1000:Date.parse(header)-Date.now();
+          await response.body?.cancel();if(Number.isFinite(retry))delay=Math.max(0,retry);
+          if(delay>30000)fail('read_throttled');fail('unavailable');
+        }
+        if(response.status!==200){await response.body?.cancel();return fail('read_refused');}
+        return await object(response);
+      }catch(error){if(attempt===2||!(error instanceof Error)||error.message!=='catalog_object_store_unavailable')throw error;}
+      await wait(delay);
+    }
   }
   async function write(key:string,expectedEtag:string|null,body:Uint8Array){
     if(!(body instanceof Uint8Array)||body.byteLength>MAX_BYTES||expectedEtag!==null&&!validEtag(expectedEtag))fail('configuration');
