@@ -249,9 +249,12 @@ async function releaseExact(db:CatalogD1,owner:MutationOwner){
     if(rows.length!==1)throw new Error('weekly_release_uncertain');
   }
 }
-async function mutationKnown(db:CatalogD1,deliveryId:string){
-  const row=(await db.prepare('SELECT mutation_reference FROM catalog_vector_deliveries WHERE delivery_id=?').bind(deliveryId).all()).results[0];
-  return typeof row?.mutation_reference==='string';
+export async function pendingVectorCode(db:CatalogD1,result:{errorCode:string|null;deliveryId:string}){
+  if(result.errorCode!=='mutation_unknown')return result.errorCode;
+  const row=(await db.prepare('SELECT mutation_reference FROM catalog_vector_deliveries WHERE delivery_id=?').bind(result.deliveryId).all()).results[0];
+  // A durable provider ACK permits bounded visibility polling of this SAME
+  // delivery. No ACK remains uncertain: never turn it into a dispatch retry.
+  return typeof row?.mutation_reference==='string'&&row.mutation_reference.length>0?'not_visible':'mutation_unknown';
 }
 export interface WeeklyDriverOptions {
   command:'preflight'|'start'|'resume'|'status';configPath:string;configSha256:string;workspace:string;
@@ -684,8 +687,9 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
             loadPayload:event=>loadMaintenanceVectorPayload(db,event)});await write({owner:result.owner});
           if(result.state==='expired')return{state:'attention',phase:cp.phase,reason:'expired_vector',budget:await ws.budget()};
           if(result.state==='complete'){await write({state:{...state(),outboxSequence:null}});break;}
-          if(pass===3||result.errorCode==='mutation_unknown'&&!await mutationKnown(db,result.deliveryId))
-            return{state:'pending',phase:cp.phase,errorCode:result.errorCode,budget:await ws.budget()};
+          const errorCode=await pendingVectorCode(db,result);
+          if(pass===3||errorCode==='mutation_unknown')
+            return{state:'pending',phase:cp.phase,errorCode,budget:await ws.budget()};
         }
         if(n===drainLimit-1)throw new Error('weekly_outbox_bound');
       }
@@ -740,8 +744,9 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           await write({owner:result.owner});
           if(result.state==='expired')return{state:'attention',phase:cp.phase,reason:'expired_vector',budget:await ws.budget()};
           if(result.state==='complete'){await write({state:{...state(),vectorOffset:index+1}});break;}
-          if(pass===3||result.errorCode==='mutation_unknown'&&!await mutationKnown(db,result.deliveryId))
-            return{state:'pending',phase:cp.phase,errorCode:result.errorCode,budget:await ws.budget()};
+          const errorCode=await pendingVectorCode(db,result);
+          if(pass===3||errorCode==='mutation_unknown')
+            return{state:'pending',phase:cp.phase,errorCode,budget:await ws.budget()};
         }
       }
       const derived=config.publication.semanticSearch?.derivedCatalog;
