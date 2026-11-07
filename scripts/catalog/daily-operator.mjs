@@ -305,7 +305,7 @@ async function review(entry,config,directory){
       const display=JSON.parse(p.public_display_json??'null');
       if(display?.price!==undefined&&display.price!==0)refuse('public_price');
       changes.push({publicId:p.public_id,operationId:op.operation_id,inputSha256:op.input_sha256,productSha256:sha256(canonicalJson(p)),displaySha256:sha256(p.public_display_json??'null')});
-      summary.push({id,publicId:p.public_id,slug:p.slug,editorialStatus:p.editorial_status,publicTitle:display?.title,description:display?.description,imageUrl:display?.imageUrl,persistent:display?.eligibleUntil===null||Boolean(display?.persistent),sourceFactsHash:p.source_facts_hash});
+      summary.push({id,publicId:p.public_id,slug:p.slug,editorialStatus:p.editorial_status,publicTitle:display?.title,description:display?.description,imageUrl:display?.imageUrl,publicAffiliateUrl:display?.affiliateUrl,persistent:display?.eligibleUntil===null||Boolean(display?.persistent),sourceFactsHash:p.source_facts_hash});
     }
     await mutationAssertion(db,owner,['writing']).all();
     const proposal={schemaVersion:1,runId:config.runId,catalogRevision:config.catalogRevision,changes:changes.sort((a,b)=>a.publicId.localeCompare(b.publicId))};
