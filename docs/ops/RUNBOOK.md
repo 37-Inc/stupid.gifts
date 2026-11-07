@@ -1,9 +1,11 @@
 # Stupid Gifts — Catalog care
 
 Read current canonical Beads in `~/roadmap`, the actual public
-`https://stupid.gifts/.well-known/catalog-release.json`, and protected
-`daily-catalog-care/last-success.json` first. Serving code and accepted catalog
-can differ. Use their clean retained operator; never overwrite a newer accepted
+`https://stupid.gifts/.well-known/catalog-release.json`, and the hosted private
+R2 `pointers/last-success.json` first. The Mac's pre-cutover
+`daily-catalog-care/last-success.json` is retained history, not the current hosted
+catalog pointer. Serving code and accepted catalog can differ.
+Use their clean retained operator; never overwrite a newer accepted
 site with an old checkout or modify a source while its run is active.
 
 ## Current mode
