@@ -31,6 +31,11 @@ run a local publisher while hosted care or a saved hosted publication is active.
   transport and must finish before the caller releases ownership. A slow journal
   must not abort a provider request before dispatch. Real provider timeouts still
   retain the original unknown charge; uncertain writes are never replayed.
+- Exact owned native proofs use a finite background window before the short
+  core queue observation, rather than counting remote journal latency against
+  that observation. Core still rechecks the immutable policy, owner, full source,
+  projection, prior receipt, watermark and cutoff before its atomic queue write.
+  Arbitrary adapters retain their existing short observation deadlines.
 - Hosted source paths are stable at `/home/runner/stupid-gifts/operators/<SHA>`;
   private state is under `/home/runner/.codex/private/goose-gifts-migration`.
   Finish existing Mac-bound runs locally. Never pretend they were hosted runs.

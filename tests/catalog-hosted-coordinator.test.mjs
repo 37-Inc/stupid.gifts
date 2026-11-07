@@ -20,6 +20,8 @@ test('operator failure reports only the final safe machine code, never raw outpu
   assert.deepEqual(hostedOperatorFailure({stderr:'semantic_delta_pending\n'}),{state:'pending',errorCode:'semantic_delta_pending'});
   assert.deepEqual(hostedOperatorFailure({stderr:'catalog_d1_identity_unavailable\n'}),{state:'pending',errorCode:'catalog_d1_identity_unavailable'});
   assert.deepEqual(hostedOperatorFailure({stderr:'vector_provider_failed\n'}),{state:'attention',errorCode:'vector_provider_failed'});
+  for(const errorCode of ['vector_plan_incomplete','cohort_revision_changed','prune_vectors_unconfirmed','search_delta_pending'])
+    assert.deepEqual(hostedOperatorFailure({stderr:errorCode+'\n'}),{state:'attention',errorCode});
   assert.deepEqual(hostedOperatorFailure({stderr:'catalog_d1_result_unknown\n'}),{state:'attention',errorCode:'catalog_d1_result_unknown'});
   assert.deepEqual(hostedOperatorFailure({stderr:'unknown secret',killed:true}),{state:'attention',errorCode:'catalog_hosted_operator_timeout'});
 });
