@@ -32,6 +32,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y bubblewrap
           sudo apparmor_parser -r .github/catalog-bwrap.apparmor
+      - name: Install pinned uploader dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Prove Linux isolation without provider credentials
         env:
           CATALOG_LINUX_SANDBOX_TESTS: '1'
