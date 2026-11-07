@@ -85,6 +85,20 @@ test('accounted routine requests are telemetry beyond the old limit, not a reaso
   assert.equal(db.metrics().statements,4);
 });
 
+test('read-only preparation observes aggregate estimates without allowing writes or relaxing old defaults',async t=>{
+  const f=await fixture(t),db=await createCatalogD1ReadOnlyRest({...config,fetch:f.fetch,requestLimit:'observe',
+    limits:{requests:1,statements:1,reportedRowsRead:1,reportedRowsWritten:1}});
+  for(let n=0;n<5;n++)await db.prepare('SELECT 1').all();
+  assert.ok(db.metrics().requests>1);assert.ok(db.metrics().statements>1);assert.ok(db.metrics().reportedRowsRead>1);
+  const before=f.calls.length,metrics=db.metrics();
+  await assert.rejects(db.prepare("INSERT INTO items VALUES('not-allowed','not-allowed')").run(),/diagnostic_read_only/);
+  await assert.rejects(db.prepare('WITH x AS (SELECT 1) DELETE FROM items').run(),/diagnostic_read_only/);
+  assert.equal(f.calls.length,before);assert.deepEqual(db.metrics(),metrics);assert.equal(f.sql.prepare('SELECT count(*) n FROM items').get().n,0);
+  const legacy=await createCatalogD1ReadOnlyRest({...config,fetch:f.fetch,limits:{requests:3,statements:3}});
+  await legacy.prepare('SELECT 1').all();await assert.rejects(legacy.prepare('SELECT 1').all(),/budget_exhausted/);
+  await assert.rejects(createCatalogD1Rest({...config,fetch:f.fetch,requestLimit:'observe'}),/configuration_invalid/);
+});
+
 test('routine observation records rows beyond estimates and still requires durable accounting',async t=>{
   const f=await fixture(t),accounting={scope:{accountId:config.accountId,databaseId:config.databaseId,databaseName:config.databaseName},
     initial:{httpRequests:6000,sqlStatements:0,knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:0},async reserve(){},async settle(){}};

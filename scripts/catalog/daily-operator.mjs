@@ -199,6 +199,7 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins){
   if(!['permanent-catalog-seal','approved-catalog-seal'].includes(seal.kind))refuse('prior_kind');
   const token=await RUNTIME.token(),plan=await currentD1Plan(token),limits=routineLimits(plan),capacity=await observeHeadroom(token,undefined,null,fetch,plan);
   const db=await createCatalogD1ReadOnlyRest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,
+    ...(bundled?{requestLimit:'observe'}:{}),
     limits:{requests:automation?160:10,statements:automation?240:12,reportedRowsRead:20000,reportedRowsWritten:1}});
   const rows=await db.batch([
     db.prepare('SELECT coalesce(max(sequence),0) n FROM vector_sync_outbox WHERE source_revision=?').bind(seal.projectionReceipt.catalog_revision),

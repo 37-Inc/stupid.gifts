@@ -76,8 +76,9 @@ type RestClient=CatalogD1 & { providerIdentity:string;metrics:()=>{
 } };
 export function createCatalogD1Rest(options:RestOptions):Promise<RestClient>{return createRest(options);}
 
-/** Diagnostics reject unsupported SQL before a budget reservation or dispatch.
- * A network failure after dispatch is still recorded as unknown, as usual. */
+/** Diagnostics reject unsupported SQL before a reservation or dispatch.
+ * Read-only preparation may observe aggregate estimates without a write ledger;
+ * writable transports still require durable accounting for observation mode. */
 export function createCatalogD1ReadOnlyRest(options:RestOptions):Promise<RestClient>{
   return createRest(options,undefined,batch=>{
     for(const {sql} of batch){
@@ -87,7 +88,7 @@ export function createCatalogD1ReadOnlyRest(options:RestOptions):Promise<RestCli
         || /\b(?:INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER|CREATE|PRAGMA|ATTACH|DETACH|VACUUM)\b/i.test(text))
         throw new Error('catalog_d1_diagnostic_read_only');
     }
-  });
+  },true);
 }
 
 /** Explicit one-time operator only. Bind this profile to a NEW workspace's
@@ -216,7 +217,7 @@ export function createCatalogD1PublicationRecoveryRest(options:Omit<RestOptions,
     assert();return createRest({...options,accounting:guarded,limits:budget.profile.limits},assert,beforeBatch);
   }catch{return Promise.reject(new Error('publication_recovery_budget_refused'));}
 }
-async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBatch?:(batch:Query[])=>void):Promise<RestClient>{
+async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBatch?:(batch:Query[])=>void,readOnly=false):Promise<RestClient>{
   const { accountId,databaseId,databaseName,token }=options;
   const limits={...CATALOG_D1_REST_LIMITS,...options.limits};
   if(typeof accountId!=='string'||!/^[a-f0-9]{32}$/.test(accountId)||typeof databaseId!=='string'
@@ -227,7 +228,7 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     ||Object.entries(limits).some(([key,value])=>!integer(value)||value<1||value>(migrationAssert&&key==='reportedRowsRead'?5_000_000
       :migrationAssert&&key==='reportedRowsWritten'?100_000:HARD_LIMITS[key as keyof Limits]))
     ||limits.timeoutMs<10||options.requestLimit!==undefined&&!['enforce','observe'].includes(options.requestLimit)
-    ||options.requestLimit==='observe'&&(!options.accounting||migrationAssert))throw new Error('catalog_d1_configuration_invalid');
+    ||options.requestLimit==='observe'&&(!options.accounting&&!readOnly||migrationAssert))throw new Error('catalog_d1_configuration_invalid');
   // Existing routine configs keep their original estimates and hashes. Observe
   // means all aggregate usage is advisory; wire/SQL/identity bounds stay strict.
   const enforceRequests=options.requestLimit!=='observe';
