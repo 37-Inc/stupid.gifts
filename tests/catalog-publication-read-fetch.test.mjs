@@ -45,6 +45,19 @@ test('abort during reserve never dispatches, preserves unknown once and awaits o
   assert.equal(returned,false);assert.equal(sends,0);assert.deepEqual(events,['reserve','unknown']);releaseSettle();await rejected;
   assert.deepEqual(events,['reserve','unknown','settled']);
 });
+test('slow durable reservation and settlement do not consume provider or body timeouts',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});let releaseReserve,releaseSettle,sends=0;const events=[];
+  const ws={async reserveBudget(){events.push('reserve');await new Promise(resolve=>{releaseReserve=resolve;});},
+    async settleBudget(_id,value){events.push(value.status);await new Promise(resolve=>{releaseSettle=resolve;});}};
+  const read=accountedPublicationReadFetch(ws,async()=>{sends++;return Response.json({success:true,result:[]});},scope);
+  const api=createVectorizeRestAdapters({...scope,environment:'staging',token:'TEST_ONLY',fetch:read,timeoutMs:10});
+  const pending=api.readback(id,new AbortController().signal);
+  t.mock.timers.tick(12_000);assert.equal(sends,0);releaseReserve();
+  for(let n=0;n<20;n++)await Promise.resolve();
+  assert.equal(sends,1);assert.deepEqual(events,['reserve','known']);
+  t.mock.timers.tick(12_000);releaseSettle();assert.equal(await pending,null);
+  assert.deepEqual(events,['reserve','known']);
+});
 test('default read timeout fences arbitrary raw sender and late response cannot touch ledger',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});let deliver,cancelled=false;const events=[];
   const ws={async reserveBudget(){events.push('reserve');},async settleBudget(_id,value){events.push(value.status);}};
@@ -60,7 +73,7 @@ test('owned native read waits for delayed durable cleanup beyond the generic ten
   const read=accountedPublicationReadFetch(ws,async()=>{sent=true;return new Promise(()=>{});},scope);
   const api=createVectorizeRestAdapters({...scope,environment:'staging',token:'TEST_ONLY',fetch:read,timeoutMs:10});
   const pending=api.readback(id,new AbortController().signal).finally(()=>{returned=true;}),rejected=assert.rejects(pending,/provider_failed/);
-  await Promise.resolve();assert.equal(sent,true);t.mock.timers.tick(10);await Promise.resolve();await Promise.resolve();
+  await Promise.resolve();assert.equal(sent,true);t.mock.timers.tick(10_000);await Promise.resolve();await Promise.resolve();
   assert.deepEqual(events,['reserve','unknown']);t.mock.timers.tick(10_000);await Promise.resolve();assert.equal(returned,false);assert.equal(settled,false);
   t.mock.timers.tick(2000);await rejected;assert.equal(settled,true);assert.equal(returned,true);assert.deepEqual(events,['reserve','unknown']);
 });
