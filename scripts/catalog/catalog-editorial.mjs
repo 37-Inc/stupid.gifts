@@ -20,7 +20,7 @@ const image=value=>{try{const u=new URL(value);return u.protocol==='https:'&&!u.
 export function createEditorialStages({read,put,now=()=>new Date().toISOString()}){
   if(typeof read!=='function'||typeof put!=='function')throw Error('editorial_storage_required');
   const stored=async key=>{try{return await read(key);}catch{throw Error('editorial_storage_unconfirmed');}};
-  const save=async(key,value)=>{try{await put(key,value);}catch{throw Error('editorial_storage_unconfirmed');}};
+  const save=async(key,value)=>{try{await put(key,value);}catch(error){throw Error('editorial_storage_unconfirmed',{cause:error});}};
   return{async run(stage,input,action){
     if(!/^[a-z][a-z0-9-]{0,39}$/.test(stage)||typeof action!=='function')throw Error('editorial_stage_invalid');
     const inputSha256=digest(input),key=`${stage}-${inputSha256}`;
@@ -34,7 +34,11 @@ export function createEditorialStages({read,put,now=()=>new Date().toISOString()
     if(await stored(`${key}-dispatch`))throw Error('editorial_dispatch_uncertain');
     await save(`${key}-dispatch`,{schemaVersion:1,stage,inputSha256,dispatchedAt:now()});
     let value;
-    try{value=await action();}catch{throw Error('editorial_dispatch_uncertain');}
+    try{value=await action();}catch(error){
+      if(['editorial_storage_unconfirmed','provider_evidence_storage_unconfirmed'].includes(error.message))
+        throw Error('editorial_storage_unconfirmed');
+      throw Error('editorial_dispatch_uncertain');
+    }
     await save(`${key}-result`,{schemaVersion:1,stage,inputSha256,completedAt:now(),value});
     return{value,reused:false};
   }};

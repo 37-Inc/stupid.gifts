@@ -1150,3 +1150,41 @@ test('oversized original input still binds reviewed RAW hash; config limit canno
   f.options.configSha256=sha256(await fs.readFile(f.options.configPath));await assert.rejects(f.run('preflight'),/weekly_private_input/);
   assert.equal(f.calls.http,http);
 });
+
+test('automation is strict opt-in and cannot broaden old cadence or combine admission authorities',async t=>{
+  const f=await setup(t);f.config.backfillLimit=0;
+  const cadence={day:'2026-10-20',featuredIds:[],runKey:f.config.runId,
+    automation:{schemaVersion:1,refreshIds:[ID],discovery:false}};
+  assert.deepEqual(validateCloudflareWeeklyConfig({...f.config,cadence}).cadence,cadence);
+  for(const changed of [
+    {...cadence,runKey:undefined}, {...cadence,admitAsins:[ID]},
+    {...cadence,automation:{...cadence.automation,refreshIds:[ID,ID]}},
+    {...cadence,automation:{...cadence.automation,extra:true}},
+    {...cadence,photosOnly:true,automation:{...cadence.automation,discovery:true}},
+  ])assert.throws(()=>validateCloudflareWeeklyConfig({...f.config,cadence:changed}),/cadence_invalid|automation_invalid/);
+});
+
+test('automation driver resumes an exact saved preparation without another supplier/model batch',async t=>{
+  const f=await setup(t,{permanent:22,held:2,authenticPrior:true});f.config.backfillLimit=0;delete f.config.credentials.openai;
+  f.config.cadence={day:'2026-10-20',featuredIds:[],runKey:f.config.runId,
+    automation:{schemaVersion:1,refreshIds:[ID],discovery:false}};
+  await f.configure();let stopped=false,mirrors=0;
+  f.dependencies.checkpointSaved=async({workspace,checkpoint})=>{
+    mirrors++;
+    if(stopped||!checkpoint.checkpoint.state.automationJournal)return;
+    const journal=await readOrdered(workspace,checkpoint.checkpoint.state.automationJournal);
+    if(journal.entries['phase-0-prepared']){stopped=true;throw Error('test_only_terminated_after_preparation');}
+  };
+  const interrupted=await f.run('start');assert.equal(interrupted.state,'attention',JSON.stringify(interrupted));
+  assert.equal(interrupted.phase,'phases_running');assert.equal(f.calls.getItems,1,JSON.stringify(interrupted));assert.equal(f.calls.chat+f.calls.embedding+f.calls.search,0);
+  const providerCalls=f.calls.getItems;
+  const resumed=await f.run('resume');assert.equal(resumed.reason,'awaiting_reviewed_approval',JSON.stringify(resumed));
+  assert.equal(f.calls.getItems,providerCalls);assert.equal(f.calls.chat+f.calls.embedding+f.calls.search,0);assert.ok(mirrors>5);
+  const ws=await openRunWorkspace(f.workspaceOptions);try{
+    const cp=await ws.readCheckpoint(),journal=await readOrdered(ws,cp.checkpoint.pins.automationJournal);
+    assert.ok(journal.entries['phase-0-applied']);assert.ok(journal.entries['provider-phases-complete']);
+    assert.equal(journal.receipts.length,1);
+  }finally{await ws.close();}
+  const result=await f.run('resume',await f.approve());
+  assert.equal(result.state,'finalized',JSON.stringify(result));assert.equal(f.calls.getItems,providerCalls);
+});

@@ -31,7 +31,9 @@ export function decodeD1CatalogTelemetryRow(row:Row):Row {
  * owner cursor as maintenance; callers await operations sequentially. Never
  * claims/releases/auto-refreshes ownership or changes historical source bytes.
  */
-export function createD1CatalogTelemetryStore(options:{db:CatalogD1;owner:MutationOwner;ownerCursor?:OwnerCursor;runId:string;catalogRevision:string}) {
+export function createD1CatalogTelemetryStore(options:{db:CatalogD1;owner:MutationOwner;ownerCursor?:OwnerCursor;runId:string;catalogRevision:string;
+  /** Optional durable dispatch journal, after exact normalization and before D1. */
+  beforeMutation?:(input:{operationId:string;inputSha256:string;owner:MutationOwner})=>Promise<void>}) {
   const {db,runId,catalogRevision}=options;const cursor=options.ownerCursor||{current:options.owner};
   if(!KEY.test(runId)||!KEY.test(catalogRevision)||catalogRevision.length>64||options.owner.phase!=='writing')throw new Error('telemetry_configuration');
   let tail:Promise<unknown>=Promise.resolve();
@@ -49,6 +51,7 @@ export function createD1CatalogTelemetryStore(options:{db:CatalogD1;owner:Mutati
     // This input cap also bounds escaped HTTP bodies below512KiB.
     if(Buffer.byteLength(bytes)>96*1024)throw new Error('telemetry_bounds');
     const hash=sha256(bytes);const operationId=sha256(`telemetry:${runId}:${hash}`);
+    await options.beforeMutation?.({operationId,inputSha256:hash,owner:{...owner}});
     const recover=async()=>{
       const receipt=(await rows('SELECT * FROM catalog_maintenance_operations WHERE operation_id=?',[operationId]))[0];
       if(!receipt)return false;

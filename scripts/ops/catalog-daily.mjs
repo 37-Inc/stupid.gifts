@@ -127,6 +127,72 @@ export async function dailyCatalogPhases(cadence, featuredIds = [], photosOnly =
   return phases;
 }
 
+/** Explicit successor policy only. The immutable run pins its finite work set;
+ * legacy day/week reservations and their ten/twenty-item policy stay unchanged.
+ * 10,000 is the existing captured-catalog transport bound, not an admission quota.
+ */
+export function validateCatalogAutomation(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).sort().join(',') !== 'discovery,refreshIds,schemaVersion'
+    || value.schemaVersion !== 1 || typeof value.discovery !== 'boolean'
+    || !Array.isArray(value.refreshIds) || value.refreshIds.length > 10000
+    || new Set(value.refreshIds).size !== value.refreshIds.length || value.refreshIds.some(id => typeof id !== 'string' || !ASIN.test(id)))
+    throw new Error('catalog_automation_invalid');
+  return structuredClone(value);
+}
+
+/** @param {unknown} value
+ * @param {{runId?:string,photosOnly?:boolean}} [options] */
+export function automatedCatalogPhases(value, options = {}) {
+  const { runId, photosOnly = false } = options;
+  const policy = validateCatalogAutomation(value);
+  if (!validCatalogRunKey(runId) || photosOnly && policy.discovery) throw new Error('catalog_automation_invalid');
+  const phases = [];
+  for (let offset = 0; offset < policy.refreshIds.length; offset += 10) {
+    const selectedIds = policy.refreshIds.slice(offset, offset + 10);
+    phases.push({ ...parseArgs(['--revalidate', '--revalidate-limit', String(selectedIds.length), '--backfill-limit', '0', '--skip-enrichment']),
+      dailyRefresh: true, selectedIds, deactivateMissing: false, enrichSelectedExisting: false,
+      ...(photosOnly ? { photosOnly: true } : {}), discoveryNewOnly: false });
+  }
+  if (policy.discovery) phases.push({ ...parseArgs(['--theme-limit', '6', '--per-theme', '10', '--max-new', '60', '--backfill-limit', '0']),
+    discoveryNewOnly: true, enrichSelectedExisting: false, discoveryRunKey: runId, deactivateMissing: false });
+  return phases;
+}
+
+/** A finite exact-ID firewall, not a second reservation or a taste filter. */
+export function automatedCatalogExecutor(execute = executeCatalog) {
+  return async (options, seed, telemetry, store, evidence) => {
+    const daily = options.dailyRefresh === true, selected = new Set(options.selectedIds || []);
+    if (options.enrichSelectedExisting || options.backfillLimit !== 0 || options.deactivateMissing !== false
+      || daily && (!selected.size || selected.size > 10 || selected.size !== options.revalidateLimit))
+      throw new Error('catalog_automation_phase_invalid');
+    const existing = daily ? null : new Set((await store.getActiveCatalogIdentities({ includeInactive: true })).map(p => p.id));
+    const allowed = ids => { if (!daily || ids.some(id => !selected.has(id))) throw new Error('automation_unpinned_mutation'); };
+    const bounded = { ...store,
+      async getProductsForRevalidation(selection) {
+        if (!daily) throw new Error('automation_unpinned_mutation');
+        const rows = await store.getProductsForRevalidation({ ...selection, selectedIds: [...selected] });
+        if (rows.length !== selected.size || new Set(rows.map(p => p.id)).size !== rows.length || rows.some(p => !selected.has(p.id)))
+          throw new Error('daily_selection_changed');
+        return rows;
+      },
+      async upsertProduct(product, hash) {
+        if (daily) allowed([product.id]);
+        else if (!ASIN.test(product.id) || existing.has(product.id)) throw new Error('discovery_existing_mutation_forbidden');
+        const result = await store.upsertProduct(product, hash);
+        if (!daily) { if (!result.inserted) throw new Error('discovery_insert_not_new'); existing.add(product.id); }
+        return result;
+      },
+      async markConfirmedMissingUnavailable(ids) { allowed(ids); return store.markConfirmedMissingUnavailable(ids); },
+      async deactivateConfirmedMissing() { throw new Error('automation_catalog_deletion_forbidden'); },
+      async updateAmazonAffiliateUrl() { throw new Error('daily_global_affiliate_repair_forbidden'); },
+      async markCatalogDuplicate() { throw new Error('discovery_existing_mutation_forbidden'); },
+      async getProductsNeedingEnrichment() { throw new Error('daily_existing_enrichment_forbidden'); },
+    };
+    return execute(options, seed, telemetry, bounded, evidence);
+  };
+}
+
 /** Shared by Neon and the pinned D1 driver. The store firewall is intentional:
  * discovery cannot update inactive/same-ASIN rows or supersede old families.
  * Evidence is the existing optional callback; it sees the SAME response only.
