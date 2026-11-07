@@ -100,6 +100,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "autoprefixer": "^10.5.4",
+    "aws4fetch": "1.0.20",
     "dotenv": "^17.4.2",
     "drizzle-kit": "0.31.10",
     "eslint": "^9.39.5",
