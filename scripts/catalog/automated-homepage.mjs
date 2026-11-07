@@ -38,6 +38,7 @@ export async function curateAutomationHomepage({runtime,db,seal,prior,day,mercha
     // A saved response can outlive an edition-save failure or the runner.
     // Unknown remote state throws; it is never treated as absence/new work.
     workspace=await openRunWorkspace({...options,mode:local||remote?'resume':'create'});
+    if(runtime.hosted)await (await import('./hosted-cleanup.mjs')).registerHostedWorkspaceCleanup(runtime,workspace.manifest);
     let checkpoint=await workspace.readCheckpoint(),state=checkpoint?.checkpoint.state??{entries:{}};
     const save=async next=>{checkpoint=await workspace.writeCheckpoint(checkpoint?.sha256??null,
       {phase:'editing',owner:null,state:next,pins:{},phaseComplete:null});state=next;};

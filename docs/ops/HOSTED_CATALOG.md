@@ -82,6 +82,12 @@ when newer metadata is supplied.
    off. If cutover fails, stop hosted writes, reconcile pending work, then restore
    local writing—not both. Seven unattended cycles belong to the observation Bead.
 
+For the initial API-editor quality check, manual **editorial** uses the same
+Luna/photo-backed optional homepage editor against the current accepted catalog.
+Inspect its actual saved edition before activation. It fetches no supplier batch,
+changes no products and does not publish or enable policy. It is not a recurring
+extra job; normal morning preparation reuses the same day's saved edition.
+
 The same workflow has Pacific-time wakes at 08:30 (full care), 20:30 (due photos)
 and 10:30 (one morning catch-up). GitHub's native IANA timezone setting handles
 daylight saving time, without duplicate seasonal wakes or application clock

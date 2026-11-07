@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {registerHostedCleanup,cleanupHostedRuns} from '../scripts/catalog/hosted-cleanup.mjs';
+import {registerHostedCleanup,registerHostedWorkspaceCleanup,cleanupHostedRuns} from '../scripts/catalog/hosted-cleanup.mjs';
 import {CATALOG_SCOPE as scope} from '../scripts/catalog/automation-runtime.mjs';
 import {CATALOG_ENVIRONMENT_CREDENTIALS} from '../scripts/catalog/credential-reference.ts';
 const hash=b=>createHash('sha256').update(b).digest('hex'),bytes=v=>Buffer.from(JSON.stringify(v)+'\n');
@@ -24,7 +24,8 @@ function fixture(){
       indexName:scope.indexName,codeSha:SOURCE,sourceMode:'stupid-production',sourceRoot:repository,releaseId:'fixture-run',identityOrigin:'https://stupid.gifts',compatibilityDate:'2026-10-19',prior:null}};
   files.set(dir+'/hosted-run.json',bytes(record));files.set(dir+'/config.json',bytes(config));
   files.set(dir+'/operator.json',bytes({source:SOURCE,runId:config.runId,configPath:dir+'/config.json',configSha256:hash(bytes(config))}));
-  objects.set('runs/'+config.runId+'/manifest.json',{bytes:bytes({runId:config.runId,codeSha:SOURCE,configSha256:hash(bytes(config)),retention:config.retention,createdAt:NOW})});
+  objects.set('runs/'+config.runId+'/manifest.json',{bytes:bytes({schemaVersion:1,runId:config.runId,codeSha:SOURCE,configSha256:hash(bytes(config)),retention:config.retention,
+    scope,budgetCaps:{httpRequests:6000,sqlStatements:12000},createdAt:NOW})});
   const open=async options=>{opened++;assert.equal(options.repository,repository);assert.equal(options.runId,config.runId);assert.equal(options.codeSha,SOURCE);
     return{readCheckpoint:async()=>({checkpoint:{phase:'finalized',owner:null}}),publicationSuccess:async()=>({original:true}),
       purgeExpired:async()=>{purged++;return[{reference:'objects/registered-original.json'}];},retainedBodies:async()=>retained,close:async()=>{}};};
@@ -49,6 +50,15 @@ test('failed or changed housekeeping leaves the exact registration available for
   await assert.rejects(cleanupHostedRuns(f.runtime,async()=>f.repository,{now:()=>DUE,open:async()=>{throw Error('storage unavailable');}}));
   assert.deepEqual(f.pointer(),before);
   await assert.rejects(cleanupHostedRuns(f.runtime,async()=>'/different-source',{now:()=>DUE,open:f.open}),/cleanup_identity/);assert.equal(f.opened(),0);
-  const file=f.runtime.care+'/runs/'+f.record.runKey+'/hosted-run.json';f.files.set(file,bytes({...f.record,source:'c'.repeat(40)}));
+  const key='runs/fixture-run/manifest.json',object=f.objects.get(key);f.objects.set(key,{bytes:bytes({...JSON.parse(object.bytes),codeSha:'c'.repeat(40)})});
   await assert.rejects(cleanupHostedRuns(f.runtime,async()=>f.repository,{now:()=>DUE,open:f.open}),/cleanup_identity/);assert.deepEqual(f.pointer(),before);
+});
+test('optional homepage journals use the same original-manifest queue and cleanup, without requiring a catalog receipt',async()=>{
+  const f=fixture(),manifest=JSON.parse(f.objects.get('runs/fixture-run/manifest.json').bytes),runId='homepage-2026-11-06-'+SOURCE.slice(0,8);
+  manifest.runId=runId;manifest.retention.reviewReference='catalog-automation-spec/homepage-v1';f.objects.set('runs/'+runId+'/manifest.json',{bytes:bytes(manifest)});
+  await registerHostedWorkspaceCleanup(f.runtime,manifest);let purged=false;
+  const result=await cleanupHostedRuns(f.runtime,async()=>f.repository,{now:()=>DUE,open:async options=>{
+    assert.equal(options.runId,runId);return{readCheckpoint:async()=>({checkpoint:{phase:'editing',owner:null}}),
+      publicationSuccess:async()=>{throw Error('not a catalog publication');},purgeExpired:async()=>{purged=true;return[];},retainedBodies:async()=>false,close:async()=>{}};}});
+  assert.equal(result.state,'cleaned');assert.equal(purged,true);assert.equal(JSON.parse(f.pointer()).runs.length,0);
 });

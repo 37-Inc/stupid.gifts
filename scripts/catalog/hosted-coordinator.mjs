@@ -268,10 +268,15 @@ async function main(){
     const {activateHostedPolicy}=await import('./hosted-policy.mjs');
     console.log(JSON.stringify(await activateHostedPolicy(runtime,canaryId)));return;
   }
+  if(mode==='editorial'){
+    if(canaryId)fail('invocation');
+    const {previewHostedHomepage}=await import('./hosted-policy.mjs');
+    console.log(JSON.stringify(await previewHostedHomepage(runtime,{repository:ROOT,source,day:`${parts.year}-${parts.month}-${parts.day}`})));return;
+  }
   const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),source,day:`${parts.year}-${parts.month}-${parts.day}`,runtime});
   console.log(JSON.stringify(result));if(result.state==='attention'){console.error('::warning::Catalog run remains pending; resume its existing identity.');process.exitCode=1;}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)main().catch(error=>{
-  const code=/^catalog_(?:hosted|operator_state|object_store)_[a-z_]{1,100}$/.test(error.message)?error.message:'catalog_hosted_coordinator_failed';
+  const code=/^(?:catalog_(?:hosted|operator_state|object_store)|run_workspace|routine|weekly|publication)_[a-z0-9_]{1,100}$/.test(error.message)?error.message:'catalog_hosted_coordinator_failed';
   console.error(JSON.stringify({state:'attention',errorCode:code,pendingPreserved:true}));process.exitCode=1;
 });

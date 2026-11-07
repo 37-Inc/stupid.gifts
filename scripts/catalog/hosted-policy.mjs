@@ -55,3 +55,20 @@ export async function activateHostedPolicy(runtime,asin,verify=verifyCurrent,reg
   const inputsRef=await publishHostedInputs(store,inputs,originalInputs?.bytes??null);
   return{state:'policy_enabled',policy,inputsRef,acceptedCanary:accepted};
 }
+
+/** First-use quality check through the SAME optional homepage editor. It may
+ * save an edition, never fetch suppliers, claim D1, publish or enable policy. */
+export async function previewHostedHomepage(runtime,{repository,source,day}){
+  const files=await currentHostedInputs(runtime.durable);await restoreHostedInputs(runtime.durable,runtime.base,files);
+  const pending=await runtime.durable.get('pointers/pending-run.json');if(pending&&json(pending.bytes).pending!==null)fail();
+  const pointer=json(await runtime.state.readPointer('last-success',runtime.care+'/last-success.json')),
+    sealBytes=await runtime.state.bytes(pointer.control.path);if(hash(sealBytes)!==pointer.control.sha256)fail();
+  const seal=json(sealBytes),accepted=await verifyCurrent(runtime,seal,pointer),c=CATALOG_SCOPE;
+  const db=await createCatalogD1ReadOnlyRest({accountId:c.accountId,databaseId:c.databaseId,databaseName:c.databaseName,token:await runtime.token()});
+  const {routineHomepageEdition}=await import('./daily-operator.mjs'),{loadAutomationMerchandising}=await import('./automation-inputs.mjs'),
+    {curateAutomationHomepage}=await import('./automated-homepage.mjs');
+  const result=await curateAutomationHomepage({runtime,db,seal,prior:await routineHomepageEdition(day,pointer.control.path),
+    merchandising:await loadAutomationMerchandising({runtime,db,seal}),repository,source,day});
+  return{state:'editorial_preview',editorState:result.state,attention:result.attention??null,edition:result.edition,
+    acceptedCatalog:accepted,metrics:db.metrics(),supplierRequests:0,productMutations:0,publication:false};
+}

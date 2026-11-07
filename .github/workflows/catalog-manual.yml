@@ -12,10 +12,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Shadow, full/photo care, one-product canary, or explicit post-canary policy activation
+        description: Shadow, care/canary, optional editorial preview, or explicit post-canary activation
         type: choice
         default: shadow
-        options: [shadow, full, photos, canary, activate]
+        options: [shadow, full, photos, canary, editorial, activate]
       canary_asin:
         description: Exact existing public ASIN; required for canary or explicit activation after its acceptance
         type: string
