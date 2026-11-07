@@ -724,9 +724,14 @@ test('small permanent daily finishes beyond HTTP and SQL estimates with model-fr
   const request=f.sql.prepare('SELECT * FROM catalog_build_requests WHERE release_id=?').get(f.config.publication.releaseId);
   assert.equal(request.state,'resolved');assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'idle');
   assert.equal(f.sql.prepare('SELECT count(*) n FROM publication_receipts').get().n,2);
-  // Executor deliberately cleans its owned build tree after verified receipt.
+  // The supplier fixture explicitly reports OUT_OF_STOCK. The current stock
+  // policy unlists it without destroying its permanently cleared presentation.
+  // This remains a successful release, not an expiry-driven catalog deletion.
   const projected=f.sql.prepare("SELECT public_id,public_display_json FROM catalog_public_products WHERE catalog_revision='weekly-r' ORDER BY public_id").all();
-  assert.deepEqual(projected.map(p=>p.public_id),[UUID]);assert.equal(JSON.parse(projected[0].public_display_json).eligibleUntil,null);
+  assert.deepEqual(projected,[]);
+  const preserved=f.sql.prepare('SELECT public_display_json FROM products WHERE public_id=?').get(UUID);
+  assert.equal(JSON.parse(preserved.public_display_json).eligibleUntil,null);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM products').get().n,2);
   assert.equal(result.budget.httpRequests,f.calls.http);assert.equal(result.budget.sqlStatements,f.calls.sql);
   assert.ok(result.budget.httpRequests>f.config.limits.requests);
   assert.ok(result.budget.sqlStatements>f.config.limits.statements);
