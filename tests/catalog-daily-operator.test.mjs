@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { headroom, observeHeadroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation, cleanupAcceptedPublication,
-  routineAutomationPolicy,materializeRoutinePreparation,routineFreshnessPool,hydrateRoutineInputs } from '../scripts/catalog/daily-operator.mjs';
+  routineAutomationPolicy,materializeRoutinePreparation,routineFreshnessPool,hydrateRoutineInputs,routineHostedPending } from '../scripts/catalog/daily-operator.mjs';
 import {sha256} from '../scripts/catalog/migration.ts';
 
 test('cleanup failures after acceptance are advisory, including open and close failures',async()=>{
@@ -71,6 +71,30 @@ test('fresh runner hydrates exact technical input refs and current semantic meta
   await hydrateRoutineInputs(config,async(file,hash)=>calls.push({file,hash}));
   assert.deepEqual(calls.map(c=>c.file),['/protected/seal.json','/protected/context.json','/protected/rights.json','/protected/semantic.json']);
   assert.ok(calls.every(c=>c.hash==='a'.repeat(64)));
+});
+
+test('hosted pending identity binds original source/run/day/inputs before any prepare or resume',async()=>{
+  const source='a'.repeat(40),day='2026-11-05',runKey='scheduled-'+day,care='/protected/care',
+    record={schemaVersion:1,runKey,source,day,kind:'full',inputsRef:{schemaVersion:1,key:'inputs/'+'b'.repeat(64)+'.json',sha256:'b'.repeat(64)}},
+    body=Buffer.from(JSON.stringify(record)+'\n'),pointer={schemaVersion:1,pending:{path:care+'/runs/'+runKey+'/hosted-run.json',sha256:sha256(body)}};
+  const runtime={care,state:{async readPointer(name,file){assert.equal(name,'pending-run');assert.equal(file,care+'/pending-run.json');return Buffer.from(JSON.stringify(pointer));},
+    async bytes(file){assert.equal(file,pointer.pending.path);return body;}}};
+  assert.deepEqual(await routineHostedPending(runtime,source,runKey),record);
+  await assert.rejects(routineHostedPending(runtime,'c'.repeat(40),runKey));await assert.rejects(routineHostedPending(runtime,source,'scheduled-2026-11-06'));
+  const original=pointer.pending.sha256;pointer.pending.sha256='d'.repeat(64);await assert.rejects(routineHostedPending(runtime,source,runKey));pointer.pending.sha256=original;
+  const stopped={care,state:{async readPointer(){throw Error('read unknown');},async bytes(){assert.fail('Unknown pointer never becomes absence');}}};
+  await assert.rejects(routineHostedPending(stopped,source,runKey),/read unknown/);
+});
+
+test('one-product canary is exact owner-invoked pending metadata, not a recurring business quota',async()=>{
+  const source='a'.repeat(40),day='2026-11-05',canaryId='B000000001',runKey='canary-'+day+'-'+canaryId,care='/protected/care',
+    record={schemaVersion:1,runKey,source,day,kind:'canary',canaryId,inputsRef:{schemaVersion:1,key:'inputs/'+'b'.repeat(64)+'.json',sha256:'b'.repeat(64)}},
+    body=Buffer.from(JSON.stringify(record)+'\n'),runtime={care,state:{async readPointer(){return Buffer.from(JSON.stringify({schemaVersion:1,pending:{path:care+'/runs/'+runKey+'/hosted-run.json',sha256:sha256(body)}}));},async bytes(){return body;}}};
+  const pending=await routineHostedPending(runtime,source,runKey);assert.equal(pending.canaryId,canaryId);
+  assert.equal(operatorInvocation(['prepare','--run',runKey,'--canary-id',canaryId],{day}).canaryId,canaryId);
+  for(const args of [['prepare','--canary-id',canaryId],['start','--run',runKey,'--canary-id',canaryId],
+    ['prepare','--run',runKey,'--canary-id','B000000002'],['prepare','--run',runKey,'--canary-id',canaryId,'--photos-only']])
+    assert.throws(()=>operatorInvocation(args,{day}));
 });
 
 test('photo-only preparation requires an explicit stable label; later commands use the saved config',()=>{

@@ -39,18 +39,24 @@ const HASH=/^[a-f0-9]{64}$/;
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 const self=digest(await fs.readFile(new URL(import.meta.url)));
 function refuse(code){throw Error('routine_'+code);}
-async function source(command,runKey){
+async function source(command,runKey,pending){
   const git=(...args)=>execFileSync('git',args,{cwd:ROOT,encoding:'utf8'}).trim();
   if(process.versions.node.split('.')[0]!=='22'||process.cwd()!==ROOT||git('rev-parse','HEAD')!==SOURCE||git('status','--porcelain','--untracked-files=all'))refuse('source');
+  if(Object.keys(process.env).some(k=>/^(AMAZON_|OPENAI_|POSTGRES_|VERCEL_|CATALOG_)/.test(k)))refuse('ambient_configuration');
   if(RUNTIME.hosted&&process.env.GITHUB_SHA!==SOURCE){
-    if(!['resume','publish','review','status','recover'].includes(command)||!runKey)refuse('hosted_source');
+    if(!['prepare','start','resume','publish','review','status','recover'].includes(command)||!pending||!runKey)refuse('hosted_source');
     try{git('merge-base','--is-ancestor',SOURCE,process.env.GITHUB_SHA);}catch{refuse('hosted_source');}
-    const saved=await json(CARE+'/runs/'+runKey+'/operator.json');
-    if(saved.source!==SOURCE||saved.helperSha256!==self)refuse('hosted_source');
+    const saved=await optional(CARE+'/runs/'+runKey+'/operator.json');
+    if(command==='prepare'&&!saved)return;
+    if(!saved||saved.source!==SOURCE||saved.helperSha256!==self)refuse('hosted_source');
     const config=validateCloudflareWeeklyConfig(await json(saved.configPath,saved.configSha256));
     if(config.codeSha!==SOURCE||config.publication.sourceRoot!==ROOT||config.runId!==saved.runId)refuse('hosted_source');
+    if(command==='start'){
+      const run='runs/'+saved.runId+'/',local=[WORKSPACE+'/'+run+'manifest.json',WORKSPACE+'/'+run+'head.json'];
+      if(local.some(existsSync))refuse('hosted_start_requires_resume');
+      if(RUNTIME.durable&&(await RUNTIME.durable.get(run+'manifest.json')||await RUNTIME.durable.get(run+'head.json')))refuse('hosted_start_requires_resume');
+    }
   }
-  if(Object.keys(process.env).some(k=>/^(AMAZON_|OPENAI_|POSTGRES_|VERCEL_|CATALOG_)/.test(k)))refuse('ambient_configuration');
 }
 async function bytes(file,expected){
   const body=await RUNTIME.state.bytes(file);if(expected&&digest(body)!==expected)refuse('private_digest');return body;
@@ -62,6 +68,21 @@ async function put(file,value){
 async function optional(file){try{return await json(file);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 async function priorSuccess(){try{return await RUNTIME.state.readPointer('last-success',CARE+'/last-success.json');}
   catch(error){if(error.code==='ENOENT')return null;throw error;}}
+export async function routineHostedPending(runtime,source,runKey){
+  const pointer=JSON.parse(await runtime.state.readPointer('pending-run',runtime.care+'/pending-run.json'));
+  const ref=pointer?.pending;
+  if(pointer?.schemaVersion!==1||Object.keys(pointer).sort().join(',')!=='pending,schemaVersion'||!ref
+    ||Object.keys(ref).sort().join(',')!=='path,sha256'||ref.path!==runtime.care+'/runs/'+runKey+'/hosted-run.json'||!HASH.test(ref.sha256))refuse('hosted_pending');
+  const body=await runtime.state.bytes(ref.path);if(digest(body)!==ref.sha256)refuse('hosted_pending');const record=JSON.parse(body),canary=record.kind==='canary';
+  if(Object.keys(record).sort().join(',')!==`${canary?'canaryId,':''}day,inputsRef,kind,runKey,schemaVersion,source`||record.schemaVersion!==1
+    ||record.source!==source||! /^[a-f0-9]{40}$/.test(source)||record.runKey!==runKey||!['full','photos','canary'].includes(record.kind)
+    ||typeof record.day!=='string'||! /^\d{4}-\d{2}-\d{2}$/.test(record.day)||pacificCatalogCalendar(record.day+'T12:00:00Z').day!==record.day
+    ||runKey!==(canary?'canary-'+record.day+'-'+record.canaryId:(record.kind==='photos'?'photos-':'scheduled-')+record.day)
+    ||canary&&! /^[A-Z0-9]{10}$/.test(record.canaryId??'')||!record.inputsRef
+    ||Object.keys(record.inputsRef).sort().join(',')!=='key,schemaVersion,sha256'||record.inputsRef.schemaVersion!==1||!HASH.test(record.inputsRef.sha256)
+    ||record.inputsRef.key!=='inputs/'+record.inputsRef.sha256+'.json')refuse('hosted_pending');
+  return record;
+}
 export function routineAutomationPolicy(value){
   if(value===null)return null;
   if(!value||Object.keys(value).sort().join(',')!=='discovery,enabled,homepage,schemaVersion'||value.schemaVersion!==1
@@ -86,15 +107,17 @@ export async function materializeRoutinePreparation(directory,bundle,save=put){
   await save(operator.configPath,config);await save(directory+'/operator.json',operator);return operator;
 }
 /** Paged metadata only; no product/provider bodies or ownership are captured. */
-export async function routineFreshnessPool(db){
+export async function routineFreshnessPool(db,canaryId){
+  if(canaryId!==undefined&&! /^[A-Z0-9]{10}$/.test(canaryId))refuse('canary_identity');
   const products=[];let after='';
   for(;;){const rows=(await db.prepare(`SELECT p.id,p.source,p.is_active,p.duplicate_of_product_id,p.availability_status,p.availability_checked_at,
-      ${PHOTO_EXPIRY_SQL} photo_expiry FROM products p WHERE p.source='amazon' AND p.public_display_json IS NOT NULL AND p.id>? ORDER BY p.id LIMIT 100`)
-    .bind(after).all()).results;
+      ${PHOTO_EXPIRY_SQL} photo_expiry FROM products p WHERE p.source='amazon' AND p.public_display_json IS NOT NULL AND p.id${canaryId?'=':'>'}? ORDER BY p.id LIMIT 100`)
+    .bind(canaryId??after).all()).results;
     if(!rows.length)return products;
     for(const row of rows){if(typeof row.id!=='string'||row.id<=after||products.length>=10000)refuse('freshness_capture');
       products.push({id:row.id,source:row.source,isActive:row.is_active===1,publiclyCleared:true,duplicateOfProductId:row.duplicate_of_product_id,
         availabilityStatus:row.availability_status,availabilityCheckedAt:row.availability_checked_at,photoExpiresAt:row.photo_expiry});after=row.id;}
+    if(canaryId)return products;
   }
 }
 export async function hydrateRoutineInputs(config,read=bytes){
@@ -183,7 +206,7 @@ export async function assertNoUnsealedMaintenance(db,seal,scope=SCOPE){
   if(rows.length)refuse('unsealed_maintenance');
 }
 function options(config,configPath,configSha256){return{config,driver:{configPath,configSha256,workspace:WORKSPACE,cadenceOnly:true,...(RUNTIME.durable?{durable:RUNTIME.durable}:{})},workspace:{directory:WORKSPACE,repository:ROOT,mode:'resume',runId:config.runId,codeSha:SOURCE,configSha256,scope:SCOPE,retention:config.retention,budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe',...(RUNTIME.durable?{durable:RUNTIME.durable}:{})}};}
-async function prepare(directory,calendar,photosOnly=false,admitAsins){
+async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId){
   const old=await optional(directory+'/operator.json');
   if(old&&await optional(directory+'/success.json'))return{state:'skipped',reason:'run_already_completed',runId:old.runId};
   if(old?.source===SOURCE&&old.helperSha256===self){const bundle=await optional(directory+'/preparation.json');
@@ -192,7 +215,8 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins){
   const savedPreparation=await optional(directory+'/preparation.json');
   if(savedPreparation){if(savedPreparation.source!==SOURCE||savedPreparation.helperSha256!==self)refuse('operator_changed');
     return materializeRoutinePreparation(directory,savedPreparation);}
-  const automation=admitAsins?null:routineAutomationPolicy(await optional(CARE+'/automation-policy.json')),bundled=RUNTIME.hosted||Boolean(automation);
+  const automation=canaryId?{schemaVersion:1,enabled:true,discovery:false,homepage:false}
+    :admitAsins?null:routineAutomationPolicy(await optional(CARE+'/automation-policy.json')),bundled=RUNTIME.hosted||Boolean(automation);
   if(await optional(directory+'/prepare-intent.json'))refuse('preparation_interrupted');
   const priorBytes=await priorSuccess();if(RUNTIME.hosted&&!priorBytes)refuse('hosted_catalog_bootstrap');
   const prior=priorBytes?JSON.parse(priorBytes.toString('utf8')):INITIAL,seal=await json(prior.control.path,prior.control.sha256);
@@ -219,13 +243,14 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins){
   const servingPrior=await routineServingPrior(token,seal);
   const preparationReceipt={capacity,metrics:db.metrics(),servingPrior,prior,source:SOURCE,helperSha256:self};
   if(!bundled)await put(directory+'/preparation-receipt.json',preparationReceipt);
-  const now=new Date().toISOString(),cutoff=new Date(Date.now()+2*3600000).toISOString(),notAfter=new Date(Date.now()+86400000).toISOString();
+  const now=new Date().toISOString(),cutoff=new Date(Date.now()+(RUNTIME.hosted&&automation?24:2)*3600000).toISOString(),notAfter=new Date(Date.now()+86400000).toISOString();
   const context={envelopeSha256:sha256(seal.envelopeJson+'\n'),snapshotSha256:seal.snapshotSha256,projectionSha256:seal.projectionReceipt.projection_sha256,sourceExportSha256:seal.projectionReceipt.source_export_sha256,vectorSyncWatermark:rows[0].results[0].n,publicationReceiptWatermark:rows[1].results[0].n,cutoff,priorPublication:seal.publication};
   const inputValues={context,rights:{rightsById:{}}},inputs={previous:{path:prior.control.path,sha256:prior.control.sha256,observedAt:now}};
   for(const [name,value]of Object.entries(inputValues)){const file=directory+'/'+name+'.json';inputs[name]={path:file,
     sha256:bundled?digest(JSON.stringify(value)+'\n'):await put(file,value),observedAt:now};}
   const runId='daily-'+calendar.day+'-'+SOURCE.slice(0,8)+'-'+digest(path.basename(directory)).slice(0,8);
-  let homepageEdition=await routineHomepageEdition(calendar.day,prior.control.path);
+  let homepageEdition=await routineHomepageEdition(calendar.day,prior.control.path,canaryId?file=>
+    file===path.dirname(prior.control.path)+'/homepage-edition.json'?optional(file):null:optional);
   const semanticSearch=routineSearchPolicy(await optional(CARE+'/semantic-search.json'));
   const merchandising=bundled?await loadAutomationMerchandising({runtime:RUNTIME,db,seal}):await routineMerchandising();
   if(automation?.homepage&&!photosOnly){try{
@@ -234,10 +259,15 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins){
     if(readHomepageEdition(result.edition))homepageEdition=result.edition;
     if(result.attention)console.warn(JSON.stringify({notice:result.attention,catalogBlocked:false}));
   }catch{console.warn(JSON.stringify({notice:'homepage_editor_unavailable',catalogBlocked:false}));}}
-  const freshness=automation?planRoutineAutomation(await routineFreshnessPool(db),now,{exposedIds:[...homepageEdition.anchors,...homepageEdition.rotation],
+  const pool=automation?await routineFreshnessPool(db,canaryId):null;
+  if(canaryId&&(pool.length!==1||pool[0].id!==canaryId||!pool[0].isActive||pool[0].duplicateOfProductId))refuse('canary_not_cleared_public');
+  if(canaryId&&(await db.prepare('SELECT product_id FROM catalog_public_products WHERE catalog_revision=? AND product_id=?')
+    .bind(seal.projectionReceipt.catalog_revision,canaryId).all()).results.length!==1)refuse('canary_not_cleared_public');
+  const freshness=automation?planRoutineAutomation(pool,now,{exposedIds:[...homepageEdition.anchors,...homepageEdition.rotation],
     promotedIds:Object.entries(merchandising).filter(([,value])=>value.commissionPriority&&Date.parse(value.commissionUntil)>Date.parse(now)).map(([id])=>id),photosOnly}):null;
+  if(canaryId){freshness.refreshIds=[canaryId];freshness.canaryId=canaryId;}
   const automated=freshness?{schemaVersion:1,refreshIds:freshness.refreshIds,discovery:!photosOnly&&automation.discovery}:null;
-  const needsModel=admitAsins||!photosOnly&&(automated?automated.discovery:calendar.monday);
+  const needsModel=!canaryId&&(admitAsins||!photosOnly&&(automated?automated.discovery:calendar.monday));
   let discoveryInputs;
   if(automated?.discovery){try{discoveryInputs=await loadAutomationDiscoveryInputs({runtime:RUNTIME,db});}
     catch{discoveryInputs={leadAsins:[],searchTopics:[]};console.warn(JSON.stringify({notice:'discovery_leads_unavailable',catalogBlocked:false}));}}
@@ -315,6 +345,8 @@ export function operatorInvocation(argv,calendar){
   const admitFlag=args.indexOf('--admit-asins');
   const admitAsins=admitFlag>=0?args[admitFlag+1]?.split(','):undefined;
   if(admitFlag>=0)args.splice(admitFlag,2);
+  const canaryFlag=args.indexOf('--canary-id'),canaryId=canaryFlag>=0?args[canaryFlag+1]:undefined;
+  if(canaryFlag>=0)args.splice(canaryFlag,2);
   const flag=args.indexOf('--run');
   let runKey='scheduled-'+calendar.day;
   if(flag>=0){runKey=args[flag+1];args.splice(flag,2);}
@@ -323,17 +355,26 @@ export function operatorInvocation(argv,calendar){
     ||!['prepare','review','start','resume','publish','recover','status','reconcile-availability'].includes(command)
     ||(command==='resume'?args.length<1||args.length>2:args.length!==(['publish','recover'].includes(command)?2:1))
     ||command==='resume'&&approvalSha!==undefined&&!HASH.test(approvalSha)||photosOnly&&command!=='prepare'||photosOnly&&flag<0
+    ||canaryFlag>=0&&(command!=='prepare'||flag<0||photosOnly||admitAsins||! /^[A-Z0-9]{10}$/.test(canaryId??'')
+      ||runKey!=='canary-'+calendar.day+'-'+canaryId)
     ||admitFlag>=0&&(command!=='prepare'||flag<0||photosOnly||!admitAsins?.length||admitAsins.length>10
       ||new Set(admitAsins).size!==admitAsins.length||admitAsins.some(id=>! /^[A-Z0-9]{10}$/.test(id))))refuse('command');
-  return{command,approvalSha,runKey,...(photosOnly?{photosOnly:true}:{}),...(admitAsins?{admitAsins}:{})};
+  return{command,approvalSha,runKey,...(photosOnly?{photosOnly:true}:{}),...(admitAsins?{admitAsins}:{}),...(canaryId?{canaryId}:{})};
 }
 export async function main(argv=process.argv.slice(2)){
 if(argv[0]==='code-only'){await source('code-only');await (await import('./code-only-operator.mjs')).codeOnlyMain(argv.slice(1));return;}
-const calendar=pacificCatalogCalendar(),{command,approvalSha,runKey,photosOnly,admitAsins}=operatorInvocation(argv,calendar),directory=CARE+'/runs/'+runKey;
-await source(command,runKey);
+let calendar=pacificCatalogCalendar();
+// Parse the stable run key first. A captured prior day is trusted ONLY through
+// the immutable hosted pending record, never a CLI date/environment override.
+const rawRun=argv.indexOf('--run'),pending=RUNTIME.hosted?await routineHostedPending(RUNTIME,SOURCE,rawRun>=0?argv[rawRun+1]:'scheduled-'+calendar.day):null;
+if(pending)calendar=pacificCatalogCalendar(pending.day+'T12:00:00Z');
+const {command,approvalSha,runKey,photosOnly,admitAsins,canaryId}=operatorInvocation(argv,calendar),directory=CARE+'/runs/'+runKey;
+if(canaryId&&(!pending||pending.kind!=='canary'||pending.canaryId!==canaryId)||pending?.kind==='canary'&&command==='prepare'&&!canaryId)refuse('canary_authority');
+if(pending&&command==='prepare'&&(Boolean(photosOnly)!==(pending.kind==='photos')||admitAsins))refuse('hosted_pending');
+await source(command,runKey,pending);
 if(command==='prepare'||command==='reconcile-availability'){
   if(command==='reconcile-availability'&&(!argv.includes('--run')||photosOnly||admitAsins))refuse('availability_command');
-  const record=await prepare(directory,calendar,photosOnly,admitAsins);
+  const record=await prepare(directory,calendar,photosOnly,admitAsins,canaryId);
   if(command==='prepare'||record.state==='skipped')console.log(JSON.stringify(record));
   else{
     const config=validateCloudflareWeeklyConfig(await json(record.configPath,record.configSha256)),entry=options(config,record.configPath,record.configSha256);
