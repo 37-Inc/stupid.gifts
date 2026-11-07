@@ -304,7 +304,10 @@ for(const fault of [null,'native','owner'])test(`owned activation resolution sep
   const timer=globalThis.setTimeout;t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>
     timer(fn,ms===30_000&&f.checkpoint().control.publication?.stage==='published'?100:ms,...args));
   const result=await f.execute(db,{observationFetch:send});
-  assert.equal(result.state,fault?'pending':'published',JSON.stringify(result));assert.ok(events.length>0);assert.ok(!events.includes('unknown'));
+  assert.equal(result.state,fault?'pending':'published',JSON.stringify(result));assert.ok(events.length>0);
+  // A fenced SQL response is unreadable, so its original uncertainty charge
+  // survives rather than being refunded as a known zero-cost request.
+  assert.equal(events.includes('unknown'),fault==='owner');
   assert.equal(f.counts().uploadCalls,1);assert.equal(f.counts().activateCalls,1);
   assert.equal(f.sql.prepare('SELECT state FROM catalog_build_requests').get().state,fault?'activating':'resolved');
   if(!fault)assert.equal(await readMutationOwner(f.db,scope),null);
