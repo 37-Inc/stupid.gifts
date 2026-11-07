@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow} from '../scripts/catalog/hosted-coordinator.mjs';
+import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
 
@@ -13,6 +13,13 @@ const missing=()=>{const e=Error('missing');e.code='ENOENT';throw e;};
 const providerReport=()=>({schemaVersion:1,kind:'cloudflare-runner-readiness',environment:CATALOG_SCOPE.environment,
   resources:{accountId:CATALOG_SCOPE.accountId,databaseId:CATALOG_SCOPE.databaseId,databaseName:CATALOG_SCOPE.databaseName,indexName:CATALOG_SCOPE.indexName},
   status:'checks_passed_execution_unavailable',executionAvailable:false,issues:[],metrics:{requests:5,reportedRowsRead:201,reportedRowsWritten:0}});
+
+test('operator failure reports only the final safe machine code, never raw output or command arguments',()=>{
+  assert.deepEqual(hostedOperatorFailure({stderr:'secret URL https://example.invalid/private\nrun_workspace_durable_missing\n',
+    stdout:'private supplier body',message:'command with secret'}),{state:'attention',errorCode:'run_workspace_durable_missing'});
+  assert.deepEqual(hostedOperatorFailure({stderr:'semantic_delta_pending\n'}),{state:'pending',errorCode:'semantic_delta_pending'});
+  assert.deepEqual(hostedOperatorFailure({stderr:'unknown secret',killed:true}),{state:'attention',errorCode:'catalog_hosted_operator_timeout'});
+});
 function fixture(){
   const files=new Map(),events=[],calls=[],waits=[],restored=[],checkedOut=[];let pointer=null;
   const runtime={hosted:true,durable:{},base:'/private',care:'/private/daily-catalog-care',workspace:'/private/weekly-runs',state:{
@@ -62,6 +69,19 @@ test('pending intent survives interrupted prepare and resumes original source/da
   assert.deepEqual(f.checkedOut,[SOURCE,SOURCE]);assert.deepEqual(f.restored,[ref,ref]);
   assert.equal(f.events.filter(e=>e==='current-inputs').length,1);assert.ok(original);
   assert.ok(f.calls.every(args=>args.at(-1)==='scheduled-'+DAY));
+});
+
+test('new reviewed controller uses recovery only for the original already-approved post-provider publication',async()=>{
+  const f=fixture(),invoke=f.deps.invoke;
+  const held=await f.run({}, {invoke:async(directory,args)=>{
+    if(args[0]==='publish'){f.calls.push(args);f.phase='freezing';f.approvalPin=hash(canonicalJson(f.proposal));
+      return{state:'attention',errorCode:'catalog_hosted_operator_failed'};}return invoke(directory,args);}});
+  assert.equal(held.state,'attention');const startCalls=f.calls.filter(args=>args[0]==='start').length;
+  const resumed=await f.run({source:NEW_SOURCE},{invoke:async(directory,args)=>{
+    assert.equal(args[0],'recover');assert.equal(args[1],f.proposalSha);assert.equal(args.at(-1),'scheduled-'+DAY);
+    assert.notEqual(directory,'/operators/'+SOURCE);f.calls.push(args);f.phase='finalized';return{state:'finalized'};}});
+  assert.equal(resumed.state,'accepted');assert.equal(f.calls.filter(args=>args[0]==='start').length,startCalls);
+  assert.deepEqual(f.checkedOut,[SOURCE,SOURCE]);assert.deepEqual(f.restored,[ref,ref]);
 });
 test('unpointed immutable intent is recovered after pointer ACK loss, not relabeled to newer code/inputs',async()=>{
   const f=fixture(),record={schemaVersion:1,runKey:'scheduled-'+DAY,source:SOURCE,day:DAY,kind:'full',inputsRef:ref};

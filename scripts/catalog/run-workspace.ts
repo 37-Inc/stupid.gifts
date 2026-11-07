@@ -793,6 +793,13 @@ const eventName=(sequence:number,digest:string)=>`${String(sequence).padStart(6,
 async function durableJournal(input:RunWorkspaceOptions,directory:string,create:boolean) {
   const store=input.durable!,prefix=`runs/${input.runId}/`,headKey=prefix+'head.json';
   const get=async(name:string)=>{const object=await store.get(prefix+name);if(!object)fail('durable_missing');return object;};
+  // The remote head anchors immutable local bytes. Reopening on the same
+  // runner must not download the entire journal again; missing files still
+  // restore from the store, and every reused byte is verified below.
+  const cached=async(name:string)=>{
+    try{return{bytes:await readBytes(join(directory,name)),etag:''};}
+    catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;return get(name);}
+  };
   const put=async(name:string,bytes:Uint8Array)=>{
     const actual=await store.putImmutable(prefix+name,bytes);
     if(!Buffer.from(actual.bytes).equals(Buffer.from(bytes)))fail('durable_readback');
@@ -826,7 +833,7 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
     const manifest=remoteJson(await get('manifest.json')) as WorkspaceManifest;manifestInfo(manifest,input);
     const records:{name:string;record:RecordFile}[]=[];let digest=head.sha256,bytes=0;
     for(let sequence=head.sequence;sequence>0;sequence--){
-      const name=eventName(sequence,digest!),object=await get('events/'+name);bytes+=object.bytes.length;
+      const name=eventName(sequence,digest!),object=await cached('events/'+name);bytes+=object.bytes.length;
       if(bytes>MAX_JOURNAL)fail('journal_bytes');
       const record=remoteJson(object) as RecordFile;
       if(sha256(canonicalJson(record))!==digest||record.sequence!==sequence)fail('journal_chain');
@@ -842,8 +849,8 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
     await immutable(join(directory,'manifest.json'),manifest);
     for(const {name,record}of records)await immutable(join(directory,'events',name),record);
     for(const ref of state.refs.values())if(!state.purged.has(ref.sha256)){
-      const body=remoteJson(await get(ref.reference)) as Stored;validateStored(body,ref,manifest);boundPublicationBody(body,state);
       const registration=state.bodyRegistrations.get(ref.sha256);
+      const body=remoteJson(await (registration?cached(ref.reference):get(ref.reference))) as Stored;validateStored(body,ref,manifest);boundPublicationBody(body,state);
       if(registration&&registration.storedSha256!==sha256(canonicalJson(body)))fail('body_registration');
       await immutable(join(directory,ref.reference),body);
     }

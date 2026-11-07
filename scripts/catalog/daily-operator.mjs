@@ -69,14 +69,14 @@ async function put(file,value){
 async function optional(file){try{return await json(file);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 async function priorSuccess(){try{return await RUNTIME.state.readPointer('last-success',CARE+'/last-success.json');}
   catch(error){if(error.code==='ENOENT')return null;throw error;}}
-export async function routineHostedPending(runtime,source,runKey){
+export async function routineHostedPending(runtime,source,runKey,{recovery=false}={}){
   const pointer=JSON.parse(await runtime.state.readPointer('pending-run',runtime.care+'/pending-run.json'));
   const ref=pointer?.pending;
   if(pointer?.schemaVersion!==1||Object.keys(pointer).sort().join(',')!=='pending,schemaVersion'||!ref
     ||Object.keys(ref).sort().join(',')!=='path,sha256'||ref.path!==runtime.care+'/runs/'+runKey+'/hosted-run.json'||!HASH.test(ref.sha256))refuse('hosted_pending');
   const body=await runtime.state.bytes(ref.path);if(digest(body)!==ref.sha256)refuse('hosted_pending');const record=JSON.parse(body),canary=record.kind==='canary';
   if(Object.keys(record).sort().join(',')!==`${canary?'canaryId,':''}day,inputsRef,kind,runKey,schemaVersion,source`||record.schemaVersion!==1
-    ||record.source!==source||! /^[a-f0-9]{40}$/.test(source)||record.runKey!==runKey||!['full','photos','canary'].includes(record.kind)
+    ||record.source!==source&&!recovery||! /^[a-f0-9]{40}$/.test(source)||! /^[a-f0-9]{40}$/.test(record.source)||record.runKey!==runKey||!['full','photos','canary'].includes(record.kind)
     ||typeof record.day!=='string'||! /^\d{4}-\d{2}-\d{2}$/.test(record.day)||pacificCatalogCalendar(record.day+'T12:00:00Z').day!==record.day
     ||runKey!==(canary?'canary-'+record.day+'-'+record.canaryId:(record.kind==='photos'?'photos-':'scheduled-')+record.day)
     ||canary&&! /^[A-Z0-9]{10}$/.test(record.canaryId??'')||!record.inputsRef
@@ -376,7 +376,7 @@ if(argv[0]==='code-only'){
 let calendar=pacificCatalogCalendar();
 // Parse the stable run key first. A captured prior day is trusted ONLY through
 // the immutable hosted pending record, never a CLI date/environment override.
-const rawRun=argv.indexOf('--run'),pending=RUNTIME.hosted?await routineHostedPending(RUNTIME,SOURCE,rawRun>=0?argv[rawRun+1]:'scheduled-'+calendar.day):null;
+const rawRun=argv.indexOf('--run'),pending=RUNTIME.hosted?await routineHostedPending(RUNTIME,SOURCE,rawRun>=0?argv[rawRun+1]:'scheduled-'+calendar.day,{recovery:argv[0]==='recover'}):null;
 if(pending)calendar=pacificCatalogCalendar(pending.day+'T12:00:00Z');
 const {command,approvalSha,runKey,photosOnly,admitAsins,canaryId}=operatorInvocation(argv,calendar),directory=CARE+'/runs/'+runKey;
 if(canaryId&&(!pending||pending.kind!=='canary'||pending.canaryId!==canaryId)||pending?.kind==='canary'&&command==='prepare'&&!canaryId)refuse('canary_authority');
@@ -404,8 +404,9 @@ else{
   await hydrateRoutineInputs(config);
   if(recovering){
     const old=config.publication.sourceRoot,git=(...args)=>execFileSync('git',args,{cwd:old,encoding:'utf8'}).trim();
-    if(config.codeSha!==record.source||git('rev-parse','HEAD')!==record.source||git('status','--porcelain','--untracked-files=all')
+    if(RUNTIME.hosted&&pending?.source!==record.source||config.codeSha!==record.source||git('rev-parse','HEAD')!==record.source||git('status','--porcelain','--untracked-files=all')
       ||digest(await fs.readFile(old+'/scripts/catalog/daily-operator.mjs'))!==record.helperSha256)refuse('original_source');
+    try{git('merge-base','--is-ancestor',record.source,SOURCE);}catch{refuse('original_source');}
     entry.workspace.repository=old;entry.workspace.codeSha=record.source;
     const w=await openRunWorkspace(entry.workspace);
     try{const cp=await w.readCheckpoint({controlOnly:true});
