@@ -12,6 +12,9 @@ import {checkCloudflareRunner} from './check-cloudflare-runner.ts';
 
 const exec=promisify(execFile),HASH=/^[a-f0-9]{64}$/,SOURCE=/^[a-f0-9]{40}$/,ASIN=/^[A-Z0-9]{10}$/;
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url))),OPERATORS='/home/runner/stupid-gifts/operators';
+// Job-sized work may include a cold durable restore plus full catalog proofs.
+// Leave30min inside GitHub's six-hour ceiling for setup/acceptance/cleanup.
+export const HOSTED_OPERATOR_TIMEOUT_MS=330*60_000;
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===keys.split(',').sort().join(',');
 const fail=reason=>{throw Error('catalog_hosted_'+reason);};
@@ -126,7 +129,7 @@ function defaults(runtime,environment){
     async invoke(directory,args){
       console.log(JSON.stringify({state:'progress',step:'operator',command:args[0]}));
       try{const result=await exec(process.execPath,['--import','tsx','scripts/catalog/daily-operator.mjs',...args],{
-        cwd:directory,env:hostedCommandEnvironment(environment),timeout:90*60000,maxBuffer:5*1024*1024});return parsedOutput(result.stdout);}
+        cwd:directory,env:hostedCommandEnvironment(environment),timeout:HOSTED_OPERATOR_TIMEOUT_MS,maxBuffer:5*1024*1024});return parsedOutput(result.stdout);}
       catch(error){return hostedOperatorFailure(error);}
     },
     async inspect(record,directory){

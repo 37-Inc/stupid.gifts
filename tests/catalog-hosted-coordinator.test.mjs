@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure} from '../scripts/catalog/hosted-coordinator.mjs';
+import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,HOSTED_OPERATOR_TIMEOUT_MS} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
 
@@ -222,6 +222,7 @@ test('one Pacific workflow remains main-only, protected, serialized and has no P
   assert.equal((yaml.match(/timezone: America\/Los_Angeles/g)||[]).length,3);
   assert.match(yaml,/inputs.mode \|\| \(github.event.schedule == '30 20 \* \* \*' && 'photos' \|\| 'full'\)/);
   assert.match(yaml,/group: catalog-production/);assert.match(yaml,/cancel-in-progress: false/);assert.match(yaml,/environment: Production/);
+  assert.match(yaml,/timeout-minutes: 360/);assert.equal(HOSTED_OPERATOR_TIMEOUT_MS,330*60_000);
   assert.match(yaml,/if: github.ref == 'refs\/heads\/main'/);assert.match(yaml,/runs-on: ubuntu-24.04/);assert.match(yaml,/node-version: '22.23.1'/);
   assert.match(yaml,/persist-credentials: false/);assert.match(yaml,/apparmor_parser -r \.github\/catalog-bwrap.apparmor/);
   assert.doesNotMatch(yaml,/sysctl|--privileged|curl.*secret/i);assert.match(yaml,/npm ci --ignore-scripts/);
