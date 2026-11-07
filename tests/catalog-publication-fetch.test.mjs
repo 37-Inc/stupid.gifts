@@ -80,7 +80,7 @@ test('owned Vectorize mutation waits for its accounting even when settlement out
   const pending=api.dispatch({publicId:id,vector:sample},new AbortController().signal).finally(()=>{returned=true;});
   const rejected=assert.rejects(pending,/provider_failed/);
   for(let i=0;i<8;i++)await Promise.resolve();assert.equal(dispatched,true);
-  t.mock.timers.tick(10);for(let i=0;i<8;i++)await Promise.resolve();
+  t.mock.timers.tick(10_000);for(let i=0;i<8;i++)await Promise.resolve();
   assert.deepEqual(events,['reserve','unknown']);assert.equal(returned,false);
   t.mock.timers.tick(10_000);for(let i=0;i<8;i++)await Promise.resolve();assert.equal(returned,false);
   releaseSettle();await rejected;assert.equal(returned,true);assert.deepEqual(events,['reserve','unknown']);

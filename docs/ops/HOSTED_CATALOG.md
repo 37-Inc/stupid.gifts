@@ -26,6 +26,11 @@ run a local publisher while hosted care or a saved hosted publication is active.
   expired body/package bytes are purged; source bindings, controls and charges
   remain. A cleanup failure retains its registration and alerts without blocking
   a new catalog run. This is not another publisher or scheduled service.
+- Provider header/body timeouts exclude the coordinator's own durable journal
+  reservation and settlement. Those writes retain their separate bounded R2
+  transport and must finish before the caller releases ownership. A slow journal
+  must not abort a provider request before dispatch. Real provider timeouts still
+  retain the original unknown charge; uncertain writes are never replayed.
 - Hosted source paths are stable at `/home/runner/stupid-gifts/operators/<SHA>`;
   private state is under `/home/runner/.codex/private/goose-gifts-migration`.
   Finish existing Mac-bound runs locally. Never pretend they were hosted runs.
