@@ -860,20 +860,28 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       owner=control.permit.mutationOwner!;
       const receiptOnly=options.acceptedReceiptOnly===true;
       let receiptInventoryOwner:MutationOwner|undefined;
+      let nativeObservationOwner:MutationOwner|undefined;
+      const activationNativeProof=async(signal?:AbortSignal)=>{
+        const adapters=createVectorizeRestAdapters({environment:config.environment,indexName:config.indexName,accountId:config.accountId,
+          token:options.credentials.cloudflareToken,fetch:observationSend});
+        if(serving){signal?.throwIfAborted();}
+        else if(receiptOnly)await readAcceptedActivatedCatalogNative(db,control!.permit!,control!.vectorPlan,adapters,{intent:control!.intent!,signal});
+        else if(options.permanent)await readActivatedPermanentCatalogNative(db,control!.permit!,control!.vectorPlan,options.permanent,adapters,signal);
+        else await readActivatedCatalogVectors(db,control!.permit!,control!.vectorPlan,adapters,
+          {signal,published:options.published,permanent:options.permanent});
+        signal?.throwIfAborted();
+      };
       const observed=async(signal?:AbortSignal):Promise<DeploymentObservation>=>{
         signal?.throwIfAborted();await workspace.assertHeld();signal?.throwIfAborted();const deployed=await api.deployed(signal);signal?.throwIfAborted();
         if(!deployed||deployed.version!==control!.versionReference||deployed.marker!==control!.deploymentMarker
           ||control!.deploymentId!==null&&deployed.id!==control!.deploymentId)throw new Error('publication_activation_pending');
         if(!matchesIdentity(await api.identity(signal),control!.intent!))throw new Error('publication_identity_mismatch');signal?.throwIfAborted();
-        const adapters=createVectorizeRestAdapters({environment:config.environment,indexName:config.indexName,accountId:config.accountId,
-          token:options.credentials.cloudflareToken,fetch:observationSend});
-        // Serving-only full catalog/native proof runs outside this short
-        // deployment observation, under the same owner and final compact CAS.
-        if(serving){signal?.throwIfAborted();}
-        else if(receiptOnly)await readAcceptedActivatedCatalogNative(db,control!.permit!,control!.vectorPlan,adapters,{intent:control!.intent!,signal});
-        else if(options.permanent)await readActivatedPermanentCatalogNative(db,control!.permit!,control!.vectorPlan,options.permanent,adapters,signal);
-        else await readActivatedCatalogVectors(db,control!.permit!,control!.vectorPlan,adapters,
-          {signal,published:options.published,permanent:options.permanent});signal?.throwIfAborted();
+        // The concrete owned transport may have just verified native state
+        // outside this short deployment clock. That proof lives only in this
+        // invocation under the exact unchanged owner; deployment/identity still
+        // read freshly on BOTH sides, followed by core's final ownership CAS.
+        if(canonicalJson(nativeObservationOwner??null)!==canonicalJson(owner))await activationNativeProof(signal);
+        signal?.throwIfAborted();
         // Re-read deployment after independent identity/vector reads. Never infer
         // not-submitted from elapsed time or an observed prior deployment.
         const after=await api.deployed(signal);signal?.throwIfAborted();if(canonicalJson(after)!==canonicalJson(deployed))throw new Error('publication_activation_pending');
@@ -924,6 +932,10 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       // Otherwise reuse only this invocation's exact unchanged-owner inventory.
       if(serving){if(canonicalJson(receiptInventoryOwner??null)!==canonicalJson(owner))await vectorProof();}
       else if(!receiptOnly&&(!options.approvedCatalog?.persistent||canonicalJson(receiptInventoryOwner??null)!==canonicalJson(owner)))await permanentProof();
+      if(!serving&&isAccountedPublicationFetch(observationSend)&&isCatalogD1Rest(db)){
+        await withPublicationInventorySignal(Boolean(options.routineCare),900_000,activationNativeProof);
+        nativeObservationOwner={...owner};
+      }
       let observation:Promise<DeploymentObservation>|undefined;
       try{if(await resolveBuildActivation(db,control.permit,signal=>(observation=observed(signal)),{observationTimeoutMs:30_000,
         ...(serving?{acceptedCatalog:serving.authority}:{})})!=='resolved')

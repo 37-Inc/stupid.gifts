@@ -29,6 +29,9 @@ Codex timer, activate daily discovery, or authorize two production writers.
   that observation. Core still rechecks the immutable policy, owner, full source,
   projection, prior receipt, watermark and cutoff before its atomic queue write.
   Arbitrary adapters retain their existing short observation deadlines.
+- Final owned activation resolution likewise performs native proof outside its
+  short deployment-observation window. Fresh deployment/identity reads remain
+  on both sides of the observation, with the same final receipt/owner CAS.
 - Hosted source paths are stable at `/home/runner/stupid-gifts/operators/<SHA>`;
   private state is under `/home/runner/.codex/private/goose-gifts-migration`.
   Finish existing Mac-bound runs locally. Never pretend they were hosted runs.
