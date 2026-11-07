@@ -1058,9 +1058,11 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       if(Date.parse(retention.expiresAt)<=Date.parse(now())||Date.parse(retention.observedAt)>Date.parse(now()))fail('expired');
       if(!prior){
         for(const path of [packagePath(releaseId),runtimePath(releaseId),...buildPaths()]){await pathWithoutLinks(path);await absent(path);}
-        await privateDirectory(join(directory,'packages'),true);await privateDirectory(join(directory,'publication-runtime'),true);
-        await append({type:'publication-directories',retention});
       }
+      // A fresh runner may have retained only the original registration/partial
+      // package. Recreate disposable parents without renewing that registration.
+      await privateDirectory(join(directory,'packages'),true);await privateDirectory(join(directory,'publication-runtime'),true);
+      if(!prior)await append({type:'publication-directories',retention});
       await privateDirectory(runtimePath(releaseId),true);await privateDirectory(join(runtimePath(releaseId),'tmp'),true);
       usableUntil=Math.min(usableUntil,Date.parse(retention.expiresAt));usableAfter=Math.max(usableAfter,Date.parse(retention.observedAt));
     }

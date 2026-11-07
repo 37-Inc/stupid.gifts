@@ -20,6 +20,9 @@ run a local publisher while hosted care or a saved hosted publication is active.
   external request. Restore verifies hashes and does not copy local locks or
   rewrite historical source bindings. Original expiry registrations govern body
   cleanup; controls, accounting and history remain.
+- A fresh runner also recreates private temporary publication parents when a
+  build stopped before its package was sealed. This reuses the original
+  registration and deadlines; it does not fetch again or renew content.
 - Completed hosted runs enter a small `cleanup-runs` housekeeping pointer before
   their pending intent is cleared. Each existing wake revisits one due original
   workspace using its immutable source/config and registered deadlines. Only

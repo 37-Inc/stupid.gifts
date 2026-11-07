@@ -160,6 +160,21 @@ async function packageFixture(t,large=false){
   return{...f,w,root,files,release,expiry,packageSha256};
 }
 
+test('fresh runner recreates temporary publication parents before an interrupted package was sealed',async t=>{
+  const f=await packageFixture(t),owner=cp();await f.w.writeCheckpoint(null,owner);await f.w.reserveBudget(reservation);
+  const head=Buffer.from(f.objects.get('runs/test-run/head.json').bytes);
+  await f.w.close();await rm(f.input.directory,{recursive:true});
+  f.setNow('2026-11-06T12:05:00.000Z');
+  const restored=await f.open({mode:'resume'});
+  await restored.preparePublicationDirectories(f.release,NOW,f.expiry);
+  for(const path of ['packages','publication-runtime','publication-runtime/'+f.release,'publication-runtime/'+f.release+'/tmp'])
+    assert.equal((await lstat(join(restored.directory,path))).mode&0o777,0o700);
+  assert.deepEqual(Buffer.from(f.objects.get('runs/test-run/head.json').bytes),head);
+  assert.deepEqual((await restored.readCheckpoint()).checkpoint,owner);
+  assert.equal((await restored.budget()).unconfirmedRequests,1);
+  await assert.rejects(restored.preparePublicationDirectories(f.release,'2026-11-06T12:05:00.000Z',f.expiry),/publication_directories/);
+});
+
 test('sealed exact package survives runner loss before/after upload with original paths, owner and finite expiry',async t=>{
   const f=await packageFixture(t,true);await f.w.retainPublicationPackage(f.release,f.packageSha256);
   await f.w.writeCheckpoint(null,{...cp(),state:{uploadedVersion:'synthetic-version',intent:'original unchanged intent'}});
