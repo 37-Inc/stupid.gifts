@@ -15,7 +15,9 @@ const INPUT_HASH = sha256(TEXT);
 const bytesHash = values => createHash('sha256').update(Buffer.from(encodePgvectorSendBase64(values), 'base64')).digest('hex');
 async function setup(operation = 'upsert') {
   const sqlite = new DatabaseSync(':memory:');
-  for (const name of ['0001_catalog.sql', '0004_vector_outbox_leases.sql', '0008_reviewed_vector_deletes.sql'])
+  // Exercise the legacy drainer without installing/enabling0009 ownership,
+  // but include the real maintenance schema used by current public-copy reads.
+  for (const name of ['0001_catalog.sql', '0004_vector_outbox_leases.sql', '0008_reviewed_vector_deletes.sql', '0010_catalog_maintenance.sql'])
     sqlite.exec(await readFile(new URL(`../migrations/d1/${name}`, import.meta.url), 'utf8'));
   let clock = NOW; let beforeRun;
   sqlite.function('strftime', (format, instant) => {
