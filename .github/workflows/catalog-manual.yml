@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Read-only shadow, normal full/photo care, or owner-invoked one-product canary
+        description: Shadow, full/photo care, one-product canary, or explicit post-canary policy activation
         type: choice
         default: shadow
         options: [shadow, full, photos, canary, activate]
