@@ -111,7 +111,7 @@ for(const errorCode of ['semantic_delta_pending','publication_provider_unavailab
   assert.equal(result.state,'accepted');assert.deepEqual(f.calls.map(args=>args[0]),['prepare','start','review','publish','publish']);
   assert.deepEqual(f.waits,[45000]);assert.equal(f.calls[3][1],f.calls[4][1]);
 });
-for(const errorCode of ['mutation_unknown','publication_activation_unknown','publication_upload_unknown'])test(`${errorCode} stays pending with no automatic retry, fresh run or acceptance claim`,async()=>{
+for(const errorCode of ['mutation_unknown','publication_activation_unknown','publication_upload_unknown','publication_read_scope_invalid'])test(`${errorCode} stays pending with no automatic retry, fresh run or acceptance claim`,async()=>{
   const f=fixture(),invoke=f.deps.invoke,result=await f.run({}, {invoke:async(directory,args)=>{
     if(args[0]==='publish'){f.calls.push(args);return{state:'pending',errorCode};}return invoke(directory,args);}});
   assert.equal(result.state,'attention');assert.equal(result.errorCode,errorCode);assert.equal(f.waits.length,0);
