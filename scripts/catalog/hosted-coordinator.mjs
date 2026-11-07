@@ -168,6 +168,8 @@ function defaults(runtime,environment){
       return{releaseId:p.intent.releaseId,receiptSha256:seal.publication.receiptSha256};
     },
     wait:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+    registerCleanup:async record=>(await import('./hosted-cleanup.mjs')).registerHostedCleanup(runtime,record),
+    cleanup:async checkout=>(await import('./hosted-cleanup.mjs')).cleanupHostedRuns(runtime,checkout),
   };
 }
 
@@ -190,6 +192,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
   if(!record){
     if(mode==='shadow'){const inputsRef=inputsReference(await deps.currentInputs());await deps.restoreInputs(inputsRef);await deps.checkout(source);
       return{state:'shadow',source,inputsVerified:true,workspace:'not_verified_readonly',pending:false,...shadowProviderFields(await deps.shadowCheck())};}
+    try{await deps.cleanup(deps.checkout);}catch{console.warn(JSON.stringify({notice:'catalog_hosted_cleanup_pending',catalogBlocked:false}));}
     const runKey=mode==='full'?'scheduled-'+capturedDay:mode==='photos'?'photos-'+capturedDay:'canary-'+capturedDay+'-'+canaryId;
     const file=runtime.care+'/runs/'+runKey+'/hosted-run.json';let bytes=await optional(()=>runtime.state.bytes(file));
     if(bytes){record=hostedRunRecord(json(bytes));if(record.runKey!==runKey)fail('run_record');resumed=true;}
@@ -200,7 +203,10 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
   await deps.restoreInputs(record.inputsRef);const directory=await deps.checkout(record.source);
   if(mode==='shadow')return{state:'shadow',source:record.source,runKey:record.runKey,inputsVerified:true,workspace:'not_verified_readonly',pending:true,
     ...shadowProviderFields(await deps.shadowCheck())};
-  const finish=async result=>{await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:null},pointerBytes);return{...result,runKey:record.runKey,kind:record.kind,resumed};};
+  const finish=async result=>{
+    if(result.state==='accepted')await deps.registerCleanup(record);
+    await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:null},pointerBytes);
+    return{...result,runKey:record.runKey,kind:record.kind,resumed};};
   const invoke=(command,extra=[])=>deps.invoke(directory,[command,...extra,'--run',record.runKey]);
   const publish=(status,sha)=>record.source!==source&&['freezing','publishing','attention','published'].includes(status.phase)
     ?deps.invoke(ROOT,['recover',sha,'--run',record.runKey]):invoke('publish',[sha]);

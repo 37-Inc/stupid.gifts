@@ -5,6 +5,7 @@ import {CATALOG_SCOPE} from './automation-runtime.mjs';
 import {createCatalogD1ReadOnlyRest} from './d1-write-rest.ts';
 import {routineServingPrior} from './daily-operator.mjs';
 import {canonicalJson} from '../../lib/catalog/canonical-json.ts';
+import {registerHostedCleanup} from './hosted-cleanup.mjs';
 
 const fail=()=>{throw Error('catalog_hosted_policy_requires_accepted_canary');};
 const hash=b=>createHash('sha256').update(b).digest('hex');
@@ -28,7 +29,7 @@ async function verifyCurrent(runtime,seal,pointer){
 /** Explicit configuration activation, never a product run or publisher.
  * The owner stops local publishing and reviews the real canary before invoking.
  * Retain original input bytes; replace only the versioned policy via CAS. */
-export async function activateHostedPolicy(runtime,asin,verify=verifyCurrent){
+export async function activateHostedPolicy(runtime,asin,verify=verifyCurrent,register=registerHostedCleanup){
   if(!runtime.hosted||!runtime.durable||! /^[A-Z0-9]{10}$/.test(asin??''))fail();
   const store=runtime.durable,originalInputs=await store.get('pointers/operator-inputs.json');
   const ref=await currentHostedInputs(store),files=await restoreHostedInputs(store,runtime.base,ref);
@@ -45,6 +46,7 @@ export async function activateHostedPolicy(runtime,asin,verify=verifyCurrent){
   const pending=await store.get('pointers/pending-run.json');
   if(!pending||json(pending.bytes).pending!==null)fail();
   const accepted=await verify(runtime,json(sealBytes),pointer);
+  await register(runtime,record);
   if(canonicalJson(json(await runtime.state.readPointer('last-success',pointerFile)))!==canonicalJson(pointer)
     ||!Buffer.from((await store.get('pointers/pending-run.json'))?.bytes??[]).equals(Buffer.from(pending.bytes)))fail();
   const policy={schemaVersion:1,enabled:true,discovery:true,homepage:true};

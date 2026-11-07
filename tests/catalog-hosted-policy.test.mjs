@@ -29,7 +29,8 @@ async function fixture(t){
 }
 test('activation changes only policy inputs after accepted canary verification',async t=>{
   const f=await fixture(t),pointer=Buffer.from(f.data.get('pointers/last-success.json').bytes);
-  const result=await activateHostedPolicy(f.runtime,asin,f.verify);
+  let registered=0;const register=async()=>{registered++;};
+  const result=await activateHostedPolicy(f.runtime,asin,f.verify,register);assert.equal(registered,1);
   assert.equal(result.state,'policy_enabled');assert.equal(f.verified(),1);
   assert.deepEqual(result.policy,{schemaVersion:1,enabled:true,discovery:true,homepage:true});
   assert.deepEqual(f.data.get('pointers/last-success.json').bytes,pointer);
@@ -38,7 +39,7 @@ test('activation changes only policy inputs after accepted canary verification',
   assert.deepEqual(JSON.parse(f.data.get(policy.key).bytes),result.policy);
   assert.notDeepEqual(result.inputsRef,f.original);
   await rm(f.base+'/daily-catalog-care/automation-policy.json');
-  assert.deepEqual((await activateHostedPolicy(f.runtime,asin,f.verify)).inputsRef,result.inputsRef);
+  assert.deepEqual((await activateHostedPolicy(f.runtime,asin,f.verify,register)).inputsRef,result.inputsRef);
 });
 test('wrong canary or active pending run cannot enable policy',async t=>{
   const f=await fixture(t),before=f.writes();

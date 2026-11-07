@@ -20,6 +20,12 @@ run a local publisher while hosted care or a saved hosted publication is active.
   external request. Restore verifies hashes and does not copy local locks or
   rewrite historical source bindings. Original expiry registrations govern body
   cleanup; controls, accounting and history remain.
+- Completed hosted runs enter a small `cleanup-runs` housekeeping pointer before
+  their pending intent is cleared. Each existing wake revisits one due original
+  workspace using its immutable source/config and registered deadlines. Only
+  expired body/package bytes are purged; source bindings, controls and charges
+  remain. A cleanup failure retains its registration and alerts without blocking
+  a new catalog run. This is not another publisher or scheduled service.
 - Hosted source paths are stable at `/home/runner/stupid-gifts/operators/<SHA>`;
   private state is under `/home/runner/.codex/private/goose-gifts-migration`.
   Finish existing Mac-bound runs locally. Never pretend they were hosted runs.
@@ -64,6 +70,9 @@ when newer metadata is supplied.
 4. Verify its actual public identity, D1 receipt, resolved build, idle owner,
    successor, loaded photos/copy and representative QA-labelled flows. Resume an
    interrupted canary under the same identity; never replace its batch.
+   A newer reviewed controller can use `catalog:care recover` only after the
+   original proposal is pinned and supplier phases are over. The original clean
+   ancestor source/config/owner and all reservations stay bound; no refetch.
 5. Only after acceptance and live QA, dispatch **activate** with that canary's
    exact ASIN. This configuration-only action verifies its saved acceptance,
    current public identity, D1 receipt, resolved build and idle owner, then

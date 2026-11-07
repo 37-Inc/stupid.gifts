@@ -40,6 +40,7 @@ function fixture(){
     checkout:async source=>{checkedOut.push(source);f.executingSource=source;return '/operators/'+source;},
     inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,config:f.config,approvalPin:f.approvalPin}),
     accepted:async()=>f.phase==='finalized'?f.accepted:null,
+    registerCleanup:async()=>{events.push('cleanup-register');},cleanup:async()=>{},
     invoke:async(directory,args)=>{
       calls.push(args);const command=args[0];events.push(command);
       if(command==='prepare'){assert.ok(events.indexOf('pending')<events.indexOf('prepare'));f.prepared=true;
@@ -57,6 +58,7 @@ test('one existing operator performs prepare/start/review/exact-SHA publish; poi
   const f=fixture(),result=await f.run();assert.equal(result.state,'accepted');
   assert.deepEqual(f.calls.map(args=>args[0]),['prepare','start','review','publish']);
   assert.deepEqual(f.events.filter(e=>['immutable','pending','clear'].includes(e)),['immutable','pending','clear']);
+  assert.ok(f.events.indexOf('cleanup-register')<f.events.indexOf('clear'));
   assert.deepEqual(JSON.parse(f.pointer()),{schemaVersion:1,pending:null});
   assert.deepEqual(JSON.parse(f.files.get(f.runtime.care+'/runs/scheduled-'+DAY+'/hosted-run.json')),
     {schemaVersion:1,runKey:'scheduled-'+DAY,source:SOURCE,day:DAY,kind:'full',inputsRef:ref});
@@ -69,6 +71,12 @@ test('pending intent survives interrupted prepare and resumes original source/da
   assert.deepEqual(f.checkedOut,[SOURCE,SOURCE]);assert.deepEqual(f.restored,[ref,ref]);
   assert.equal(f.events.filter(e=>e==='current-inputs').length,1);assert.ok(original);
   assert.ok(f.calls.every(args=>args.at(-1)==='scheduled-'+DAY));
+});
+test('old-run cleanup failure is advisory; lost cleanup registration preserves accepted pending work for bookkeeping-only retry',async()=>{
+  const f=fixture();
+  await assert.rejects(f.run({}, {cleanup:async()=>{throw Error('old cleanup unavailable');},registerCleanup:async()=>{throw Error('save unknown');}}),/save unknown/);
+  assert.equal(f.phase,'finalized');assert.ok(JSON.parse(f.pointer()).pending);const calls=f.calls.length;
+  assert.equal((await f.run()).state,'accepted');assert.equal(f.calls.length,calls);assert.equal(JSON.parse(f.pointer()).pending,null);
 });
 
 test('new reviewed controller uses recovery only for the original already-approved post-provider publication',async()=>{
