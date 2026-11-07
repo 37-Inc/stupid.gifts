@@ -369,7 +369,10 @@ export function operatorInvocation(argv,calendar){
   return{command,approvalSha,runKey,...(photosOnly?{photosOnly:true}:{}),...(admitAsins?{admitAsins}:{}),...(canaryId?{canaryId}:{})};
 }
 export async function main(argv=process.argv.slice(2)){
-if(argv[0]==='code-only'){await source('code-only');await (await import('./code-only-operator.mjs')).codeOnlyMain(argv.slice(1));return;}
+if(argv[0]==='code-only'){
+  const operator=await import('./code-only-operator.mjs');operator.codeOnlyInvocation(argv.slice(1));
+  await source('code-only');await operator.codeOnlyMain(argv.slice(1));return;
+}
 let calendar=pacificCatalogCalendar();
 // Parse the stable run key first. A captured prior day is trusted ONLY through
 // the immutable hosted pending record, never a CLI date/environment override.
@@ -428,5 +431,8 @@ else{
   }else refuse('command');
 }
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)await main();
+if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)main().catch(error=>{
+  const code=error instanceof Error?error.message:'';
+  console.error(/^[a-z][a-z0-9_]{0,149}$/.test(code)?code:'catalog_care_failed');process.exitCode=1;
+});
 

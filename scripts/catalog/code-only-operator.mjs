@@ -81,7 +81,7 @@ function source(){
 /** One maintained route. Only existing OAuth, production scope and protected
  * local journal are selected; no merchant/model credentials or phases exist. */
 export async function codeOnlyMain(argv=process.argv.slice(2)){
-  const codeSha=source(),{command,runKey}=codeOnlyInvocation(argv),store=createCodeOnlyStore(BASE),care=BASE+'/daily-catalog-care',
+  const {command,runKey}=codeOnlyInvocation(argv),codeSha=source(),store=createCodeOnlyStore(BASE),care=BASE+'/daily-catalog-care',
     directory=care+'/code-only/'+runKey,recordPath=directory+'/operator.json',helperSha256=sha256(await fs.readFile(new URL(import.meta.url)));
   let record=await store.optional(recordPath);
   if(command==='status'){console.log(JSON.stringify(record?{state:await store.optional(directory+'/success.json')?'published':'prepared',runId:record.runId,source:record.source}:{state:'not_prepared'}));return;}
