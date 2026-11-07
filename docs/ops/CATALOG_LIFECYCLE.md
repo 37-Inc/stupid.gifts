@@ -37,20 +37,12 @@
   under a minute; most elapsed time was full-catalog verification, build/proof
   and local cleanup. Recovery engineering time is not normal run latency.
 
-## Recommended next change — not enabled by this document
+## Proposed automation transition
 
-- Keep one morning pipeline and publication. Use two or three focused discovery
-  themes daily; aim for two to five genuinely worthwhile admissions, never a
-  forced fill quota. Choose before paid enrichment (`roadmap-lbbz1.20`).
-- Check50–100 existing products per morning in batches of10. Prioritize exposed
-  or clicked gifts, uncertain/old negative stock labels, then fair catalog
-  rotation; retain a weekly-due unavailable-stock lane.
-- Feed settled search-demand gaps into topic choice. Use factual shared short
-  copy by default and optional long articles only when useful.
-- First measure that expanded normal run. Move its durable execution off the
-  Mac only after the saved-stage recovery contract has a small proven hosted
-  equivalent (`roadmap-lbbz1.16`); never run two concurrent publishers.
+The consolidated [catalog automation specification](CATALOG_AUTOMATION_SPEC.md)
+defines the final reviewed target, parallel implementation boundaries and staged
+hosted cutover. It supersedes earlier informal target-state proposals, not the
+operating-now policy above. Existing Beads remain the implementation tracker.
 
-These require an explicit cadence/throughput change, not another retry label or
-extra batch under the current schedule. No new plan, service or campaign
-enrollment is implied.
+The specification does not itself enable a cadence/throughput change, another
+batch under the current schedule, a new service plan or campaign enrollment.
