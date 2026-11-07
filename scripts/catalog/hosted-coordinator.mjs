@@ -57,11 +57,17 @@ export function validateHostedProposal({bytes,sha256,runId,catalogRevision,summa
     for(const product of summary){
       if(!product||!ids.has(product.publicId)||seen.has(product.publicId)||!ASIN.test(product.id)||typeof product.slug!=='string'
         ||! /^[a-z0-9][a-z0-9-]*$/.test(product.slug)||!HASH.test(product.sourceFactsHash))fail('review_summary');seen.add(product.publicId);
-      for(const key of ['publicTitle','description'])if(product[key]!==undefined&&(typeof product[key]!=='string'||!product[key].trim()))fail('review_copy');
-      if(product.imageUrl!==undefined){let image;try{image=new URL(product.imageUrl);}catch{fail('review_image');}
-        if(!['http:','https:'].includes(image.protocol)||image.username||image.password)fail('review_image');}
-      const destination=new URL('https://www.amazon.com/dp/'+product.id);destination.searchParams.set('tag','goose-gifts-37-20');
-      if(destination.hostname!=='www.amazon.com'||destination.searchParams.get('tag')!=='goose-gifts-37-20')fail('review_link');
+      const publicFields=['publicTitle','description','imageUrl','publicAffiliateUrl'];
+      if(publicFields.some(key=>product[key]!==undefined)){
+        if(publicFields.some(key=>typeof product[key]!=='string'||!product[key].trim()))fail('review_copy');
+        let image,destination;try{image=new URL(product.imageUrl,'https://stupid.gifts');destination=new URL(product.publicAffiliateUrl);}catch{fail('review_link');}
+        if(image.protocol!=='https:'||image.username||image.password
+          ||product.imageUrl.startsWith('/')&&image.origin!=='https://stupid.gifts')fail('review_image');
+        const asin=destination.pathname.match(/^\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})(?:\/|$)/)?.[1];
+        if(destination.protocol!=='https:'||!['www.amazon.com','amazon.com'].includes(destination.hostname)
+          ||destination.username||destination.password||asin!==product.id||destination.searchParams.getAll('tag').length!==1
+          ||destination.searchParams.get('tag')!=='goose-gifts-37-20')fail('review_link');
+      }
     }
   }else if(!approvalPin)fail('review_required');
   return{sha256,changes:ids.size};

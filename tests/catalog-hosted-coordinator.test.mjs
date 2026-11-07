@@ -22,7 +22,8 @@ function fixture(){
     changes:[{publicId:'public-gift',operationId:'actual-op',inputSha256:HASH,productSha256:HASH,displaySha256:HASH}]};
   f.proposal=proposal;f.proposalBytes=bytes(proposal);f.proposalSha=hash(f.proposalBytes);
   f.summary=[{id:'B000000001',publicId:'public-gift',slug:'screaming-desk-chicken',editorialStatus:'published',
-    publicTitle:'Desk chicken',description:'A tiny loud chicken.',imageUrl:'https://example.invalid/photo.jpg',persistent:true,sourceFactsHash:HASH}];
+    publicTitle:'Desk chicken',description:'A tiny loud chicken.',imageUrl:'https://example.invalid/photo.jpg',
+    publicAffiliateUrl:'https://www.amazon.com/dp/B000000001?tag=goose-gifts-37-20',persistent:true,sourceFactsHash:HASH}];
   f.deps={currentInputs:async()=>{events.push('current-inputs');return f.activeRef;},restoreInputs:async input=>{restored.push(input);},
     checkout:async source=>{checkedOut.push(source);f.executingSource=source;return '/operators/'+source;},
     inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,config:f.config,approvalPin:f.approvalPin}),
@@ -116,7 +117,10 @@ test('photo-current is a healthy skip; canary is explicit and never inferred fro
 });
 test('tampered review SHA, mismatched rows/copy and unsafe image links cannot reach publish',async()=>{
   for(const mutate of [f=>{f.proposalSha='e'.repeat(64);},f=>{f.summary[0].publicId='other';},
-    f=>{f.summary[0].imageUrl='file:///private/secret';},f=>{f.summary[0].description='';}]){
+    f=>{f.summary[0].imageUrl='file:///private/secret';},f=>{f.summary[0].description='';},
+    f=>{f.summary[0].publicAffiliateUrl='https://www.amazon.com/dp/B000000001?tag=wrong-20';},
+    f=>{f.summary[0].publicAffiliateUrl='https://www.amazon.com/dp/B000000002?tag=goose-gifts-37-20';},
+    f=>{delete f.summary[0].description;}]){
     const f=fixture();mutate(f);await assert.rejects(f.run());assert.equal(f.calls.some(args=>args[0]==='publish'),false);assert.ok(JSON.parse(f.pointer()).pending);
   }
 });
