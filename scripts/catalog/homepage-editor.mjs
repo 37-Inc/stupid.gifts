@@ -68,6 +68,24 @@ export async function validateSelection(db,revision,edition){
   if(ids.some(id=>!available.has(id)))throw Error('homepage_selection_not_public_or_missing_photo');
 }
 
+/** Hosted/editor API seam. The owning coordinator supplies the scoped saved
+ * editor and atomic ID-only saver. Failure never changes the current edition.
+ */
+export async function automatedHomepage({db,revision,prior,day,merchandising={},editor,save,now=Date.now()}){
+  if(typeof editor?.selectHomepage!=='function'||typeof save!=='function')throw Error('homepage_editor_capability');
+  try{
+    const brief=await homepageBrief(db,revision,prior,day,now,merchandising);
+    const edition=await editor.selectHomepage(brief);
+    await validateSelection(db,revision,edition);
+    await save(edition);
+    return{state:'curated',edition};
+  }catch{
+    // The editor's private journal retains exact pending/error evidence. Do not
+    // log product/provider bodies or erase an uncertain model dispatch here.
+    return{state:'last_good',edition:prior,attention:'homepage_editor_unavailable'};
+  }
+}
+
 export async function main(){
   if(process.versions.node.split('.')[0]!=='22')throw Error('homepage_requires_node22');
   const [command,arg,...extra]=process.argv.slice(2);

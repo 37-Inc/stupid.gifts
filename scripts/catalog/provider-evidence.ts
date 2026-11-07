@@ -44,6 +44,9 @@ const vectorHash = (bytes:string) => createHash('sha256').update(Buffer.from(byt
  */
 export function createCatalogProviderEvidence(options: {
   saveReceipt(input:Readonly<{sha256:string;receipt:ProviderReceipt}>):Promise<{sha256:string;reference:string}>;
+  /** Existing protected storage must verify the original object, digest and
+   * retention before returning it. Never accept a caller-supplied receipt body. */
+  readReceipt?(input:Readonly<{sha256:string;reference:string}>):Promise<ProviderReceipt>;
   reviewedRightsById?:Record<string,ProductRights>;
   reviewedDeleteReference?:string;
   associateTag?:string;
@@ -69,7 +72,45 @@ export function createCatalogProviderEvidence(options: {
       throw new Error('provider_evidence_storage_unconfirmed');
     return saved.reference;
   }
+  async function restoreReceipt(input:Readonly<{sha256:string;reference:string}>) {
+    if(typeof options.readReceipt!=='function'||!input||!/^[a-f0-9]{64}$/.test(input.sha256)
+      ||!REF.test(input.reference)||Object.keys(input).sort().join(',')!=='reference,sha256')throw Error('provider_evidence_restore_reference');
+    const receipt=await options.readReceipt({...input});
+    if(!receipt||receipt.schemaVersion!==1||sha256(canonicalJson(receipt))!==input.sha256
+      ||!Array.isArray(receipt.products)||receipt.products.length>20||explicitMaintenanceTime(receipt.observedAt)>clock())
+      throw Error('provider_evidence_restore_invalid');
+    if(receipt.kind==='amazon-observation'){
+      const ids=[receipt.returnedIds,...(receipt.requestedIds?[receipt.requestedIds]:[])];
+      if(Object.keys(receipt).sort().join(',')!==`kind,observedAt,operation,products,${receipt.requestedIds?'requestedIds,':''}returnedIds,schemaVersion`
+        ||!['searchItems','getItems'].includes(receipt.operation)||receipt.requestedIds&&receipt.operation!=='getItems'
+        ||ids.some(list=>!Array.isArray(list)||list.length>10||new Set(list).size!==list.length||list.some(id=>!ID.test(id))))
+        throw Error('provider_evidence_restore_invalid');
+      for(const entry of receipt.products){
+        if(Object.keys(entry).sort().join(',')!=='availabilityStatus,id,snapshot,sourceFactsHash'||!ID.test(entry.id)
+          ||!receipt.returnedIds.includes(entry.id)||typeof entry.availabilityStatus!=='string'||!entry.availabilityStatus
+          ||editorialSourceHash(entry.snapshot)!==entry.sourceFactsHash)
+          throw Error('provider_evidence_restore_invalid');
+      }
+      for(const id of new Set([...(receipt.requestedIds||[]),...receipt.returnedIds])){
+        touched.add(id);shortRights.delete(id);
+        for(const key of observations.keys())if(key.startsWith(`${id}:`))observations.delete(key);
+      }
+      for(const entry of receipt.products)observations.set(`${entry.id}:${entry.sourceFactsHash}`,{
+        reference:input.reference,observedAt:receipt.observedAt,availabilityStatus:entry.availabilityStatus,sourceFactsHash:entry.sourceFactsHash});
+    }else if(receipt.kind==='embedding-response'){
+      if(Object.keys(receipt).sort().join(',')!=='kind,model,observedAt,products,schemaVersion'||receipt.model!==EMBEDDING_MODEL
+        ||new Set(receipt.products.map(p=>p.id)).size!==receipt.products.length)throw Error('provider_evidence_restore_invalid');
+      for(const p of receipt.products){
+        if(Object.keys(p).sort().join(',')!=='id,nativeBase64,sourceFactsHash,text,vectorBytesSha256'||!ID.test(p.id)
+          ||typeof p.text!=='string'||Buffer.byteLength(p.text)>64000||!/^[a-f0-9]{64}$/.test(p.sourceFactsHash)
+          ||vectorHash(p.nativeBase64)!==p.vectorBytesSha256||native(decodePgvectorSendBase64(p.nativeBase64,1536))!==p.nativeBase64)
+          throw Error('provider_evidence_restore_invalid');
+      }
+      for(const p of receipt.products)embeddings.set(p.id,{...p,reference:input.reference});
+    }else throw Error('provider_evidence_restore_invalid');
+  }
   return Object.freeze({
+    restoreReceipt,
     async amazon(operation:'getItems'|'searchItems',load:()=>Promise<Product[]>,normalize?:(product:Product)=>Product,requestedIds?:string[]) {
       if (!['getItems','searchItems'].includes(operation) || requestedIds!==undefined && (operation!=='getItems'
         || !Array.isArray(requestedIds) || requestedIds.length>10 || requestedIds.some(id=>typeof id!=='string' || !ID.test(id))
