@@ -5,8 +5,10 @@ import { lstat, open, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createCatalogD1Rest } from './d1-write-rest.ts';
-import { checkCloudflareRunner, resolveReadToken, resolveCloudflareCredential, validateRunnerCheckConfig } from './check-cloudflare-runner.ts';
+import { checkCloudflareRunner, resolveReadToken, resolveCatalogCredential, resolveCloudflareCredential, validateRunnerCheckConfig } from './check-cloudflare-runner.ts';
 import type { CloudflareCredentialReference } from './check-cloudflare-runner.ts';
+import {isCatalogCredentialReference} from './credential-reference.ts';
+import type {CatalogCredentialReference} from './credential-reference.ts';
 import { createD1CatalogMaintenanceStore, loadMaintenanceVectorPayload } from './maintenance-d1.ts';
 import { createD1CatalogTelemetryStore } from './telemetry-d1.ts';
 import { createCatalogProviderEvidence } from './provider-evidence.ts';
@@ -48,7 +50,7 @@ export interface CloudflareWeeklyConfig {
   database:{id:string;name:string};vectorIndex:{name:string;dimensions:1536;metric:'cosine'};
   catalog:{associateTag:string;marketplace:'www.amazon.com'};backfillLimit:number;
   cadence?:{day:string;featuredIds:string[];runKey?:string;photosOnly?:true;admitAsins?:string[]};
-  credentials:{cloudflare:CloudflareCredentialReference;amazonId:KeychainRef;amazonSecret:KeychainRef;amazonVersion:string;openai?:KeychainRef;stagingAuthSecret?:KeychainRef};
+  credentials:{cloudflare:CloudflareCredentialReference;amazonId:CatalogCredentialReference;amazonSecret:CatalogCredentialReference;amazonVersion:string;openai?:CatalogCredentialReference;stagingAuthSecret?:CatalogCredentialReference};
   limits:{requests:number;statements:number;reportedRowsRead?:number;reportedRowsWritten?:number};retention:RetentionPolicy;
   inputs:{previous:InputRef;context:InputRef;rights:InputRef;originalVectors?:InputRef};publication:PublicationConfig;
 }
@@ -67,8 +69,6 @@ export const WEEKLY_RESUME_STATES=Object.freeze({
 const KEY=/^[a-zA-Z0-9._-]{1,100}$/;const HASH=/^[a-f0-9]{64}$/;
 const repository=resolve(fileURLToPath(new URL('../..',import.meta.url)));
 const exact=(value:unknown,keys:string)=>!!value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===keys;
-const keychain=(r:KeychainRef)=>r&&exact(r,'account,service')&&/^goose\.gifts\.[a-zA-Z0-9._:/-]{1,150}$/.test(r.service)
-  &&/^[a-zA-Z0-9][a-zA-Z0-9._@:/-]{0,199}$/.test(r.account);
 const safeCode=(error:unknown)=>error instanceof Error&&/^[a-z][a-z0-9_]{1,100}$/.test(error.message)?error.message:'weekly_requires_review';
 const resolving=(checkpoint:{control?:WorkspaceCheckpoint['control']})=>Boolean(checkpoint.control?.publication
   &&(checkpoint.control.publication.permit||checkpoint.control.publication.stage==='activating'));
@@ -135,7 +135,9 @@ export function validateCloudflareWeeklyConfig(input:unknown):CloudflareWeeklyCo
     ||!Number.isInteger(c.backfillLimit)||c.backfillLimit<0||c.backfillLimit>25
     ||!exact(c.credentials,credentialKeys)||!c.cadence&&!c.credentials.openai
     ||c.environment==='staging'&&!c.credentials.stagingAuthSecret
-    ||![c.credentials.amazonId,c.credentials.amazonSecret,...(c.credentials.openai?[c.credentials.openai]:[]),...(c.credentials.stagingAuthSecret?[c.credentials.stagingAuthSecret]:[])].every(keychain)
+    ||!isCatalogCredentialReference(c.credentials.amazonId,'amazonId')||!isCatalogCredentialReference(c.credentials.amazonSecret,'amazonSecret')
+    ||c.credentials.openai!==undefined&&!isCatalogCredentialReference(c.credentials.openai,'openai')
+    ||c.credentials.stagingAuthSecret!==undefined&&!isCatalogCredentialReference(c.credentials.stagingAuthSecret,'stagingAuthSecret')
     ||!['2.1','2.2','2.3','3.1','3.2','3.3'].includes(c.credentials.amazonVersion)
     ||!exact(c.limits,rowBudget
       ?'reportedRowsRead,reportedRowsWritten,requests,statements':'requests,statements')
@@ -220,8 +222,8 @@ async function providerEnvironment(config:CloudflareWeeklyConfig,resolveToken:(r
   const names=Object.keys(process.env).filter(key=>/^(CATALOG_|AMAZON_|OPENAI_|GOOGLE_SEARCH_|POSTGRES_|VERCEL_)/.test(key));
   const values={...Object.fromEntries(names.map(key=>[key,undefined])),AMAZON_ASSOCIATE_TAG:config.catalog.associateTag,
     AMAZON_MARKETPLACE:config.catalog.marketplace,AMAZON_CREATORS_CREDENTIAL_VERSION:config.credentials.amazonVersion,
-    AMAZON_CREATORS_CREDENTIAL_ID:await resolveToken(config.credentials.amazonId),AMAZON_CREATORS_CREDENTIAL_SECRET:await resolveToken(config.credentials.amazonSecret),
-    OPENAI_API_KEY:needsModel?await resolveToken(config.credentials.openai!):undefined};
+    AMAZON_CREATORS_CREDENTIAL_ID:await resolveCatalogCredential(config.credentials.amazonId,resolveToken),AMAZON_CREATORS_CREDENTIAL_SECRET:await resolveCatalogCredential(config.credentials.amazonSecret,resolveToken),
+    OPENAI_API_KEY:needsModel?await resolveCatalogCredential(config.credentials.openai!,resolveToken):undefined};
   return values;
 }
 async function scopedProviders<T>(values:Awaited<ReturnType<typeof providerEnvironment>>,action:()=>Promise<T>) {
@@ -424,7 +426,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         ...(saved.checkpoint.phase==='finalized'?{catalogSeal:await ws.catalogSuccessor()??undefined}:{}),budget:await ws.budget()};
     const token=await resolveCloudflareCredential(config.credentials.cloudflare,resolveToken,dependencies.resolveWranglerOAuth);
     const identityAuthorization=async()=>config.credentials.stagingAuthSecret
-      ?`Basic ${Buffer.from(`staging:${await resolveToken(config.credentials.stagingAuthSecret)}`).toString('base64')}`:undefined;
+      ?`Basic ${Buffer.from(`staging:${await resolveCatalogCredential(config.credentials.stagingAuthSecret,resolveToken)}`).toString('base64')}`:undefined;
     const admittedReadCap=await ws.budgetRowsReadCeiling()??finish?.budget.reportedRowsRead;
     const db=await createCatalogD1Rest({accountId:config.accountId,databaseId:config.database.id,databaseName:config.database.name,
       token,fetch:dependencies.fetch,...(config.cadence?{requestLimit:'observe' as const}:{}),limits:finish?{...config.limits,requests:(await ws.budgetCeiling()).httpRequests,

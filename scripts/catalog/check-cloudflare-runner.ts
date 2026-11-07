@@ -8,9 +8,11 @@ import { promisify } from 'node:util';
 import { assertProtectedDestination } from './export-postgres.ts';
 import { createCloudflareReadClient, RUNNER_COLUMNS } from './d1-rest.ts';
 import type { ReadRow } from './d1-rest.ts';
+import {isCatalogCredentialReference,isEnvironmentCredentialReference,readCatalogEnvironmentCredential} from './credential-reference.ts';
+import type {CatalogCredentialReference,EnvironmentCredentialReference} from './credential-reference.ts';
 
 interface KeychainReference { service:string; account:string }
-export type CloudflareCredentialReference = KeychainReference | {type:'wrangler_oauth'};
+export type CloudflareCredentialReference = CatalogCredentialReference | {type:'wrangler_oauth'};
 export interface RunnerCheckConfig {
   schemaVersion:1; environment:'staging'|'production'; accountId:string;
   database:{id:string;name:string}; vectorIndex:{name:string;dimensions:1536;metric:'cosine'};
@@ -36,7 +38,7 @@ export function validateRunnerCheckConfig(input:unknown):RunnerCheckConfig {
     || c.vectorIndex.metric!=='cosine' || !keys(c.catalog,'associateTag,marketplace')
     || typeof c.catalog.associateTag!=='string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(c.catalog.associateTag)
     || c.catalog.marketplace!=='www.amazon.com'
-    || !keychainReference(c.cloudflareReadToken)&&!oauthReference(c.cloudflareReadToken)) throw new Error('runner_check_config_invalid');
+    || !isCatalogCredentialReference(c.cloudflareReadToken,'cloudflare')&&!oauthReference(c.cloudflareReadToken)) throw new Error('runner_check_config_invalid');
   return JSON.parse(JSON.stringify(c));
 }
 /** Explicit existing item only: never searches other services, env, files or Vercel.
@@ -81,10 +83,18 @@ export async function resolveWranglerOAuth(run=promisify(execFile)):Promise<stri
   } catch { throw new Error('runner_check_oauth_unavailable'); }
   finally { if(directory)await rm(directory,{recursive:true,force:true}); }
 }
+export async function resolveCatalogCredential(ref:CatalogCredentialReference,readKeychain=resolveReadToken,
+  readEnvironment:(ref:EnvironmentCredentialReference)=>string=readCatalogEnvironmentCredential):Promise<string> {
+  if(keychainReference(ref))return readKeychain(ref);
+  if(isEnvironmentCredentialReference(ref))return readEnvironment(ref);
+  throw new Error('runner_check_credential_reference');
+}
 export async function resolveCloudflareCredential(ref:CloudflareCredentialReference,
-  readKeychain=resolveReadToken,readOAuth=resolveWranglerOAuth):Promise<string> {
+  readKeychain=resolveReadToken,readOAuth=resolveWranglerOAuth,
+  readEnvironment:(ref:EnvironmentCredentialReference)=>string=readCatalogEnvironmentCredential):Promise<string> {
   if(keychainReference(ref))return readKeychain(ref);
   if(oauthReference(ref))return readOAuth();
+  if(isEnvironmentCredentialReference(ref,'cloudflare'))return readEnvironment(ref);
   throw new Error('runner_check_cloudflare_reference');
 }
 

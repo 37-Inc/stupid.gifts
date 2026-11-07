@@ -724,9 +724,14 @@ test('small permanent daily finishes beyond HTTP and SQL estimates with model-fr
   const request=f.sql.prepare('SELECT * FROM catalog_build_requests WHERE release_id=?').get(f.config.publication.releaseId);
   assert.equal(request.state,'resolved');assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'idle');
   assert.equal(f.sql.prepare('SELECT count(*) n FROM publication_receipts').get().n,2);
-  // Executor deliberately cleans its owned build tree after verified receipt.
+  // The supplier fixture explicitly reports OUT_OF_STOCK. The current stock
+  // policy unlists it without destroying its permanently cleared presentation.
+  // This remains a successful release, not an expiry-driven catalog deletion.
   const projected=f.sql.prepare("SELECT public_id,public_display_json FROM catalog_public_products WHERE catalog_revision='weekly-r' ORDER BY public_id").all();
-  assert.deepEqual(projected.map(p=>p.public_id),[UUID]);assert.equal(JSON.parse(projected[0].public_display_json).eligibleUntil,null);
+  assert.deepEqual(projected,[]);
+  const preserved=f.sql.prepare('SELECT public_display_json FROM products WHERE public_id=?').get(UUID);
+  assert.equal(JSON.parse(preserved.public_display_json).eligibleUntil,null);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM products').get().n,2);
   assert.equal(result.budget.httpRequests,f.calls.http);assert.equal(result.budget.sqlStatements,f.calls.sql);
   assert.ok(result.budget.httpRequests>f.config.limits.requests);
   assert.ok(result.budget.sqlStatements>f.config.limits.statements);
@@ -880,6 +885,18 @@ test('weekly OAuth is Cloudflare-only and preflight preserves no-owner/no-worksp
   assert.equal(oauth,1);assert.equal(result.status,'checks_passed_execution_unavailable');assert.equal(result.executionAvailable,false);
   assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);
   await assert.rejects(fs.stat(f.options.workspace),{code:'ENOENT'});assert.equal(f.calls.search+f.calls.embedding+f.calls.activate,0);
+});
+test('hosted credentials require role-specific explicit names; old saved config bytes are unchanged',async t=>{
+  const f=await setup(t),before=JSON.stringify(f.config);
+  const names={cloudflare:'STUPID_GIFTS_CLOUDFLARE_API_TOKEN',amazonId:'STUPID_GIFTS_AMAZON_CREDENTIAL_ID',
+    amazonSecret:'STUPID_GIFTS_AMAZON_CREDENTIAL_SECRET',openai:'STUPID_GIFTS_OPENAI_API_KEY',
+    stagingAuthSecret:'STUPID_GIFTS_STAGING_AUTH_SECRET'};
+  const credentials={...f.config.credentials,...Object.fromEntries(Object.entries(names).map(([role,name])=>[role,{type:'environment',name}]))};
+  assert.doesNotThrow(()=>validateCloudflareWeeklyConfig({...f.config,credentials}));
+  for(const role of Object.keys(names))assert.throws(()=>validateCloudflareWeeklyConfig({...f.config,
+    credentials:{...credentials,[role]:{type:'environment',name:role==='cloudflare'?names.openai:names.cloudflare}}}),
+    /weekly_configuration_invalid|runner_check_config_invalid/);
+  assert.equal(JSON.stringify(f.config),before);
 });
 test('weekly OAuth start keeps merchant/model credentials on their exact Keychain refs and awaits approval before publication',async t=>{
   const f=await setup(t);f.config.credentials.cloudflare={type:'wrangler_oauth'};
