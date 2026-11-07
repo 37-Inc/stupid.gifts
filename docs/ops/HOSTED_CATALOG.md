@@ -36,8 +36,8 @@ run a local publisher while hosted care or a saved hosted publication is active.
   that observation. Core still rechecks the immutable policy, owner, full source,
   projection, prior receipt, watermark and cutoff before its atomic queue write.
   Arbitrary adapters retain their existing short observation deadlines.
-- Background work has a 330-minute process window within GitHub's six-hour job
-  ceiling, including cold restoration and full-catalog verification. This is not
+- Background work uses GitHub's six-hour job ceiling without a shorter child
+  process cutoff, including cold restoration and full-catalog verification. This is not
   an extra supplier/model allowance or a change to original content deadlines.
   Individual request timeouts and retries remain bounded. Track actual normal
   runtime and cold-restore overhead in the seven-cycle follow-up; slow runs need
