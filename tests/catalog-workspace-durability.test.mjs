@@ -136,6 +136,7 @@ test('registered expiry removes only original expired bodies; locked/unexpired c
   await assert.rejects(f.open({mode:'resume'}),/locked/);
   assert.deepEqual(await w.purgeExpired(),[]);assert.ok(f.objects.has(`runs/test-run/${ref.reference}`));
   f.setNow(LATER);await w.purgeExpired();assert.equal(f.objects.has(`runs/test-run/${ref.reference}`),false);
+  assert.equal(await w.retainedBodies(),false);
   assert.ok(f.objects.has('runs/test-run/manifest.json'));assert.ok(f.objects.has('runs/test-run/head.json'));
   assert.deepEqual(await readFile(join(w.directory,'manifest.json')),manifest);
   assert.deepEqual((await w.readCheckpoint({controlOnly:true})).checkpoint.owner,cp().owner);
