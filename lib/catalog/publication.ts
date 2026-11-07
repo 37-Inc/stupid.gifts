@@ -440,9 +440,9 @@ export async function completeActivatedServingPublication(db:CatalogD1,revision:
   if(!owner||owner.phase!=='activating'||owner.operationKey!==await digest(encoded)||revision.operationKey!==owner.operationKey
     ||owner.environment!==authority.request.environment||owner.indexName!==revision.request.scope.indexName
     ||permit.requestId!==await digest(requestBytes)||permit.releaseId!==intent.releaseId||permit.versionReference.length<1
-    ||snapshot.products.length<1||snapshot.products.some(p=>p.eligibleUntil!==null)
+    ||snapshot.products.length<1
     ||snapshot.products.length+snapshot.heldProducts.length!==authority.identityCount
-    ||revision.sourceRows.length!==authority.identityCount||intent.nextExpiry!==null
+    ||revision.sourceRows.length!==authority.identityCount||intent.nextExpiry!==earliestDisplayExpiry(snapshot.products)
     ||snapshot.catalogRevision!==authority.request.sourceRevision||intent.catalogRevision!==snapshot.catalogRevision
     ||await digest(`${JSON.stringify(snapshot)}\n`)!==authority.request.sourceDigest
     ||intent.catalogSnapshotSha256!==authority.request.sourceDigest||intent.codeSha!==authority.request.codeSha

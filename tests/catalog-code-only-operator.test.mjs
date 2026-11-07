@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {codeOnlyInvocation,codeOnlyPublication,createCodeOnlyStore} from '../scripts/catalog/code-only-operator.mjs';
+import {codeOnlyInvocation,codeOnlyPublication,createCodeOnlyStore,codeOnlyTerminal} from '../scripts/catalog/code-only-operator.mjs';
 import {sha256} from '../scripts/catalog/migration.ts';
 
 test('code-only route requires an explicit stable label and has no supplier/recovery arguments',()=>{
@@ -50,4 +50,19 @@ test('protected code-only records are immutable, hash-bound and cannot follow li
   const hard=path.join(base,'hard.json');await fs.link(file,hard);await assert.rejects(store.json(hard),/private_file/);await fs.unlink(hard);
   await fs.chmod(file,0o644);await assert.rejects(store.json(file),/private_file/);await fs.chmod(file,0o600);
   assert.equal(await store.optional(path.join(base,'missing.json')),null);
+});
+
+test('released unused code-only attempts stay terminal across future command sources without any provider call',async t=>{
+  const base=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'code-only-abandoned-')));await fs.chmod(base,0o700);
+  t.after(()=>fs.rm(base,{recursive:true,force:true}));const store=createCodeOnlyStore(base),directory=base+'/old',
+    record={runId:'old-attempt',source:'a'.repeat(40)},operatorSha256=await store.put(directory+'/operator.json',record),
+    abandoned={schemaVersion:1,state:'abandoned_prebuild',...record,operatorSha256,builds:0,uploads:0,activations:0,idle:{phase:'idle',external_pending:0}};
+  assert.equal(await codeOnlyTerminal(store,directory,record),null);
+  await store.put(directory+'/abandoned.json',abandoned);
+  assert.deepEqual(await codeOnlyTerminal(store,directory,record),{state:'abandoned_prebuild',...record,historicalAcceptance:false,supplierCalls:0,modelCalls:0});
+  for(const changed of [{runId:'other'},{source:'b'.repeat(40)}])await assert.rejects(codeOnlyTerminal(store,directory,{...record,...changed}),/abandonment_changed/);
+  await assert.rejects(codeOnlyTerminal(store,directory,null),/abandonment_changed/);
+  await store.put(directory+'/success.json',{});await assert.rejects(codeOnlyTerminal(store,directory,record),/abandonment_changed/);
+  const source=await fs.readFile(new URL('../scripts/catalog/code-only-operator.mjs',import.meta.url),'utf8');
+  assert.ok(source.indexOf('const terminal=await codeOnlyTerminal')<source.indexOf("refuse('source_changed')"));
 });
