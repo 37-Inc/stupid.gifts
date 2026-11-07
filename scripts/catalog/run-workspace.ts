@@ -16,6 +16,7 @@ import type { ProviderReceipt } from './provider-evidence.ts';
 import { validateExecutionAdoption } from './execution-adoption.ts';
 import type { ExecutionAdoption } from './execution-adoption.ts';
 import {activatedPermanentRevisionControl,activatedPermanentSummary} from './activated-permanent-control.ts';
+import type {CatalogObjectStore,DurableObject} from './r2-object-store.ts';
 
 type Json = null | boolean | number | string | Json[] | { [key:string]:Json };
 type Kind = ProviderReceipt['kind'] | 'phase' | 'publication' | 'checkpoint';
@@ -80,6 +81,9 @@ export interface RunWorkspaceOptions {
    * Historical manifest estimates and every charge remain unchanged. */
   requestLimit?:'enforce'|'observe';
   expectedManifestSha256?:string; now?:()=>string;
+  /** Runtime capability only: never changes historical manifest/config bytes.
+   * Each journal ACK is durable before the caller can dispatch externally. */
+  durable?:CatalogObjectStore;
 }
 export interface WorkspaceManifest {
   schemaVersion:1; runId:string; configSha256:string; codeSha:string; scope:WorkspaceScope;
@@ -114,6 +118,7 @@ type Event = {type:'artifact';ref:ArtifactRef} | {type:'checkpoint';ref:Artifact
   | {type:'catalog-successor-part';sha256:string;index:number;count:number;data:string}
   | {type:'reserve';reservation:BudgetReservation} | {type:'settle';id:string;settlement:BudgetSettlement};
 type RecordFile = {schemaVersion:1;sequence:number;parent:string|null;event:Event};
+type JournalHead={sequence:number;sha256:string|null};
 type State = {manifest:WorkspaceManifest;requestLimit:'enforce'|'observe';execution:ExecutionAdoption|null;recovery:RecoveryGrant|null;finish:FinishGrant|null;requestGrant:RequestGrant|null;success:PublicationSuccess|null;head:string|null;count:number;bytes:number;checkpoint:CheckpointView|null;body:ArtifactRef|null;previous:string|null;totals:BudgetTotals;
   successor:{sha256:string;count:number;parts:string[]}|null;
   refs:Map<string,ArtifactRef>;purged:Map<string,PurgedArtifact>;
@@ -203,6 +208,7 @@ function options(value:RunWorkspaceOptions) {
   if(!value||!key(value.runId)||!hash(value.configSha256)||typeof value.codeSha!=='string'||!/^[a-f0-9]{40}$/.test(value.codeSha)
     ||!['create','resume'].includes(value.mode)||value.expectedManifestSha256!==undefined&&!hash(value.expectedManifestSha256)
     ||value.requestLimit!==undefined&&!['enforce','observe'].includes(value.requestLimit))fail('configuration');
+  if(value.durable&&!['get','putImmutable','compareAndSwap','remove'].every(k=>typeof value.durable![k as keyof CatalogObjectStore]==='function'))fail('durable_configuration');
   scope(value.scope);
   if(!exact(value.retention,['reviewReference','rules'])||!refString(value.retention.reviewReference)
     ||!exact(value.retention.rules,KINDS))fail('retention_policy');
@@ -394,6 +400,9 @@ function stored(value:unknown,kind:Kind,observedAt:string,manifest:WorkspaceMani
 }
 async function loadStored(directory:string,ref:ArtifactRef,manifest:WorkspaceManifest,reference=ref.reference):Promise<Stored> {
   artifactRef(ref);const value=await readJson(join(directory,reference)) as Stored;
+  return validateStored(value,ref,manifest);
+}
+function validateStored(value:Stored,ref:ArtifactRef,manifest:WorkspaceManifest):Stored {
   if(!exact(value,['schemaVersion','sha256','kind','observedAt','expiresAt','policySha256','value'])||value.schemaVersion!==1
     ||!KINDS.includes(value.kind)||!same(value,stored(value.value,value.kind,value.observedAt,manifest))||value.sha256!==ref.sha256)fail('artifact_hash');
   return value;
@@ -647,6 +656,18 @@ function bindCheckpoint(value:CheckpointControl,manifest:WorkspaceManifest,execu
     ||p.intent&&p.intent.codeSha!==(execution?.effective.codeSha??manifest.codeSha)
     ||execution&&p.configSha256!==execution.effective.publicationConfigSha256))fail('control_scope');
 }
+function applyRecord(state:State,record:RecordFile,filename:string) {
+  const digest=sha256(canonicalJson(record)),manifest=state.manifest;
+  if(!exact(record,['schemaVersion','sequence','parent','event'])||record.schemaVersion!==1||record.sequence!==state.count+1||record.parent!==state.head
+    ||filename!==`${String(record.sequence).padStart(6,'0')}.${digest}.json`)fail('journal_chain');
+  if(record.event.type==='checkpoint'||record.event.type==='control')bindCheckpoint(record.event.control,manifest,state.execution);
+  if(record.event.type==='purge')purgeIdentity(record.event.artifact,manifest);
+  if(record.event.type==='publication-directories'){
+    const p=record.event.retention;
+    if(!same(p,publicationDirectories(p.releaseId,p.sourceRoot,p.observedAt,p.nextExpiry,manifest)))fail('publication_directories');
+  }
+  apply(state,record.event);state.count++;state.head=digest;
+}
 async function loadState(directory:string,manifest:WorkspaceManifest,repairHead=false,requestLimit:'enforce'|'observe'='enforce'):Promise<State> {
   const entries=await readdir(join(directory,'events'));if(entries.length>MAX_EVENTS+32)fail('entries');
   if((await readdir(join(directory,'objects'))).length>MAX_EVENTS)fail('entries');
@@ -656,18 +677,10 @@ async function loadState(directory:string,manifest:WorkspaceManifest,repairHead=
   for(const filename of files){
     if(!/^\d{6}\.[a-f0-9]{64}\.json$/.test(filename))fail('journal_name');
     state.bytes+=(await protectedStat(join(directory,'events',filename),false)).size;if(state.bytes>MAX_JOURNAL)fail('journal_bytes');
-    const record=await readJson(join(directory,'events',filename)) as RecordFile;const digest=sha256(canonicalJson(record));
-    if(!exact(record,['schemaVersion','sequence','parent','event'])||record.schemaVersion!==1||record.sequence!==state.count+1||record.parent!==state.head
-      ||filename!==`${String(record.sequence).padStart(6,'0')}.${digest}.json`)fail('journal_chain');
-    if(record.event.type==='checkpoint'||record.event.type==='control')bindCheckpoint(record.event.control,manifest,state.execution);
-    if(record.event.type==='purge')purgeIdentity(record.event.artifact,manifest);
-    if(record.event.type==='publication-directories'){
-      const p=record.event.retention;
-      if(!same(p,publicationDirectories(p.releaseId,p.sourceRoot,p.observedAt,p.nextExpiry,manifest)))fail('publication_directories');
-    }
+    const record=await readJson(join(directory,'events',filename)) as RecordFile;
     if(record.event.type==='checkpoint')checkpoints.push(record.event);
     previousHead={sequence:state.count,sha256:state.head};
-    apply(state,record.event);state.count++;state.head=digest;
+    applyRecord(state,record,filename);
   }
   for(const event of checkpoints){
     if(!state.purged.has(event.ref.sha256)){
@@ -712,11 +725,105 @@ async function location(input:RunWorkspaceOptions,create:boolean) {
 }
 async function readManifest(directory:string,input:RunWorkspaceOptions) {
   const manifest=await readJson(join(directory,'manifest.json')) as WorkspaceManifest;
+  return manifestInfo(manifest,input);
+}
+function manifestInfo(manifest:WorkspaceManifest,input:RunWorkspaceOptions) {
   if(!exact(manifest,['schemaVersion','runId','configSha256','codeSha','scope','retention','budgetCaps','createdAt'])||manifest.schemaVersion!==1)fail('manifest');
   const expected={schemaVersion:1,runId:input.runId,configSha256:input.configSha256,codeSha:input.codeSha,scope:input.scope,retention:input.retention,budgetCaps:input.budgetCaps,createdAt:manifest.createdAt};
   time(manifest.createdAt);const digest=sha256(canonicalJson(manifest));
   if(!same(manifest,expected)||input.expectedManifestSha256!==undefined&&input.expectedManifestSha256!==digest)fail('manifest_mismatch');
   return{manifest,manifestSha256:digest};
+}
+const encoded=(value:unknown)=>Buffer.from(`${canonicalJson(value)}\n`);
+function remoteJson(object:DurableObject,max=MAX_JSON*2):unknown {
+  if(!(object.bytes instanceof Uint8Array)||object.bytes.length>max)fail('durable_bytes');
+  const bytes=Buffer.from(object.bytes);let value;
+  try{value=JSON.parse(bytes.toString('utf8'));}catch{return fail('durable_json');}
+  if(!bytes.equals(encoded(value)))fail('durable_noncanonical');return value;
+}
+function journalHead(value:unknown):JournalHead {
+  const v=value as JournalHead;
+  if(!exact(v,['sequence','sha256'])||!integer(v.sequence)||v.sequence>MAX_EVENTS
+    ||(v.sequence===0?v.sha256!==null:!hash(v.sha256)))fail('durable_head');return v;
+}
+const eventName=(sequence:number,digest:string)=>`${String(sequence).padStart(6,'0')}.${digest}.json`;
+/** Remote durability uses this very journal and its hash chain. There is no
+ * second workflow state, owner lease, saved config or host lock in the bucket. */
+async function durableJournal(input:RunWorkspaceOptions,directory:string,create:boolean) {
+  const store=input.durable!,prefix=`runs/${input.runId}/`,headKey=prefix+'head.json';
+  const get=async(name:string)=>{const object=await store.get(prefix+name);if(!object)fail('durable_missing');return object;};
+  const put=async(name:string,bytes:Uint8Array)=>{
+    const actual=await store.putImmutable(prefix+name,bytes);
+    if(!Buffer.from(actual.bytes).equals(Buffer.from(bytes)))fail('durable_readback');
+  };
+  let remote:DurableObject;
+  async function cas(expected:string|null,next:JournalHead):Promise<DurableObject>{
+    const bytes=encoded(next);let actual:DurableObject;
+    try{actual=await store.compareAndSwap(headKey,expected,bytes);}
+    catch(error){const readback=await store.get(headKey);
+      if(!readback||!Buffer.from(readback.bytes).equals(bytes))throw error;actual=readback;}
+    if(!Buffer.from(actual.bytes).equals(bytes))fail('durable_readback');return actual;
+  }
+  async function commit(record:RecordFile) {
+    const event=record.event,refs=event.type==='artifact'||event.type==='checkpoint'?[event.ref]
+      :event.type==='execution-adoption'?[event.adoption.contexts.ref]:[];
+    for(const ref of refs){artifactRef(ref);await put(ref.reference,await readBytes(join(directory,ref.reference)));}
+    const digest=sha256(canonicalJson(record));
+    await put('events/'+eventName(record.sequence,digest),encoded(record));
+    remote=await cas(remote.etag,{sequence:record.sequence,sha256:digest});
+  }
+  if(create){
+    await put('manifest.json',await readBytes(join(directory,'manifest.json')));
+    remote=await cas(null,{sequence:0,sha256:null});
+  }else{
+    remote=await get('head.json');const head=journalHead(remoteJson(remote));
+    const manifest=remoteJson(await get('manifest.json')) as WorkspaceManifest;manifestInfo(manifest,input);
+    const records:{name:string;record:RecordFile}[]=[];let digest=head.sha256,bytes=0;
+    for(let sequence=head.sequence;sequence>0;sequence--){
+      const name=eventName(sequence,digest!),object=await get('events/'+name);bytes+=object.bytes.length;
+      if(bytes>MAX_JOURNAL)fail('journal_bytes');
+      const record=remoteJson(object) as RecordFile;
+      if(sha256(canonicalJson(record))!==digest||record.sequence!==sequence)fail('journal_chain');
+      records.push({name,record});digest=record.parent;
+      if(sequence===1?digest!==null:!hash(digest))fail('journal_chain');
+    }
+    const state=empty(manifest,input.requestLimit??'enforce');
+    for(const {name,record}of records.reverse())applyRecord(state,record,name);
+    if(state.head!==head.sha256||state.count!==head.sequence)fail('journal_chain');
+    // Fresh files only. Never restore local inode identities, .pending files,
+    // source outputs or locks; D1 checkpoint ownership remains byte-identical.
+    await immutable(join(directory,'manifest.json'),manifest);
+    for(const {name,record}of records)await immutable(join(directory,'events',name),record);
+    for(const ref of state.refs.values())if(!state.purged.has(ref.sha256)){
+      const body=remoteJson(await get(ref.reference)) as Stored;validateStored(body,ref,manifest);
+      await immutable(join(directory,ref.reference),body);
+    }
+    let local:JournalHead;
+    try{local=journalHead(await readJson(join(directory,'head.json')));}
+    catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+      await immutable(join(directory,'head.json'),head);local=head;}
+    if(local.sequence<=head.sequence){
+      const expected=local.sequence===0?null:sha256(canonicalJson(records[local.sequence-1].record));
+      if(local.sha256!==expected)fail('durable_local_fork');
+      if(!same(local,head))await replaceHead(directory,local,head);
+    }
+    const loaded=await loadState(directory,manifest,false,input.requestLimit);
+    if(loaded.count!==head.sequence){
+      // A failed remote CAS may leave ONE local fsynced tail. Reconcile its
+      // original bytes/reservation remotely before permitting local head repair.
+      if(loaded.count!==head.sequence+1)fail('durable_local_fork');
+      const tail=await readJson(join(directory,'events',eventName(loaded.count,loaded.head!))) as RecordFile;
+      if(tail.parent!==head.sha256)fail('durable_local_fork');await commit(tail);
+    }
+    const current=await get('head.json');
+    if(!Buffer.from(current.bytes).equals(remote.bytes)||current.etag!==remote.etag)fail('durable_head_changed');
+  }
+  return{commit,async purge(artifact:PurgedArtifact){
+    const object=await store.get(prefix+artifact.ref.reference);if(!object)return;
+    const body=remoteJson(object) as Stored;validateStored(body,artifact.ref,(await readManifest(directory,input)).manifest);
+    if(sha256(canonicalJson(body))!==artifact.storedSha256||Date.parse(body.expiresAt)>Date.parse(time((input.now||(()=>new Date().toISOString()))())))fail('purge_body');
+    await store.remove(prefix+artifact.ref.reference,object.etag);
+  }};
 }
 async function expired(directory:string,state:State,manifest:WorkspaceManifest,now:string) {
   const result:WorkspaceStatus['expired']=[];
@@ -732,6 +839,11 @@ export async function readRunWorkspace(input:RunWorkspaceOptions):Promise<Worksp
   input={...input,scope:structuredClone(input.scope),retention:structuredClone(input.retention),budgetCaps:structuredClone(input.budgetCaps)};
   const directory=await location({...input,mode:'resume'},false);const info=await readManifest(directory,input);
   const before=(await readdir(join(directory,'events'))).sort();const state=await loadState(directory,info.manifest,false,input.requestLimit);
+  if(input.durable){
+    const head=await input.durable.get(`runs/${input.runId}/head.json`),manifest=await input.durable.get(`runs/${input.runId}/manifest.json`);
+    if(!head||!manifest||!same(journalHead(remoteJson(head)),{sequence:state.count,sha256:state.head})
+      ||!same(remoteJson(manifest),info.manifest))fail('durable_head_changed');
+  }
   await verifyExecutionMetadata(directory,state,await realpath(input.repository));
   await verifySuccessMetadata(directory,state);
   const expiredRefs=await expired(directory,state,info.manifest,time((input.now||(()=>new Date().toISOString()))()));
@@ -785,12 +897,19 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
     for(const resource of resources.map(r=>({key:sha256(canonicalJson(r)),resource:r})).sort((a,b)=>a.key.localeCompare(b.key))){
       await acquire(resource.resource);
     }
+    if(input.durable&&input.mode==='resume'){
+      // A new runner may restore into an absent private local workspace. The
+      // fresh local locks above are never taken from the remote checkpoint.
+      for(const path of [join(input.directory,'runs'),join(input.directory,'runs',input.runId),
+        join(input.directory,'runs',input.runId,'objects'),join(input.directory,'runs',input.runId,'events')])await privateDirectory(path,true);
+    }
     const directory=await location(input,input.mode==='create');
     if(input.mode==='create'){
       await immutable(join(directory,'manifest.json'),{schemaVersion:1,runId:input.runId,configSha256:input.configSha256,codeSha:input.codeSha,
         scope:input.scope,retention:input.retention,budgetCaps:input.budgetCaps,createdAt:time((input.now||(()=>new Date().toISOString()))())});
       await immutable(join(directory,'head.json'),{sequence:0,sha256:null});
     }
+    const durability=input.durable?await durableJournal(input,directory,input.mode==='create'):undefined;
     const info=await readManifest(directory,input);const manifest=JSON.parse(canonicalJson(info.manifest)) as WorkspaceManifest;
     // Runtime freeze prevents accidental caller scope/policy mutation.
     const freeze=(v:unknown):void=>{if(v&&typeof v==='object'){Object.values(v).forEach(freeze);Object.freeze(v);}};freeze(manifest);
@@ -814,7 +933,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
     async function assertHeld(){if(closed)fail('closed');await pathWithoutLinks(input.directory);
       for(const guard of guards){const s=await protectedStat(guard.path,true);if(s.ino!==guard.stat.ino||s.dev!==guard.stat.dev)fail('directory_changed');}
       for(const l of locks){const s=await protectedStat(l.path,false);if(s.ino!==l.ino||s.dev!==l.dev||!same(await readJson(l.path),l.body))fail('lock_lost');}}
-    const serial=<T>(action:()=>Promise<T>):Promise<T>=>{const result=queue.then(async()=>{await assertHeld();if(poisoned)fail('journal_uncertain');return action();});queue=result.catch(()=>{});return result;};
+    const serial=<T>(action:()=>Promise<T>,allowPoisoned=false):Promise<T>=>{const result=queue.then(async()=>{await assertHeld();if(poisoned&&!allowPoisoned)fail('journal_uncertain');return action();});queue=result.catch(()=>{});return result;};
     const now=()=>time((input.now||(()=>new Date().toISOString()))());
     async function usable(){const instant=Date.parse(now());if(state.purged.size||[...state.publications.values()].some(p=>p.purged)||usableUntil<=instant||usableAfter>instant)fail('expired');}
     async function append(event:Event){
@@ -824,6 +943,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       apply(state,event,true);const digest=sha256(canonicalJson(next)),bytes=Buffer.byteLength(canonicalJson(next))+1;
       if(state.bytes+bytes>MAX_JOURNAL)fail('journal_bytes');
       try{await immutable(join(directory,'events',`${String(next.sequence).padStart(6,'0')}.${digest}.json`),next);
+        await durability?.commit(next);
         await replaceHead(directory,{sequence:state.count,sha256:state.head},{sequence:next.sequence,sha256:digest});
       }catch(error){poisoned=true;throw error;}
       apply(state,event);state.count=next.sequence;state.head=digest;state.bytes+=bytes;
@@ -921,6 +1041,9 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       for(const {artifact}of plan)if(!state.purged.has(artifact.ref.sha256))await append({type:'purge',artifact,purgedAt:instant});
       for(const {p}of publications)if(!p.purged)await append({type:'publication-purged',releaseId:p.retention.releaseId,purgedAt:instant});
       try{
+        // The remote tombstone commits before removal; a lost runner can
+        // retry deletion from retained original expiry metadata, without bodies.
+        for(const artifact of state.purged.values())await durability?.purge(artifact);
         for(const {artifact:v,reference}of plan){await assertHeld();const path=join(directory,reference);
           if(sha256(canonicalJson(await loadStored(directory,v.ref,manifest,reference)))!==v.storedSha256)fail('purge_body');
           await unlink(path);await syncDirectory(join(directory,'objects'));
@@ -1115,7 +1238,10 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       preparePublicationDirectories:(releaseId:string,observedAt:string,nextExpiry:string|null)=>serial(()=>preparePublicationDirectories(releaseId,observedAt,nextExpiry)),
       cleanPublicationBuild:(releaseId:string)=>serial(()=>cleanPublicationBuild(releaseId)),
       purgeExpired:()=>serial(purgeExpired),
-      close:()=>serial(async()=>{for(const lock of [...locks].reverse()){await unlink(lock.path);await syncDirectory(dirname(lock.path));}closed=true;}),
+      // A live durable handle may release ONLY its independently verified local
+      // locks after failed mirroring. Reopen reconciles remote CAS first; this
+      // neither clears D1 ownership nor changes the uncertain journal/charges.
+      close:()=>serial(async()=>{for(const lock of [...locks].reverse()){await unlink(lock.path);await syncDirectory(dirname(lock.path));}closed=true;},!!input.durable),
     };
     return Object.freeze(api) as RunWorkspace;
   }catch(error){
