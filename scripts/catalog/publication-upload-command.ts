@@ -2,15 +2,17 @@ import { createServer } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { access } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { chmod, mkdtemp, rmdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { RunWorkspace } from './run-workspace.ts';
 import type { PublicationCommand } from './publish-release.ts';
+import { publicationUploadIsolation } from './publication-upload-isolation.ts';
+import type { UploadIsolation } from './publication-upload-isolation.ts';
 
 const API='https://api.cloudflare.com/client/v4';
-const SANDBOX='/usr/bin/sandbox-exec';
 // Upload chunks have an independent per-request/concurrent-aggregate wire bound,
 // including base64/multipart overhead; this is not the sealed package total bound.
 const REQUEST_BYTES=2*128*1024*1024+1024*1024,RESPONSE_BYTES=512*1024,REQUEST_MS=180_000;
@@ -73,12 +75,14 @@ async function captured(command:PublicationCommand,signal?:AbortSignal):Promise<
   catch{throw new PublicationUploadCommandError('publication_upload_command_failed');}
 }
 
-/** Mac operator only. The parent owns the sole ledger/remote transport; Wrangler
- * and descendants can acquire outbound sockets only to this ephemeral bridge.
+/** The parent owns the sole ledger/remote transport; Wrangler and descendants
+ * reach the external network only through this ephemeral bridge.
  * No auth discovery, TLS interception, dependency patching or upload retry here.
  */
 export function accountedPublicationUploadCommand(options:{workspace:Workspace;scope:Scope;send?:typeof fetch;
-  command?:(command:PublicationCommand,signal?:AbortSignal)=>Promise<void>}):UploadCommand{
+  command?:(command:PublicationCommand,signal?:AbortSignal)=>Promise<void>;
+  /** Test dependency only, never hydrated from a run's JSON/configuration. */
+  isolation?:UploadIsolation}):UploadCommand{
   const {workspace:ws,scope}=options,send=options.send??remote,run=options.command??captured;
   if(!/^[a-f0-9]{32}$/.test(scope.accountId)||!/^[a-zA-Z0-9_-]{1,100}$/.test(scope.workerName))
     throw new PublicationUploadCommandError('publication_upload_scope_invalid');
@@ -89,7 +93,8 @@ export function accountedPublicationUploadCommand(options:{workspace:Workspace;s
     const provision=command.args.filter(arg=>/^--?(?:no-)?(?:experimental-?provision|x-provision)(?:=|$)/i.test(arg));
     if(provision.length>1||provision.some(arg=>arg!=='--experimental-provision=false'))throw new PublicationUploadCommandError('publication_upload_scope_invalid');
     const uploadArgs=provision.length?command.args:[...command.args,'--experimental-provision=false'];
-    try{if(process.platform!=='darwin')throw new Error();await access(SANDBOX,constants.X_OK);}
+    let isolation:UploadIsolation;
+    try{isolation=options.isolation??publicationUploadIsolation();await isolation.available();}
     catch{throw new PublicationUploadCommandError('publication_upload_sandbox_unavailable');}
     await ws.assertHeld();
     const nonce=randomBytes(24).toString('hex'),prefix=`/${nonce}/client/v4`,child=new AbortController();
@@ -157,20 +162,24 @@ export function accountedPublicationUploadCommand(options:{workspace:Workspace;s
     server.on('error',()=>fail('publication_upload_unknown'));
     server.on('connect',(_req,socket)=>{fail('publication_upload_scope_invalid');socket.destroy();});
     server.on('clientError',(_error,socket)=>{fail('publication_upload_scope_invalid');socket.destroy();});
+    let socketDirectory:string|undefined;
     try{
-      await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',()=>{server.removeListener('error',reject);resolve();});});
-      const address=server.address();if(!address||typeof address==='string')throw new Error();
-      // Seatbelt requires its special localhost token, not a numeric address.
-      // tcp4 restricts that token to IPv4; IPv6 on the same port remains denied.
-      const profile=`(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote tcp4 "localhost:${address.port}"))`;
-      await run({...command,file:SANDBOX,args:['-p',profile,command.file,...uploadArgs],env:{...command.env,
-        CLOUDFLARE_API_BASE_URL:`http://127.0.0.1:${address.port}${prefix}`,WRANGLER_HIDE_BANNER:'true',WRANGLER_SEND_METRICS:'false',
-        WRANGLER_SEND_ERROR_REPORTS:'false',WRANGLER_LOG_SANITIZE:'true'}},child.signal);
+      if(isolation.transport==='unix')socketDirectory=await mkdtemp(path.join(tmpdir(),'sg-upload-'));
+      const socketPath=socketDirectory?path.join(socketDirectory,'bridge.sock'):undefined;
+      await new Promise<void>((resolve,reject)=>{server.once('error',reject);const listening=()=>{server.removeListener('error',reject);resolve();};
+        if(socketPath)server.listen(socketPath,listening);else server.listen(0,'127.0.0.1',listening);});
+      const address=server.address();if(!address)throw new Error();
+      if(socketPath)await chmod(socketPath,0o600);
+      const wrapped=await isolation.wrap({...command,args:uploadArgs,env:{...command.env,
+        WRANGLER_HIDE_BANNER:'true',WRANGLER_SEND_METRICS:'false',WRANGLER_SEND_ERROR_REPORTS:'false',WRANGLER_LOG_SANITIZE:'true'}},
+        {prefix,...(socketPath?{socketPath}:{port:typeof address==='string'?undefined:address.port})});
+      await run(wrapped,child.signal);
     }catch{failure??=new PublicationUploadCommandError('publication_upload_command_failed',{versionDispatched,reason:'command_failed'});}
     finally{
       stopping=true;const closed=new Promise<void>(resolve=>server.close(()=>resolve()));
       for(const controller of controllers)controller.abort();server.closeIdleConnections();
       while(pending.size)await Promise.allSettled([...pending]);server.closeAllConnections();await closed;
+      if(socketDirectory)await rmdir(socketDirectory);
     }
     if(failure)throw failure;
   };

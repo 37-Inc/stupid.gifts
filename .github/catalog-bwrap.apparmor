@@ -1,0 +1,9 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+# The ephemeral Ubuntu runner needs permission to construct the uploader's
+# namespaces. This does not disable the host-wide restriction or the uploader's
+# explicit network/mount/capability policy.
+/usr/bin/bwrap flags=(unconfined) {
+  userns,
+}
