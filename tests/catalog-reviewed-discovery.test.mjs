@@ -66,6 +66,17 @@ test('reviewed discovery refuses missing saved-stage capability before a supplie
   await assert.rejects(executeCatalog({...parseArgs([]),discoveryEditor:{reviewDiscovery:async()=>[]}},undefined,usage(),{}),/discovery_editor_capability_required/);
   assert.equal(calls,0);
 });
+test('visual admission, not a legacy price band or keyword score, decides expensive and cheap gifts',async t=>{
+  const products=[{...item(5,'Odd mechanical animal sculpture'),price:350},{...item(6,'Tiny ridiculous desk object'),price:.5}],saved=stages(),written=[];
+  t.mock.method(amazon,'searchItems',async()=>products);
+  const options={...parseArgs(['--themes','one','--max-new','1','--backfill-limit','0','--skip-enrichment']),
+    discoveryNewOnly:true,discoveryRunKey:'price-not-taste',editorialStages:saved.stage,
+    discoveryEditor:{async reviewDiscovery(candidates){assert.equal(candidates.length,2);assert.ok(candidates.every(p=>p.qualityScore===0));
+      return candidates.map(p=>({id:p.id,decision:'admit',appeal:'giftable',imageMatches:true,reason:'The actual visible object has a distinctive gift-worthy joke.'}));}}};
+  await executeCatalog(options,undefined,usage(),{getActiveCatalogIdentities:async()=>[],getExistingEditorialWriteups:async()=>[],
+    upsertProduct:async p=>{written.push(p.id);return{inserted:true};},recordEditorialEvent:async()=>{}});
+  assert.deepEqual(written,products.map(p=>p.id));
+});
 test('contradictory same-run observations defer only that identity instead of blocking good unrelated gifts',async t=>{
   const first=item(1,'Alligator oven mitts'),good=item(2,'Chicken-leg socks');let calls=0;const written=[];
   t.mock.method(amazon,'searchItems',async()=>++calls===1?[first,good]:[{...first,title:'An entirely different product'}]);

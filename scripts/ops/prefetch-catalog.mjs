@@ -1148,7 +1148,10 @@ function isActiveCatalogCandidate(product, options) {
     return false;
   }
 
-  return product.price <= 0 || (product.price >= options.minPrice && product.price <= options.maxPrice);
+  // The new visual-admission path judges the actual gift, not a legacy price
+  // band. Preserve price filtering only for frozen/unupgraded callers.
+  return Boolean(options.discoveryEditor&&options.editorialStages)
+    ||product.price <= 0 || (product.price >= options.minPrice && product.price <= options.maxPrice);
 }
 
 function isAmazonThrottleError(error) {
@@ -1209,7 +1212,7 @@ function finalizeProducts(products, theme, options) {
     .map((product) => ({
       ...product,
       // This score is editorial fit, not a supplier rating or factual claim.
-      qualityScore: options.admitAsins ? 0.8 : scoreCandidate(product),
+      qualityScore: options.discoveryEditor&&options.editorialStages?0:options.admitAsins?0.8:scoreCandidate(product),
     }));
 }
 
@@ -1867,7 +1870,8 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   if (options.enrichOnly) {
     console.log(`Catalog enrichment: max ${options.backfillLimit} existing active products`);
   } else {
-    console.log(`Catalog prefetch: ${themes.length} themes, max ${options.maxNew} net-new products`);
+    console.log(reviewedDiscovery?`Catalog discovery: ${themes.length} themes; admit the worthwhile finite cohort before enrichment`
+      :`Catalog prefetch: ${themes.length} themes, max ${options.maxNew} net-new products`);
   }
 
   if (options.backfillLimit > 0 && (!options.dryRun || catalogReadsAvailable)) {
@@ -2123,7 +2127,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   }
 
   if (options.dryRun) {
-    const reviewCandidates = candidates.slice(0, Math.min(options.maxNew, 5)).map((product) => ({
+    const reviewCandidates = candidates.slice(0, reviewedDiscovery?5:Math.min(options.maxNew, 5)).map((product) => ({
       id: product.id,
       title: product.title,
       imageUrl: product.imageUrl,
@@ -2146,7 +2150,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
       deferredCandidates: overflow.length,
       activeCandidates: candidates.filter((product) => product.isActive).length,
       manualIntervention: backfillStats.manualReview,
-      candidates: candidates.slice(0, options.maxNew),
+      candidates: reviewedDiscovery?[...candidates]:candidates.slice(0, options.maxNew),
       reviewCandidates,
     };
   }
