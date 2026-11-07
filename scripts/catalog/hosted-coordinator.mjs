@@ -112,6 +112,7 @@ function defaults(runtime,environment){
     currentInputs:()=>currentHostedInputs(runtime.durable),restoreInputs:ref=>restoreHostedInputs(runtime.durable,runtime.base,ref),
     shadowCheck:()=>checkHostedProviderShadow(runtime),
     async checkout(source){
+      console.log(JSON.stringify({state:'progress',step:'checkout',source}));
       const clean=hostedCommandEnvironment(environment,{credentials:false});
       await exec('git',['merge-base','--is-ancestor',source,environment.GITHUB_SHA],{cwd:ROOT,env:clean});
       const directory=path.join(OPERATORS,source);await mkdir(OPERATORS,{recursive:true,mode:0o700});
@@ -122,11 +123,13 @@ function defaults(runtime,environment){
       if(await git('status','--porcelain','--untracked-files=all'))fail('operator_source');return directory;
     },
     async invoke(directory,args){
+      console.log(JSON.stringify({state:'progress',step:'operator',command:args[0]}));
       try{const result=await exec(process.execPath,['--import','tsx','scripts/catalog/daily-operator.mjs',...args],{
         cwd:directory,env:hostedCommandEnvironment(environment),timeout:90*60000,maxBuffer:5*1024*1024});return parsedOutput(result.stdout);}
       catch(error){return hostedOperatorFailure(error);}
     },
     async inspect(record,directory){
+      console.log(JSON.stringify({state:'progress',step:'inspect',runKey:record.runKey}));
       const operator=await optional(async()=>json(await runtime.state.bytes(stateFile(record.runKey)+'/operator.json')));
       if(!operator)return{prepared:false};
       if(operator.source!==record.source||operator.configPath!==stateFile(record.runKey)+'/config.json'||!HASH.test(operator.configSha256)
