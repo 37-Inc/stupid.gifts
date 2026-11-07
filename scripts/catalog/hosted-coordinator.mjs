@@ -272,7 +272,8 @@ async function main(){
   if(mode==='editorial'){
     if(canaryId)fail('invocation');
     const {previewHostedHomepage}=await import('./hosted-policy.mjs');
-    console.log(JSON.stringify(await previewHostedHomepage(runtime,{repository:ROOT,source,day:`${parts.year}-${parts.month}-${parts.day}`})));return;
+    const repository=await defaults(runtime,process.env).checkout(source);
+    console.log(JSON.stringify(await previewHostedHomepage(runtime,{repository,source,day:`${parts.year}-${parts.month}-${parts.day}`})));return;
   }
   const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),source,day:`${parts.year}-${parts.month}-${parts.day}`,runtime});
   console.log(JSON.stringify(result));if(result.state==='attention'){console.error('::warning::Catalog run remains pending; resume its existing identity.');process.exitCode=1;}
