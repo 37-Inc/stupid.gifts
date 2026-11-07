@@ -77,10 +77,16 @@ export function createCatalogR2Store(options:{accountId:string;bucket:string;pre
   }
   async function write(key:string,expectedEtag:string|null,body:Uint8Array){
     if(!(body instanceof Uint8Array)||body.byteLength>MAX_BYTES||expectedEtag!==null&&!validEtag(expectedEtag))fail('configuration');
-    const bytes=new Uint8Array(body),digest=hash(bytes);let status:number|undefined;
-    try{const response=await request(key,'PUT',{'Content-Type':'application/octet-stream','x-amz-meta-sha256':digest,
+    const bytes=new Uint8Array(body),digest=hash(bytes),md5=createHash('md5').update(bytes).digest();let status:number|undefined;
+    try{const response=await request(key,'PUT',{'Content-Type':'application/octet-stream','x-amz-meta-sha256':digest,'Content-MD5':md5.toString('base64'),
       ...(expectedEtag===null?{'If-None-Match':'*'}:{'If-Match':expectedEtag})},bytes);
-      status=response.status;await response.body?.cancel();
+      status=response.status;const etag=response.headers.get('etag');await response.body?.cancel();
+      // Single PUT only: R2 validates Content-MD5 and atomically commits the
+      // conditional write. A matching successful ACK is durable; avoid a
+      // redundant GET for every journal event/head. Lost/odd ACKs still use
+      // exact SHA-256+byte readback below, never another blind write.
+      // https://developers.cloudflare.com/r2/reference/consistency/
+      if(status===200&&etag==='"'+md5.toString('hex')+'"')return{bytes,etag};
     }catch{/* A lost ACK is settled by exact readback, never an overwrite. */}
     const actual=await get(key);
     if(actual&&hash(actual.bytes)===digest&&Buffer.from(actual.bytes).equals(Buffer.from(bytes)))return actual;

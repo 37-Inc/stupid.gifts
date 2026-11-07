@@ -6,7 +6,7 @@ import {createCatalogR2Store} from '../scripts/catalog/r2-object-store.ts';
 const bytes=value=>new TextEncoder().encode(value);
 const hash=value=>createHash('sha256').update(value).digest('hex');
 function fixture(){
-  const objects=new Map(),calls=[];let loseAck=false,readFaults=[];
+  const objects=new Map(),calls=[];let loseAck=false,oddAck=false,readFaults=[];
   const config={accountId:'a'.repeat(32),bucket:'private-test-bucket',prefix:'hosted-v1',
     accessKeyId:'SYNTHETIC_ACCESS',secretAccessKey:'SYNTHETIC_SECRET'};
   const store=createCatalogR2Store({...config,send:async request=>{
@@ -21,19 +21,22 @@ function fixture(){
     const expected=request.headers.get('if-match'),absent=request.headers.get('if-none-match');
     assert.ok(expected||absent==='*');
     if(absent==='*'&&old||expected&&old?.etag!==expected)return new Response(null,{status:412});
-    assert.equal(request.method,'PUT');const body=new Uint8Array(await request.arrayBuffer()),digest=hash(body);
+    assert.equal(request.method,'PUT');const body=new Uint8Array(await request.arrayBuffer()),digest=hash(body),md5=createHash('md5').update(body).digest();
     assert.equal(request.headers.get('x-amz-meta-sha256'),digest);
-    objects.set(key,{body,hash:digest,etag:'"'+digest+'"'});
+    assert.equal(request.headers.get('content-md5'),md5.toString('base64'));
+    objects.set(key,{body,hash:digest,etag:'"'+md5.toString('hex')+'"'});
     if(loseAck){loseAck=false;throw Error('SYNTHETIC_LOST_ACK');}
-    return new Response(null,{headers:{etag:'"'+digest+'"'}});
+    if(oddAck){oddAck=false;return new Response(null,{headers:{etag:'"unrecognized-ack"'}});}
+    return new Response(null,{headers:{etag:'"'+md5.toString('hex')+'"'}});
   }});
-  return{store,objects,calls,loseNextAck:()=>{loseAck=true;},failReads:(...faults)=>{readFaults=faults;}};
+  return{store,objects,calls,loseNextAck:()=>{loseAck=true;},oddNextAck:()=>{oddAck=true;},failReads:(...faults)=>{readFaults=faults;}};
 }
 
 test('immutable objects preserve exact bytes and reject conflicting overwrite',async()=>{
   const f=fixture(),body=bytes('original response');
   const first=await f.store.putImmutable('runs/one/objects/body.json',body);
   assert.deepEqual(first.bytes,body);
+  assert.deepEqual(f.calls.map(c=>c.method),['PUT']); // checksum-verified durable ACK; no second read
   assert.deepEqual(await f.store.putImmutable('runs/one/objects/body.json',body),first);
   await assert.rejects(f.store.putImmutable('runs/one/objects/body.json',bytes('different')),/conflict/);
   assert.deepEqual((await f.store.get('runs/one/objects/body.json')).bytes,body);
@@ -49,6 +52,11 @@ test('lost write ACK resolves from exact readback without a second dispatch',asy
   const f=fixture();f.loseNextAck();
   assert.deepEqual((await f.store.putImmutable('runs/one/events/event.json',bytes('charged before provider'))).bytes,bytes('charged before provider'));
   assert.equal(f.calls.filter(c=>c.method==='PUT').length,1);
+});
+test('an unfamiliar successful ACK still requires exact SHA-256 byte readback, never a second write',async()=>{
+  const f=fixture();f.oddNextAck();const body=bytes('same original bytes');
+  assert.deepEqual((await f.store.putImmutable('runs/one/objects/body.json',body)).bytes,body);
+  assert.deepEqual(f.calls.map(c=>c.method),['PUT','GET']);
 });
 test('transient readback network/503 failures retry the same GET, never the uncertain PUT',async()=>{
   const f=fixture();f.loseNextAck();f.failReads(Error('network interruption'),new Response(null,{status:503,headers:{'retry-after':'0'}}));
