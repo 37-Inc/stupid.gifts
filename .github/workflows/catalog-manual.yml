@@ -1,0 +1,59 @@
+name: Stupid Gifts — Manual catalog care
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Read-only shadow, normal full/photo care, or owner-invoked one-product canary
+        type: choice
+        default: shadow
+        options: [shadow, full, photos, canary]
+      canary_asin:
+        description: Exact existing public ASIN; required only for canary
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: catalog-production
+  cancel-in-progress: false
+
+jobs:
+  catalog:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: Production
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.23.1'
+      - name: Install the reviewed isolated uploader runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap
+          sudo apparmor_parser -r .github/catalog-bwrap.apparmor
+      - name: Install coordinator dependencies without application credentials
+        run: >-
+          env -i HOME=/home/runner PATH="$PATH" CI=true
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Resume the original pending run or perform the explicitly chosen operation
+        env:
+          CATALOG_MODE: ${{ inputs.mode }}
+          CATALOG_CANARY_ASIN: ${{ inputs.canary_asin }}
+          STUPID_GIFTS_OPERATOR_MODE: hosted
+          STUPID_GIFTS_CLOUDFLARE_API_TOKEN: ${{ secrets.STUPID_GIFTS_CLOUDFLARE_API_TOKEN }}
+          STUPID_GIFTS_AMAZON_CREDENTIAL_ID: ${{ secrets.STUPID_GIFTS_AMAZON_CREDENTIAL_ID }}
+          STUPID_GIFTS_AMAZON_CREDENTIAL_SECRET: ${{ secrets.STUPID_GIFTS_AMAZON_CREDENTIAL_SECRET }}
+          STUPID_GIFTS_OPENAI_API_KEY: ${{ secrets.STUPID_GIFTS_OPENAI_API_KEY }}
+          STUPID_GIFTS_R2_ACCESS_KEY_ID: ${{ secrets.STUPID_GIFTS_R2_ACCESS_KEY_ID }}
+          STUPID_GIFTS_R2_SECRET_ACCESS_KEY: ${{ secrets.STUPID_GIFTS_R2_SECRET_ACCESS_KEY }}
+        run: |
+          umask 077
+          node --import tsx scripts/catalog/hosted-coordinator.mjs "$CATALOG_MODE" "$CATALOG_CANARY_ASIN"

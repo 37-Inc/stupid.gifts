@@ -1150,3 +1150,109 @@ test('oversized original input still binds reviewed RAW hash; config limit canno
   f.options.configSha256=sha256(await fs.readFile(f.options.configPath));await assert.rejects(f.run('preflight'),/weekly_private_input/);
   assert.equal(f.calls.http,http);
 });
+
+test('automation is strict opt-in and cannot broaden old cadence or combine admission authorities',async t=>{
+  const f=await setup(t);f.config.backfillLimit=0;
+  const cadence={day:'2026-10-20',featuredIds:[],runKey:f.config.runId,
+    automation:{schemaVersion:1,refreshIds:[ID],discovery:false}};
+  assert.deepEqual(validateCloudflareWeeklyConfig({...f.config,cadence}).cadence,cadence);
+  for(const changed of [
+    {...cadence,runKey:undefined}, {...cadence,admitAsins:[ID]},
+    {...cadence,automation:{...cadence.automation,refreshIds:[ID,ID]}},
+    {...cadence,automation:{...cadence.automation,extra:true}},
+    {...cadence,photosOnly:true,automation:{...cadence.automation,discovery:true}},
+  ])assert.throws(()=>validateCloudflareWeeklyConfig({...f.config,cadence:changed}),/cadence_invalid|automation_invalid/);
+});
+
+test('automation driver resumes an exact saved preparation without another supplier/model batch',async t=>{
+  const f=await setup(t,{permanent:22,held:2,authenticPrior:true});f.config.backfillLimit=0;delete f.config.credentials.openai;
+  f.config.cadence={day:'2026-10-20',featuredIds:[],runKey:f.config.runId,
+    automation:{schemaVersion:1,refreshIds:[ID],discovery:false}};
+  await f.configure();let stopped=false,mirrors=0;
+  f.dependencies.checkpointSaved=async({workspace,checkpoint})=>{
+    mirrors++;
+    if(stopped||!checkpoint.checkpoint.state.automationJournal)return;
+    const journal=await readOrdered(workspace,checkpoint.checkpoint.state.automationJournal);
+    if(journal.entries['phase-0-prepared']){stopped=true;throw Error('test_only_terminated_after_preparation');}
+  };
+  const interrupted=await f.run('start');assert.equal(interrupted.state,'attention',JSON.stringify(interrupted));
+  assert.equal(interrupted.phase,'phases_running');assert.equal(f.calls.getItems,1,JSON.stringify(interrupted));assert.equal(f.calls.chat+f.calls.embedding+f.calls.search,0);
+  const providerCalls=f.calls.getItems;
+  const resumed=await f.run('resume');assert.equal(resumed.reason,'awaiting_reviewed_approval',JSON.stringify(resumed));
+  assert.equal(f.calls.getItems,providerCalls);assert.equal(f.calls.chat+f.calls.embedding+f.calls.search,0);assert.ok(mirrors>5);
+  const ws=await openRunWorkspace(f.workspaceOptions);try{
+    const cp=await ws.readCheckpoint(),journal=await readOrdered(ws,cp.checkpoint.pins.automationJournal);
+    assert.ok(journal.entries['phase-0-applied']);assert.ok(journal.entries['provider-phases-complete']);
+    assert.equal(journal.receipts.length,1);
+  }finally{await ws.close();}
+  const result=await f.run('resume',await f.approve());
+  assert.equal(result.state,'finalized',JSON.stringify(result));assert.equal(f.calls.getItems,providerCalls);
+});
+
+test('exact automation cohort publishes one hundred refreshes without embedding calls or dropping identities',async t=>{
+  const f=await setup(t,{permanent:122,held:2,authenticPrior:true});f.config.backfillLimit=0;delete f.config.credentials.openai;
+  const ids=f.sql.prepare("SELECT id FROM products WHERE public_display_json IS NOT NULL AND is_active=1 AND duplicate_of_product_id IS NULL ORDER BY id LIMIT 100").all().map(p=>p.id);
+  assert.equal(ids.length,100);
+  f.config.cadence={day:'2026-10-20',featuredIds:[],runKey:f.config.runId,automation:{schemaVersion:1,refreshIds:ids,discovery:false}};
+  f.config.limits={requests:10000,statements:25000};await f.configure();
+  const originalIds=f.sql.prepare('SELECT id,public_id,slug FROM products ORDER BY id').all();
+  const originalNative=structuredClone(f.index);
+  const first=await f.run('start');assert.equal(first.reason,'awaiting_reviewed_approval',JSON.stringify(first));
+  assert.equal(f.calls.getItems,10);assert.equal(f.calls.chat+f.calls.embedding+f.calls.search,0);
+  const approval=await f.approve(),outside=JSON.parse(await fs.readFile(approval.path,'utf8'));
+  outside.changes[0].publicId=originalIds.find(p=>!ids.includes(p.id)).public_id;
+  const bad=path.join(path.dirname(approval.path),'outside-automation-membership.json');await put(bad,outside);
+  await assert.rejects(f.run('resume',{path:bad,sha256:sha256(await fs.readFile(bad))}),/automation_cohort_invalid/);
+  const result=await f.run('resume',approval);
+  t.diagnostic(JSON.stringify({scenario:'automation-100-refresh',result:weeklyCommandSummary(result),calls:f.calls}));
+  assert.equal(result.state,'finalized',JSON.stringify(result));assert.equal(f.calls.getItems,10);
+  assert.equal(f.calls.chat+f.calls.embedding+f.calls.search,0);
+  assert.deepEqual(f.index,originalNative);assert.equal(f.calls.delete,0);
+  assert.deepEqual(f.sql.prepare('SELECT id,public_id,slug FROM products ORDER BY id').all(),originalIds);
+  const ws=await openRunWorkspace(f.workspaceOptions);try{
+    const cp=await ws.readCheckpoint(),authority=await ws.readArtifact(cp.checkpoint.pins.automationAuthority);
+    assert.equal(authority.products.length,100);assert.deepEqual(authority.refreshIds,ids);assert.deepEqual(authority.admittedIds,[]);
+  }finally{await ws.close();}
+});
+
+test('automation prepared before midnight starts the same finite run after midnight without backdating observations',async t=>{
+  const f=await setup(t,{permanent:22,held:2,authenticPrior:true,at:'2026-10-21T06:55:00.000Z'});
+  f.config.backfillLimit=0;delete f.config.credentials.openai;
+  f.config.cadence={day:'2026-10-20',featuredIds:[],runKey:f.config.runId,automation:{schemaVersion:1,refreshIds:[ID],discovery:false}};
+  await f.configure();const originalConfigSha=f.options.configSha256;
+  const context=JSON.parse(await fs.readFile(f.config.inputs.context.path,'utf8'));
+  f.advance(10*60*1000);assert.equal(f.now(),'2026-10-21T07:05:00.000Z');assert.ok(f.now()<context.cutoff);
+  const result=await f.run('start');assert.equal(result.reason,'awaiting_reviewed_approval',JSON.stringify(result));
+  assert.equal(f.options.configSha256,originalConfigSha);assert.equal(f.calls.getItems,1);
+  const ws=await openRunWorkspace(f.workspaceOptions);try{
+    const cp=await ws.readCheckpoint(),journal=await readOrdered(ws,cp.checkpoint.pins.automationJournal);
+    const receipt=await ws.readReceipt(journal.receipts[0]);assert.equal(Date.parse(receipt.observedAt),Date.parse(f.now()));
+    assert.equal(JSON.parse(await fs.readFile(f.config.inputs.context.path,'utf8')).cutoff,context.cutoff);
+  }finally{await ws.close();}
+});
+
+test('ready maintenance publishes when one discovery model response is unconfirmed, retaining its unknown charge without replay',async t=>{
+  const f=await setup(t,{permanent:22,held:2,authenticPrior:true});f.config.backfillLimit=0;
+  f.config.cadence={day:'2026-10-20',featuredIds:[],runKey:f.config.runId,automation:{schemaVersion:1,refreshIds:[ID],discovery:true}};
+  f.config.limits={requests:5000,statements:15000};await f.configure();
+  const original=f.sql.prepare('SELECT id,public_id,slug FROM products ORDER BY id').all();
+  amazonCreators.searchItems=async()=>{f.calls.search++;return[{...structuredClone(p),id:'B000005000',title:'TEST ONLY wind-up brass crab stamp',
+    sourceFacts:{material:'brass',shape:'wind-up crab'},affiliateUrl:'https://www.amazon.com/dp/B000005000?tag=fixture-20'}];};
+  f.mode.modelTransientError=true;
+  const first=await f.run('start');assert.equal(first.reason,'awaiting_reviewed_approval',JSON.stringify(first));
+  assert.equal(f.calls.modelHttp,1);assert.equal(f.calls.embedding,0);assert.equal(f.calls.getItems,1);assert.equal(f.calls.search,6);
+  const ws=await openRunWorkspace(f.workspaceOptions);try{
+    const cp=await ws.readCheckpoint(),journal=await readOrdered(ws,cp.checkpoint.pins.automationJournal);
+    const complete=await readOrdered(ws,journal.entries['provider-phases-complete']);
+    assert.equal(complete.summary.usage.unknownDispatches.length,1);
+    assert.equal(complete.summary.usage.unknownDispatches[0].provider,'openai');
+    assert.equal(complete.summary.usage.unknownDispatches[0].stage,'discovery-review');
+    assert.equal(complete.summary.usage.estimatedCostUsd,null);assert.equal(complete.summary.usage.knownEstimatedCostUsd,0);
+    const prepared=await readOrdered(ws,journal.entries['phase-1-prepared']);assert.equal(prepared.mutations.length,0);
+    assert.ok(prepared.items.some(item=>item.productId==='B000005000'&&item.decision==='defer'));
+  }finally{await ws.close();}
+  const result=await f.run('resume',await f.approve());assert.equal(result.state,'finalized',JSON.stringify(result));
+  assert.equal(f.calls.modelHttp,1);assert.equal(f.calls.getItems,1);assert.equal(f.calls.search,6);assert.equal(f.calls.embedding,0);
+  assert.deepEqual(f.sql.prepare('SELECT id,public_id,slug FROM products ORDER BY id').all(),original);
+  assert.equal(f.sql.prepare('SELECT status FROM catalog_runs WHERE id=?').get(f.config.runId).status,'completed');
+});

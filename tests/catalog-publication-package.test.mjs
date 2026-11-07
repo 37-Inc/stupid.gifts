@@ -12,7 +12,7 @@ async function directory(t){
   t.after(()=>fs.rm(root,{recursive:true,force:true}));return root;
 }
 
-test('real package inventories retain hashes above10k, accept20,000 actual files, and reject20,001',async t=>{
+test('real package inventories retain hashes above10k and accept20,001 files on the existing Standard plan',async t=>{
   const root=await directory(t),suffixes=['.html','.txt','.json','.js','.png'];
   const name=i=>`assets/group-${Math.floor(i/200)}/file-${i}${suffixes[i%suffixes.length]}`;
   const body=i=>Buffer.from([0,255,...Buffer.from(`Synthetic package file ${i}`)]);
@@ -28,7 +28,9 @@ test('real package inventories retain hashes above10k, accept20,000 actual files
   await add(15422,20000);
   const boundary=await inventoryPublicationPackage(root);assert.equal(Object.keys(boundary).length,20000);
   assert.equal(boundary[name(19999)],sha(body(19999)));assert.equal(boundary[name(0)],realistic[name(0)]);
-  await add(20000,20001);await assert.rejects(inventoryPublicationPackage(root),/publication_package_bound/);
+  await add(20000,20001);
+  const paid=await inventoryPublicationPackage(root);assert.equal(Object.keys(paid).length,20001);
+  assert.equal(paid[name(20000)],sha(body(20000)));
 });
 
 test('larger inventory allowance preserves private modes, symlink refusal, binary hashes and32MiB per-file bound',async t=>{

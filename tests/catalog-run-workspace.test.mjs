@@ -691,7 +691,7 @@ test('verified package cleanup frees the same checkout for a second run; old exp
 test('completed output cleanup holds only source ownership while another source can publish',async t=>{
   const f=await publicationFixture(t),w=await f.open();
   await w.preparePublicationDirectories('test-release',NOW,null);await f.outputs(w,'test-release');
-  await w.writeCheckpoint(null,{...cp(),phase:'finalized',control:{publication:{...publication(),stage:'published',deploymentId:'test-deployment'}}});
+  await w.writeCheckpoint(null,{...cp(),phase:'finalized',control:{publication:{...publication(),stage:'published',receiptSha256:HASH,deploymentId:'test-deployment'}}});
   const before=await w.budget();await w.close();
   const cleanup=await openPublicationBuildCleanup({...f.input,mode:'resume'});
   try{
@@ -719,6 +719,19 @@ test('source-only cleanup refuses unfinished publications and keeps ordinary sha
   await assert.rejects(openPublicationBuildCleanup({...f.input,mode:'resume'}),/cleanup_requires_completed_publication/);
   assert.equal((await readdir(join(f.input.directory,'locks'))).length,0);
   assert.equal(await readFile(join(f.outputPaths[0],'nested/merchant.json'),'utf8'),'TEST ONLY EXPIRED MERCHANT COPY');
+});
+
+test('source-only cleanup accepts published serving control only with idle checkpoint and saved receipt',async t=>{
+  for(const scenario of ['accepted','missing-receipt','unfinished','owner'])await t.test(scenario,async sub=>{
+    const f=await publicationFixture(sub),w=await f.open();await w.preparePublicationDirectories('test-release',NOW,null);await f.outputs(w,'test-release');
+    const control={...publication(),stage:scenario==='unfinished'?'activating':'published',...(scenario==='missing-receipt'?{}:{receiptSha256:HASH})};
+    const owner=scenario==='owner'?{environment:scope.environment,indexName:scope.indexName,token:'test-owner',generation:1,epoch:1,phase:'activating',
+      ownerReference:'test-run',operationKey:HASH,capturedAt:new Date(NOW).toISOString()}:null;
+    await w.writeCheckpoint(null,{...cp(),phase:'published',owner,control:{publication:control}});await w.close();
+    if(scenario!=='accepted'){await assert.rejects(openPublicationBuildCleanup({...f.input,mode:'resume'}),/cleanup_requires_completed_publication/);return;}
+    const cleanup=await openPublicationBuildCleanup({...f.input,mode:'resume'});try{await cleanup.cleanPublicationBuild('test-release');}
+    finally{await cleanup.close();}for(const file of f.outputPaths)await assert.rejects(lstat(file),{code:'ENOENT'});
+  });
 });
 
 test('registered publication cleanup rejects symlinks/hardlinks and retains unrelated source paths',async t=>{

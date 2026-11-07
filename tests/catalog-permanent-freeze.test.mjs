@@ -162,10 +162,10 @@ test('ordinary permanent executor keeps source, held, projection, prior, native 
   });
 });
 
-for(const scenario of [{count:12},{count:3383},{count:3383,publicCount:3355,newCount:0,routine:true},
+for(const scenario of [{count:12},{count:52,newCount:40,automation:true},{count:3383},{count:3383,publicCount:3355,newCount:0,routine:true},
   {count:3383,publicCount:3355,newCount:20,routine:true,monday:true}]){
 const {count,publicCount=2359,routine=false,monday=false}=scenario;
-test(`authentic permanent successor preserves mixed native history across expired workspaces (${count} identities${routine?` /3355public ${monday?'Monday30 ':''}routine30k`:''})`,
+test(`authentic permanent successor preserves mixed native history across expired workspaces (${count} identities${scenario.automation?' / exact automation forty admissions':''}${routine?` /3355public ${monday?'Monday30 ':''}routine30k`:''})`,
   {skip:routine&&process.env.CATALOG_FULL_CAPACITY!=='1'},async t=>{
   const f=await fixture(t,{count,publicCount}),prepared=await preparePermanentCatalog(f.db,f.owner,f.request),permanent=prepared.revision;
   async function publish(revision,queued,priorIntent,permanentMode=false){
@@ -230,7 +230,7 @@ test(`authentic permanent successor preserves mixed native history across expire
     const store=createD1CatalogMaintenanceStore({db:f.db,owner:writing,ownerCursor:cursor,runId:name,catalogRevision:name,preservePermanentListings:true,
       newPublicId:()=>uuid(nextId++),intent:()=>({rightsById:grants,verificationById:verification,embeddingById:embedding})});
     for(const n of targets){
-      const p={...product(n,true),isActive:true,sourceFacts:{fixture:n,day},title:n>=5000?newTitles[n-5000]:`Unrelated existing fixture ${n}`,
+      const p={...product(n,true),isActive:true,sourceFacts:{fixture:n,day},title:n>=5000?newTitles[n-5000]??`Distinct synthetic sculpture ${n}`:`Unrelated existing fixture ${n}`,
         embedding:[...product(1).embedding]};p.editorialSourceHash=editorialSourceHash(p);const hash=p.editorialSourceHash;
       grants[p.id]=rights(p);if(n>=5000)grants[p.id].persistent=Object.fromEntries(Object.entries({title:p.title,description:p.wittyDescription,
         imageUrl:p.imageUrl,affiliateUrl:p.affiliateUrl}).map(([key,value])=>[key,grant(value)]));
@@ -248,6 +248,9 @@ test(`authentic permanent successor preserves mixed native history across expire
       return{publicId:row.public_id,operationId:op.operation_id,inputSha256:op.input_sha256,productSha256:sha256(canonicalJson(row)),displaySha256:sha256(row.public_display_json??'null')};});
     await releaseMutationOwnership(f.db,cursor.current);
     const approval={schemaVersion:1,runId:name,catalogRevision:name,changes},request={previous,context,scope,codeSha:'7'.repeat(40),predecessor,approval,approvalSha256:sha256(canonicalJson(approval))};
+    if(scenario.automation)request.automation={schemaVersion:1,runId:name,configSha256:'c'.repeat(64),journalSha256:'d'.repeat(64),writerGeneration:writing.generation,
+      refreshIds:refreshes.map(n=>`B${String(n).padStart(9,'0')}`),admittedIds:day===1?Array.from({length:newCount},(_,i)=>`B${String(5000+i).padStart(9,'0')}`):[],
+      products:targets.map(n=>{const row=f.sql.prepare('SELECT id,public_id FROM products WHERE id=?').get(`B${String(n).padStart(9,'0')}`);return{id:row.id,publicId:row.public_id};})};
     const owner=await claimMutationOwnership(f.db,scope,{phase:'freezing',ownerReference:name,operationKey:approvedCohortOperationKey(request)});
     const before=f.dispatches(),prepared=await prepareOwnedApprovedCohortPlan({db:f.db,owner,request,adapters:f.adapters});
     const revision=prepared.revision,plan=prunedVectorPlan(revision);

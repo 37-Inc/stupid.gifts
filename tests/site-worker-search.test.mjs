@@ -182,6 +182,16 @@ test('diagnostic failure cannot fail search; storage failure returns safe 503', 
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: 'Search unavailable' });
 });
+test('acknowledged vectors do not disguise failure of both current-product lookup lanes as zero results', async () => {
+  const broken = setup({ storage: {
+    async keyword() { throw new Error('private keyword failure'); },
+    async byPublicIds() { throw new Error('private current-product failure'); },
+  } });
+  const response = await broken.request();
+  assert.equal(broken.calls.vector.length, 1);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'Search unavailable' });
+});
 
 test('disabled or absent semantic binding makes no paid call', async () => {
   const fixture = setup();

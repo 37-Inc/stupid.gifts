@@ -212,13 +212,16 @@ export function createSearchHandler<Env extends SiteEnv>(options: {
             for (const match of matches.matches.slice(0, Math.min(100, candidateLimit))) {
               if (typeof match.id === 'string' && match.id.length <= 100 && Number.isFinite(match.score)) scores.set(match.id, Math.max(-1, Math.min(1, match.score)));
             }
-            semanticAvailable = true;
             if (scores.size) {
               const products = await bounded(() => storage.byPublicIds([...scores.keys()], new Date(now()), options.catalogRevision), timeout);
               candidates = products.filter((product) => scores.has(product.publicId))
                 .map((product) => result(product, scores.get(product.publicId)!, 'semantic'))
                 .sort((a, b) => b.rankScore - a.rankScore || a.id.localeCompare(b.id));
             }
+            // A vector response is not a usable search lane until current
+            // product resolution succeeds. If both stores fail, return an
+            // actual unavailable response rather than a false zero-result hit.
+            semanticAvailable = true;
           }
         } catch {
           // A provider failure only changes search mode. No raw error/query logs.

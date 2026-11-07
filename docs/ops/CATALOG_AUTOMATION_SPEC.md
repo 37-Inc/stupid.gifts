@@ -1,6 +1,7 @@
 # Stupid Gifts catalog automation specification
 
-Status: implementation specification for owner review, November 6, 2026.
+Status: owner-approved implementation specification, November 6, 2026.
+Implementation and activation evidence: [hosted catalog operations](HOSTED_CATALOG.md).
 
 Run discovery, product maintenance and homepage editing as three modules of one
 scheduled Node application, followed by one publisher. Host the existing

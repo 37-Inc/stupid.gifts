@@ -6,7 +6,7 @@ import { mutationAssertion } from './mutation-fence.ts';
 import { createProjectionPacket } from './d1.ts';
 import { canonicalTime, validateCatalogSnapshot, validatePublicCatalogProduct } from './snapshot.ts';
 import { areNearDuplicateTitles, suppressNearDuplicateProducts } from '../db/product-scoring.ts';
-import { checkCurrent, readApprovedCurrentRows, readOwnerBaseOperationReceipts, readPruningSource, SNAPSHOT_READ_LIMITS } from '../../scripts/catalog/export-d1-snapshot.ts';
+import { checkCurrent, readApprovedCurrentRows, readOwnerBaseOperationReceipts, readAutomationOperationReceipts,readPruningSource, SNAPSHOT_READ_LIMITS } from '../../scripts/catalog/export-d1-snapshot.ts';
 import { canonicalJson, sha256 } from '../../scripts/catalog/migration.ts';
 import { pruneOperationKey, prunedVectorPlan, sealCapturedRevision, settleCapturedRevision } from './prune-existing-revision.ts';
 import type { PruneRequest, PrunedRevision, PrunedVectorObservation, PrunedVectorPlan } from './prune-existing-revision.ts';
@@ -18,6 +18,8 @@ import { approvedBaseChangeLimit, exactOwnerBaseTitle, ownerBasePublicDuplicate 
 import type { OwnerBaseCatalogReview } from './owner-base-review.ts';
 import {effectiveSlugApproval} from '../../scripts/catalog/new-product-slug-repair.ts';
 import {confirmedRetailAvailable,confirmedRetailUnavailable} from './retail-availability.ts';
+import {validateAutomationCohort} from './automation-cohort.ts';
+import type {AutomationCohortAuthority} from './automation-cohort.ts';
 
 type Row = Record<string, unknown>;
 const HASH = /^[a-f0-9]{64}$/;
@@ -38,6 +40,7 @@ export interface ApprovedCohortRequest extends PruneRequest {
   approval: ApprovedCohortEnvelope; approvalSha256: string;
   predecessor?: PermanentCatalogSeal | ApprovedCatalogSeal;
   ownerBaseReview?: OwnerBaseCatalogReview;
+  automation?:AutomationCohortAuthority;
   /** A publication-only recovery keeps original ingestion receipts immutable. */
   publicationRevision?: string;
 }
@@ -54,12 +57,16 @@ export function approvedCohortOperationKey(request: ApprovedCohortRequest): stri
   if (!envelope || Object.keys(envelope).sort().join(',') !== 'catalogRevision,changes,runId,schemaVersion'
     || envelope.schemaVersion !== 1 || !/^[a-zA-Z0-9._-]{1,200}$/.test(envelope.runId)
     || !/^[a-zA-Z0-9._-]{1,64}$/.test(envelope.catalogRevision) || envelope.catalogRevision === request.previous.catalogRevision
-    || !Array.isArray(envelope.changes) || envelope.changes.length > approvedBaseChangeLimit(request.ownerBaseReview)
+    || !Array.isArray(envelope.changes) || !request.automation&&envelope.changes.length > approvedBaseChangeLimit(request.ownerBaseReview)
     || new Set(envelope.changes.map(value => value.publicId)).size !== envelope.changes.length
     || envelope.changes.some(value => Object.keys(value).sort().join(',') !== 'displaySha256,inputSha256,operationId,productSha256,publicId'
       || !UUID.test(value.publicId) || ![value.operationId,value.inputSha256,value.productSha256,value.displaySha256].every(hash => HASH.test(hash)))
     || !HASH.test(request.approvalSha256) || sha256(canonicalJson(envelope)) !== request.approvalSha256)
     throw new Error('cohort_approval_invalid');
+  if(request.automation){
+    if(request.ownerBaseReview||request.publicationRevision||!request.predecessor)throw Error('automation_cohort_invalid');
+    validateAutomationCohort(request.automation,envelope);
+  }
   const publicDuplicate = ownerBasePublicDuplicate(request.ownerBaseReview, request.previous);
   if (request.ownerBaseReview && (!request.predecessor || envelope.changes.some(change =>
     change.publicId !== publicDuplicate?.publicId && !request.previous.heldProducts.some(p => p.publicId === change.publicId))
@@ -67,6 +74,7 @@ export function approvedCohortOperationKey(request: ApprovedCohortRequest): stri
   return sha256(canonicalJson({ kind:'approved-cohort', previous:pruneOperationKey(request), approvalSha256:request.approvalSha256,
     ...(request.publicationRevision?{publicationRevision:request.publicationRevision}:{}),
     ...(request.ownerBaseReview ? { ownerBaseReview: request.ownerBaseReview } : {}),
+    ...(request.automation?{automation:request.automation}:{}),
     ...(request.predecessor?{predecessorSha256:sha256(canonicalJson(request.predecessor))}:{}) }));
 }
 function held(value: { id: string; publicId: string; slug: string }, reason: SafeHeldProduct['reason']): SafeHeldProduct {
@@ -84,12 +92,12 @@ async function prepare(db: CatalogD1, owner: MutationOwner, input: ApprovedCohor
   // independently authenticates every private identity, not just visible rows.
   const predecessor=request.predecessor?await (await import('../../scripts/catalog/permanent-catalog-seal.ts')).readCatalogPredecessor({
     db,owner,seal:request.predecessor,approval:request.approval,approvalSha256:request.approvalSha256,
-    ...(request.ownerBaseReview ? { ownerBaseReview: request.ownerBaseReview } : {})}):undefined;
+    ...(request.ownerBaseReview ? { ownerBaseReview: request.ownerBaseReview } : {}),...(request.automation?{automation:request.automation}:{})}):undefined;
   const source = await readPruningSource(db,request.previous,request.context,owner);
   const now = new Date(source.observedAt); const cutoff = Date.parse(request.context.cutoff);
   if (now.getTime() < Date.parse(owner.capturedAt) || cutoff <= now.getTime()
     || cutoff - Date.parse(owner.capturedAt) > 26*3600000) throw new Error('cohort_window_elapsed');
-  const extra = await readApprovedCurrentRows(db,request.approval.changes.map(value => value.publicId),owner,false,undefined,request.ownerBaseReview);
+  const extra = await readApprovedCurrentRows(db,request.approval.changes.map(value => value.publicId),owner,false,undefined,request.ownerBaseReview,request.automation);
   const full = new Map(extra.rows.map(row => [String(row.public_id),row]));
   const current = new Map([...source.current,...extra.current].map(row => [String(row.public_id),row]));
   const projection = new Map(source.projection.map(row => [String(row.public_id),row]));
@@ -105,7 +113,8 @@ async function prepare(db: CatalogD1, owner: MutationOwner, input: ApprovedCohor
   // Daily10 plus Monday20 independently pinned operation IDs. Vector proof rebuilds this
   // seal repeatedly; one bounded read avoids an N+1 provider request per change.
   const operationIds = [...new Set(request.approval.changes.map(value => value.operationId))];
-  const receipts = new Map((request.ownerBaseReview ? await readOwnerBaseOperationReceipts(db,owner,operationIds) : operationIds.length ? (await db.prepare(`SELECT * FROM catalog_maintenance_operations
+  const receipts = new Map((request.automation?await readAutomationOperationReceipts(db,owner,operationIds,request.approval.runId)
+    :request.ownerBaseReview ? await readOwnerBaseOperationReceipts(db,owner,operationIds) : operationIds.length ? (await db.prepare(`SELECT * FROM catalog_maintenance_operations
     WHERE operation_id IN (SELECT value FROM json_each(?)) OR (run_id=? AND json_extract(result_json,'$.kind')='new-product-slug-repair-v1')`)
     .bind(JSON.stringify(operationIds),request.approval.runId).all()).results : [])
     .map(row => [String(row.operation_id), row]));
@@ -120,6 +129,12 @@ async function prepare(db: CatalogD1, owner: MutationOwner, input: ApprovedCohor
       || receipt.catalog_revision !== request.approval.catalogRevision || receipt.environment !== owner.environment || receipt.index_name !== owner.indexName
       || !JSON.parse(String(receipt.changes_json)).some((value: Row) => value.productId === row.id && value.afterSha256 === change.productSha256))
       throw new Error('cohort_approval_changed');
+    if(request.automation){
+      const binding=request.automation.products.find(p=>p.publicId===original.publicId);
+      const source=receipts.get(original.operationId);
+      if(!binding||binding.id!==row.id||source?.generation!==request.automation.writerGeneration
+        ||source.run_id!==request.automation.runId)throw Error('automation_cohort_changed');
+    }
     if (request.ownerBaseReview) {
       const result = JSON.parse(String(receipt.result_json));
       if(result.kind!=='held-catalog-resolution-v1'||result.planSha256!==request.ownerBaseReview.resolutionPlanSha256)throw Error('cohort_owner_base_changed');
@@ -185,7 +200,9 @@ async function prepare(db: CatalogD1, owner: MutationOwner, input: ApprovedCohor
   const preferred=(value:PublicCatalogProduct)=>persistentPublicProduct(value)??value;
   const candidates=products.filter(value=>!stable.has(value.publicId)
     && !preserved.some(prior=>areNearDuplicateTitles(preferred(prior).title,preferred(value).title)));
-  const winners = new Set((request.ownerBaseReview ? products.filter(value => !stable.has(value.publicId))
+  // Successor discovery already compared actual photos before admission. A
+  // title-only second guess cannot silently undo those distinct-object reviews.
+  const winners = new Set((request.ownerBaseReview||request.automation ? products.filter(value => !stable.has(value.publicId))
     : suppressNearDuplicateProducts(candidates.map(preferred))).map(value => value.publicId));
   const ready = products.filter(value => { if (stable.has(value.publicId) || winners.has(value.publicId)) return true;
     safeHeld.push(held(value,'duplicate'));return false; });

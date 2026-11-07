@@ -11,11 +11,17 @@ const UUID = '00000000-0000-4000-8000-000000000001';
 const MIGRATIONS = ['0001_catalog.sql','0002_public_projections.sql','0003_publication_outbox.sql',
   '0004_vector_outbox_leases.sql','0005_historical_timestamps.sql','0006_semantic_search_budget.sql','0007_catalog_build_requests.sql'];
 const migration = name => readFile(new URL(`../migrations/d1/${name}`, import.meta.url), 'utf8');
+async function installCurrentReaderSchema(sqlite) {
+  // The current public reader joins the0010 sidecar. Install its real schema
+  // only AFTER0008; an empty0009 scope keeps this legacy writer unselected.
+  for (const name of ['0009_catalog_mutation_fence.sql','0010_catalog_maintenance.sql']) sqlite.exec(await migration(name));
+  assert.equal(sqlite.prepare('SELECT count(*) n FROM catalog_mutation_scopes').get().n,0);
+}
 async function fixture(applyV8 = true) {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec('PRAGMA foreign_keys=ON');
   for (const name of MIGRATIONS) sqlite.exec(await migration(name));
-  if (applyV8) sqlite.exec(await migration('0008_reviewed_vector_deletes.sql'));
+  if (applyV8) { sqlite.exec(await migration('0008_reviewed_vector_deletes.sql')); await installCurrentReaderSchema(sqlite); }
   let clock = NOW; let stored = { id: UUID, metadata: { legacyInputProvenance: 'unverified' } };
   let deletes = 0; let upserts = 0; let beforeRun;
   sqlite.function('strftime', (format, instant) => {
@@ -153,6 +159,7 @@ test('0008 preserves populated outbox rows, leases, receipts, and deleted-row AU
     f.sqlite.exec('BEGIN'); f.sqlite.exec(await migration('0008_reviewed_vector_deletes.sql')); f.sqlite.exec('COMMIT');
     const after = f.row(); assert.equal(after.delete_mutation_sha256, null); delete after.delete_mutation_sha256;
     assert.deepEqual(after, before); assert.equal(f.sqlite.prepare("SELECT seq FROM sqlite_sequence WHERE name='vector_sync_outbox'").get().seq, 99);
+    await installCurrentReaderSchema(f.sqlite);
     await f.queue(); assert.equal(f.sqlite.prepare('SELECT max(sequence) n FROM vector_sync_outbox').get().n, 100);
     assert.deepEqual(f.sqlite.prepare('PRAGMA foreign_key_check').all(), []);
   } finally { f.close(); }
@@ -164,6 +171,7 @@ test('0008 preserves an empty outbox historical sequence and a forged preexistin
     empty.sqlite.prepare(`INSERT INTO vector_sync_outbox(sequence,public_id,source_revision,embedding_text_hash,operation,created_at)
       VALUES(99,?,'gone',?,'delete','created')`).run(UUID, 'a'.repeat(64));
     empty.sqlite.exec('DELETE FROM vector_sync_outbox'); empty.sqlite.exec(await migration('0008_reviewed_vector_deletes.sql'));
+    await installCurrentReaderSchema(empty.sqlite);
     await empty.queue(); assert.equal(empty.row().sequence, 100);
   } finally { empty.close(); }
   const forged = await fixture();

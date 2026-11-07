@@ -5,7 +5,7 @@ import {derivedFixture} from './helpers/derived-search-fixture.mjs';
 import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
 import {maintenanceEmbeddingText,snake} from '../scripts/catalog/maintenance-state.ts';
 import {encodePgvectorSendBase64} from '../scripts/catalog/pgvector-binary.ts';
-import {deriveMaintenanceSearchVector,prepareMaintenanceSearchDelta,syncDerivedSearchVectors} from '../scripts/catalog/sync-semantic-delta.ts';
+import {deriveMaintenanceSearchVector,prepareMaintenanceSearchDelta,syncDerivedSearchVectors,syncApprovedSearchDelta} from '../scripts/catalog/sync-semantic-delta.ts';
 import {accountedPublicationFetch,accountedPublicationReadFetch} from '../scripts/catalog/publication-read-fetch.ts';
 import {canonicalDescriptionEmbeddingInput} from '../lib/catalog/presentation.ts';
 import {createDerivedSemanticSearch} from '../workers/site/derived-search.ts';
@@ -125,4 +125,40 @@ test('provider corruption and overlarge responses fail closed; pending visibilit
     return Response.json({success:true,result:url.endsWith('/upsert')?{mutationId:'mutation'}:[]});}}),/pending/);
   assert.equal(calls,8);
   await assert.rejects(syncDerivedSearchVectors({...options,fetch:async()=>new Response('x'.repeat(1024*1024+1))}),/too_large/);
+});
+
+test('exact automation delivers more than thirty saved vectors in technical provider chunks and reuses them on retry',async()=>{
+  const base=await fixture(),rows=new Map(),states=new Map(),products=[],inventory=[];
+  for(let n=0;n<64;n++){
+    const id=`B${String(5000+n).padStart(9,'0')}`,publicId=`00000000-0000-4000-8000-${String(5000+n).padStart(12,'0')}`;
+    const product={...structuredClone(base.product),id,publicId,title:`Synthetic distinct gift ${n}`,slug:`synthetic-gift-${n}`};products.push(product);
+    const semantic={...JSON.parse(base.state.semantic_json),id,publicId,title:product.title,slug:product.slug};
+    const text=canonicalDescriptionEmbeddingInput(semantic),row={...base.row,id,public_id:publicId,slug:product.slug,title:product.title,embedding_text_hash:sha256(text)};
+    const proof={...JSON.parse(base.state.embedding_provenance_json),text,embeddingTextHash:sha256(text)};
+    const state={...base.state,product_id:id,semantic_json:JSON.stringify(semantic),embedding_provenance_json:JSON.stringify(proof)};
+    rows.set(id,row);states.set(id,state);inventory.push({publicId,productSha256:hash(row),privateStateSha256:hash(state)});
+  }
+  const revision={snapshot:{...base.f.snapshot,products},persistent:{inventory},request:{approval:{runId:'automation-fixture',changes:products.map(p=>({publicId:p.publicId}))}}};
+  revision.request.automation={schemaVersion:1,runId:'automation-fixture',configSha256:'c'.repeat(64),journalSha256:'d'.repeat(64),writerGeneration:1,
+    refreshIds:[],admittedIds:products.map(p=>p.id),products:products.map(p=>({id:p.id,publicId:p.publicId}))};
+  const db={async batch(){},prepare(sql){let id;return{bind(value){id=value;return this;},async all(){return{results:[(sql.includes('maintenance_products')?states:rows).get(id)]};}};}};
+  const nativeBefore=structuredClone([...states]),catalog=base.f.catalog,stored=new Map(),reads=[];let upserts=0;
+  const fetch=async(url,init)=>{
+    assert.ok(url.includes('/indexes/'+catalog.indexName+'/'));let result;
+    if(url.endsWith('/get_by_ids')){const ids=JSON.parse(init.body).ids;assert.ok(ids.length<=30);reads.push(ids);
+      result=ids.flatMap(id=>stored.has(id)?[stored.get(id)]:[]);
+    }else{assert.ok(url.endsWith('/upsert'));const vector=JSON.parse(init.body);stored.set(vector.id,vector);upserts++;result={mutationId:'fixture-mutation'};}
+    return Response.json({success:true,result});
+  };
+  const input={db,owner:{phase:'freezing',environment:'staging',indexName:'fixture',generation:1,epoch:0,
+    token:'00000000-0000-4000-8000-000000000001',ownerReference:'fixture',operationKey:'a'.repeat(64),capturedAt:'2026-11-06T20:00:00.000Z'},
+    revision,catalog,accountId:'a'.repeat(32),token:'FIXTURE_ONLY',fetch};
+  const first=await syncApprovedSearchDelta(input);assert.equal(first.verified,64);assert.equal(first.upserted,64);assert.equal(first.entries.length,64);
+  assert.equal(reads.length,6);assert.equal(new Set(reads.flat()).size,64);
+  const again=await syncApprovedSearchDelta(input);assert.equal(again.verified,64);assert.equal(again.upserted,0);assert.equal(upserts,64);
+  assert.deepEqual([...states],nativeBefore,'Derived delivery never changes the original native index or saved inputs');
+  const invalid=structuredClone(revision);delete invalid.request.automation;
+  await assert.rejects(prepareMaintenanceSearchDelta(db,invalid,catalog),/source_mismatch/);
+  const duplicate=structuredClone(revision);duplicate.request.automation.products[1]=duplicate.request.automation.products[0];
+  await assert.rejects(prepareMaintenanceSearchDelta(db,duplicate,catalog),/automation_cohort_invalid/);
 });

@@ -13,6 +13,7 @@ import {mutationAssertion} from '../../lib/catalog/mutation-fence.ts';
 import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
 import {preservedPhotoVector} from './photo-vector-reuse.ts';
 import {canonicalDescriptionEmbeddingInput,hasRepairedSemanticCopy} from '../../lib/catalog/presentation.ts';
+import {validateAutomationCohort} from '../../lib/catalog/automation-cohort.ts';
 
 type Row=Record<string,unknown>;
 export type DerivedVector={id:string;values:number[];metadata:ReturnType<typeof semanticVectorMetadata>};
@@ -67,7 +68,8 @@ export async function prepareMaintenanceSearchDelta(db:CatalogD1,revision:Approv
   const known=new Map(catalog.entries.map(e=>[e.publicId,e]));
   const products=new Map(revision.snapshot.products.flatMap(p=>{const base=persistentPublicProduct(p);return base?[[base.publicId,base] as const]:[];}));
   const changes=revision.request.approval.changes;
-  if(changes.length>30||new Set(changes.map(c=>c.publicId)).size!==changes.length||!revision.persistent)refuse();
+  if(revision.request.automation)validateAutomationCohort(revision.request.automation,revision.request.approval);
+  if(!revision.request.automation&&changes.length>30||new Set(changes.map(c=>c.publicId)).size!==changes.length||!revision.persistent)refuse();
   const vectors:DerivedVector[]=[],entries:SemanticCatalogEntry[]=[];
   for(const change of changes){
     const product=products.get(change.publicId);
@@ -157,7 +159,11 @@ export async function syncApprovedSearchDelta(input:{db:CatalogD1;owner:Mutation
   catalog:unknown;accountId:string;token:string;fetch:typeof fetch}) {
   await input.db.batch([mutationAssertion(input.db,input.owner,['freezing'])]);
   const delta=await prepareMaintenanceSearchDelta(input.db,input.revision,input.catalog);
-  const result=delta.vectors.length?await syncDerivedSearchVectors({...input,...delta}):{verified:0,upserted:0};
+  const result={verified:0,upserted:0};
+  for(let offset=0;offset<delta.vectors.length;offset+=30){
+    const part=await syncDerivedSearchVectors({...input,indexName:delta.indexName,vectors:delta.vectors.slice(offset,offset+30)});
+    result.verified+=part.verified;result.upserted+=part.upserted;
+  }
   await input.db.batch([mutationAssertion(input.db,input.owner,['freezing'])]);
   return {indexName:delta.indexName,entries:delta.entries,...result};
 }

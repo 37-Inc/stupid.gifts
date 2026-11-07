@@ -119,9 +119,16 @@ export function effectiveSlugApproval(change:ApprovedChange,operations:Row[],row
 export async function repairApprovedNewSlugs(db:CatalogD1,owner:MutationOwner,request:ApprovedCohortRequest,now:string){
   const ids=request.approval.changes.map(c=>c.publicId);
   if(!ids.length)return owner;
-  const rows=(await db.prepare('SELECT p.* FROM products p WHERE public_id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(ids)).all()).results;
-  for(const row of rows){
-    if(slug(row.slug))continue;
+  const rows:Row[]=[];
+  if(request.automation){
+    for(let offset=0;offset<ids.length;offset+=30)rows.push(...(await db.prepare('SELECT public_id,slug FROM products WHERE public_id IN (SELECT value FROM json_each(?))')
+      .bind(JSON.stringify(ids.slice(offset,offset+30))).all()).results);
+  }else rows.push(...(await db.prepare('SELECT p.* FROM products p WHERE public_id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(ids)).all()).results);
+  for(const selected of rows){
+    if(slug(selected.slug))continue;
+    const current=request.automation?(await db.prepare('SELECT * FROM products WHERE public_id=?').bind(selected.public_id).all()).results:[selected];
+    if(current.length!==1||current[0].public_id!==selected.public_id||current[0].slug!==selected.slug)fail();
+    const row=current[0];
     const change=request.approval.changes.find(c=>c.publicId===row.public_id)!;
     const states=(await db.prepare('SELECT * FROM catalog_maintenance_products WHERE product_id=?').bind(row.id).all()).results;
     const ops=(await db.prepare('SELECT * FROM catalog_maintenance_operations WHERE operation_id=?').bind(change.operationId).all()).results;

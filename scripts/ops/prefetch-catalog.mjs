@@ -432,13 +432,18 @@ function isGenericSloganMug(title) {
   return isMug && !includesTitleTerm(title, DISCOVERY_MUG_PHYSICAL_NOVELTY_TERMS);
 }
 
-function discoveryCandidateBlockReason(product, minQualityScore = 0.65, ownerSelected = false) {
+function discoverySourceBlockReason(product) {
   if (!product.imageUrl) return 'missing_image';
   if (!product.affiliateUrl) return 'missing_destination';
   if (!product.isActive) {
     const availability = String(product.availabilityStatus || '').toUpperCase();
     return availability && availability !== 'UNKNOWN' ? 'unavailable' : 'inactive_candidate';
   }
+  return undefined;
+}
+
+function discoveryCandidateBlockReason(product, minQualityScore = 0.65, ownerSelected = false) {
+  const source=discoverySourceBlockReason(product);if(source)return source;
   if (product.qualityScore < minQualityScore) return 'low_quality_score';
   // Exact owner picks have already had their gag appeal judged. Keep source
   // readiness/dedup/copy review, not the automatic keyword taste heuristic.
@@ -553,7 +558,9 @@ function getOpenAIClient() {
   }
 
   if (openaiClient?.apiKey !== process.env.OPENAI_API_KEY) {
-    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    // Explicit pipeline retries decide which work is safe to repeat; the SDK
+    // must not silently replay an uncertain paid request beneath the journal.
+    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0 });
   }
 
   return openaiClient;
@@ -612,7 +619,12 @@ function buildProductEmbeddingText(product) {
   return canonicalDescriptionEmbeddingInput(product);
 }
 
-async function enrichCopyBatch(products, telemetry, operation = 'editorial_draft', shortCopy = false) {
+async function modelStage(stages,stage,input,load){
+  return stages ? stages.run(stage,input,load) : {value:await load(),reused:false};
+}
+const uncertainEditorial=error=>['editorial_dispatch_uncertain','editorial_storage_unconfirmed','editorial_saved_result_invalid'].includes(error?.message);
+
+async function enrichCopyBatch(products, telemetry, operation = 'editorial_draft', shortCopy = false, stages) {
   const openai = getOpenAIClient();
 
   if (!openai) {
@@ -630,9 +642,9 @@ async function enrichCopyBatch(products, telemetry, operation = 'editorial_draft
 
   const model = process.env.CATALOG_EDITORIAL_MODEL || process.env.CATALOG_ENRICH_MODEL || DEFAULT_CATALOG_TEXT_MODEL;
   const startedAt = Date.now();
-  let completion;
+  let completion,reused=false;
   try {
-    completion = await openai.chat.completions.create({
+    const request={
       model,
       ...completionOptions(model, shortCopy ? (products.length === 1 ? 500 : 1_600) : products.length === 1 ? 1_400 : 4_000),
       messages: [
@@ -691,11 +703,13 @@ ${JSON.stringify(productSummaries, null, 2)}`,
         },
       ],
       response_format: { type: 'json_object' },
-    });
+    };
+    const result=await modelStage(stages,'copy-draft',{operation,request},()=>openai.chat.completions.create(request));
+    completion=result.value;reused=result.reused;
   } finally {
     addTiming(telemetry?.timingsMs, 'openai_draft', Date.now() - startedAt);
   }
-  recordOpenAIUsage(telemetry?.usage, { model, operation, usage: completion.usage });
+  if(!reused)recordOpenAIUsage(telemetry?.usage, { model, operation, usage: completion.usage });
 
   const content = completion.choices[0]?.message?.content;
   if (!content) {
@@ -715,7 +729,7 @@ ${JSON.stringify(productSummaries, null, 2)}`,
   };
 }
 
-async function reviewEditorialBatch(products, telemetry, operation = 'editorial_review', shortCopy = false) {
+async function reviewEditorialBatch(products, telemetry, operation = 'editorial_review', shortCopy = false, stages) {
   const openai = getOpenAIClient();
   if (!openai || products.length === 0) return { items: new Map(), diagnostics: null };
 
@@ -730,9 +744,9 @@ async function reviewEditorialBatch(products, telemetry, operation = 'editorial_
       || process.env.CATALOG_ENRICH_MODEL
       || DEFAULT_CATALOG_TEXT_MODEL;
   const startedAt = Date.now();
-  let completion;
+  let completion,reused=false;
   try {
-    completion = await openai.chat.completions.create({
+    const request={
       model,
       ...completionOptions(model, shortCopy ? (products.length === 1 ? 500 : 1_600) : products.length === 1 ? 1_200 : 4_000),
       messages: [
@@ -769,11 +783,13 @@ ${JSON.stringify(reviewItems, null, 2)}`,
         },
       ],
       response_format: { type: 'json_object' },
-    });
+    };
+    const result=await modelStage(stages,'copy-review',{operation,request},()=>openai.chat.completions.create(request));
+    completion=result.value;reused=result.reused;
   } finally {
     addTiming(telemetry?.timingsMs, 'openai_review', Date.now() - startedAt);
   }
-  recordOpenAIUsage(telemetry?.usage, { model, operation, usage: completion.usage });
+  if(!reused)recordOpenAIUsage(telemetry?.usage, { model, operation, usage: completion.usage });
 
   const content = completion.choices[0]?.message?.content;
   if (!content) throw new Error('No editorial review response from OpenAI.');
@@ -852,6 +868,7 @@ async function requestEditorialWithRetries(products, requestBatch, shouldRetry, 
         if (retry) diagnostics.retryCount += 1;
       }
     } catch (error) {
+      if(uncertainEditorial(error))throw error;
       // Account funding/limits cannot be fixed by retrying each product.
       quotaBlocked = error.status === 429 && [
         'credit_balance_exhausted', 'insufficient_quota',
@@ -886,7 +903,7 @@ async function requestEditorialWithRetries(products, requestBatch, shouldRetry, 
   return { byId, diagnosticsById };
 }
 
-async function generateProductEmbeddings(products, telemetry, evidence) {
+async function generateProductEmbeddings(products, telemetry, evidence, stages) {
   const openai = getOpenAIClient();
 
   if (!openai || products.length === 0) {
@@ -896,20 +913,27 @@ async function generateProductEmbeddings(products, telemetry, evidence) {
   const inputs = products.map(buildProductEmbeddingText);
   const model = process.env.CATALOG_EMBEDDING_MODEL || 'text-embedding-3-small';
   const startedAt = Date.now();
-  let response;
+  let response,reused=false;
   try {
-    response = await openai.embeddings.create({
+    const request={
     model,
     input: inputs,
     encoding_format: 'float',
+    };
+    const result=await modelStage(stages,'embedding',request,async()=>{
+      const actual=await openai.embeddings.create(request);
+      // Persist exact native proof before the stage is complete. A replayed
+      // response relies on restoring that receipt, never a new observation.
+      await evidence?.embeddings({products,model,inputs,response:actual});
+      return actual;
     });
+    response=result.value;reused=result.reused;
   } finally {
     addTiming(telemetry?.timingsMs, 'openai_embedding', Date.now() - startedAt);
   }
-  recordOpenAIUsage(telemetry?.usage, { model, operation: 'embedding', usage: response.usage });
+  if(!reused)recordOpenAIUsage(telemetry?.usage, { model, operation: 'embedding', usage: response.usage });
   // Opt-in private evidence only; never put exact inputs/provider payloads in
   // telemetry or add another model request. Preserve the default return values.
-  await evidence?.embeddings({ products, model, inputs, response });
 
   return new Map(response.data.map((item, index) => [
     products[index].id,
@@ -941,7 +965,7 @@ async function enrichProducts(products, options, existingWriteups = [], telemetr
     const draftingIds = new Set(draftCandidates.map(product => product.id));
     const draftResult = draftCandidates.length ? await requestEditorialWithRetries(
       draftCandidates,
-      (items, ledger, operation) => enrichCopyBatch(items, ledger, operation, shortCopy),
+      (items, ledger, operation) => enrichCopyBatch(items, ledger, operation, shortCopy, options.editorialStages),
       shortCopy ? retryableShortDraft : retryableDraft,
       telemetry,
       'draft',
@@ -988,7 +1012,7 @@ async function enrichProducts(products, options, existingWriteups = [], telemetr
     const reviewResult = reviewCandidates.length > 0
       ? await requestEditorialWithRetries(
         reviewCandidates,
-        (items, ledger, operation) => reviewEditorialBatch(items, ledger, operation, shortCopy),
+        (items, ledger, operation) => reviewEditorialBatch(items, ledger, operation, shortCopy, options.editorialStages),
         shortCopy ? retryableShortReview : retryableReview,
         telemetry,
         'review',
@@ -1092,8 +1116,9 @@ async function enrichProducts(products, options, existingWriteups = [], telemetr
       const changedInputs = approved.filter(product => !Array.isArray(original.get(product.id)?.embedding)
         || original.get(product.id).embedding.length === 0
         || buildProductEmbeddingText(product) !== buildProductEmbeddingText(original.get(product.id)));
-      if (!options.skipEmbeddings) embeddingsById = await generateProductEmbeddings(changedInputs, telemetry, evidence);
+      if (!options.skipEmbeddings) embeddingsById = await generateProductEmbeddings(changedInputs, telemetry, evidence, options.editorialStages);
     } catch (error) {
+      if(uncertainEditorial(error))throw error;
       telemetry?.warnings.push({ phase: 'embedding', reasonCode: 'embedding_failed', message: redactTelemetryText(error.message) });
       console.warn(`OpenAI embedding enrichment failed for ${batch.length} products.`);
     }
@@ -1123,7 +1148,10 @@ function isActiveCatalogCandidate(product, options) {
     return false;
   }
 
-  return product.price <= 0 || (product.price >= options.minPrice && product.price <= options.maxPrice);
+  // The new visual-admission path judges the actual gift, not a legacy price
+  // band. Preserve price filtering only for frozen/unupgraded callers.
+  return Boolean(options.discoveryEditor&&options.editorialStages)
+    ||product.price <= 0 || (product.price >= options.minPrice && product.price <= options.maxPrice);
 }
 
 function isAmazonThrottleError(error) {
@@ -1184,7 +1212,7 @@ function finalizeProducts(products, theme, options) {
     .map((product) => ({
       ...product,
       // This score is editorial fit, not a supplier rating or factual claim.
-      qualityScore: options.admitAsins ? 0.8 : scoreCandidate(product),
+      qualityScore: options.discoveryEditor&&options.editorialStages?0:options.admitAsins?0.8:scoreCandidate(product),
     }));
 }
 
@@ -1410,6 +1438,8 @@ async function revalidateCatalog(options, telemetry, store, evidence) {
         confirmedPresent.forEach((product, id) => remoteById.set(id, product));
         confirmedIds = missing.filter((product) => !confirmedPresent.has(product.id)).map((product) => product.id);
       } catch (error) {
+        if (['editorial_storage_unconfirmed','editorial_saved_result_invalid'].includes(error?.message)
+          || error?.message?.startsWith('provider_evidence_')) throw error;
         telemetry.warnings.push({ phase: 'revalidation', reasonCode: 'missing_confirmation_failed', message: redactTelemetryText(error.message) });
         missing.forEach((product) => {
           terminalIds.add(product.id);
@@ -1789,6 +1819,9 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   if (evidence !== undefined && (!evidence || typeof evidence.amazon !== 'function' || typeof evidence.embeddings !== 'function')) {
     throw new Error('Invalid explicit provider evidence');
   }
+  const reviewedDiscovery=options.discoveryEditor!==undefined;
+  if(reviewedDiscovery&&(typeof options.discoveryEditor?.reviewDiscovery!=='function'
+    ||typeof options.editorialStages?.run!=='function'))throw Error('discovery_editor_capability_required');
   // An explicit backend is a catalog read capability even without POSTGRES_URL.
   // Preserve the original environment guard only for the unchanged default CLI.
   const catalogReadsAvailable = arguments[3] !== undefined || Boolean(process.env.POSTGRES_URL);
@@ -1807,11 +1840,16 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
     .map((theme) => theme.trim())
     .filter(Boolean);
   const themePool = options.themes || envThemes || DEFAULT_THEMES;
-  const themes = options.admitAsins ? ['owner-selected campaign gifts'] : options.themes
+  const ordinaryThemes = options.admitAsins ? ['owner-selected campaign gifts'] : options.themes
     ? themePool.slice(0, options.themeLimit)
     : selectRotatingThemes(themePool, options.themeLimit, new Date(), options.discoveryRunKey);
+  const themes=reviewedDiscovery&&options.discoverySearchTopics?.length
+    ?[...new Set([...options.discoverySearchTopics,...ordinaryThemes])].slice(0,options.themeLimit):ordinaryThemes;
+  const collections=[...(reviewedDiscovery&&options.discoveryLeadAsins?.length
+    ?[{theme:'saved campaign gift leads',asins:options.discoveryLeadAsins}]:[]),...themes.map(theme=>({theme}))];
   const seen = new Map();
   const candidates = [];
+  const contradictoryDiscoveries=new Set();
   let backfilled = 0;
   let backfillStats = {
     selected: 0,
@@ -1832,7 +1870,8 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   if (options.enrichOnly) {
     console.log(`Catalog enrichment: max ${options.backfillLimit} existing active products`);
   } else {
-    console.log(`Catalog prefetch: ${themes.length} themes, max ${options.maxNew} net-new products`);
+    console.log(reviewedDiscovery?`Catalog discovery: ${themes.length} themes; admit the worthwhile finite cohort before enrichment`
+      :`Catalog prefetch: ${themes.length} themes, max ${options.maxNew} net-new products`);
   }
 
   if (options.backfillLimit > 0 && (!options.dryRun || catalogReadsAvailable)) {
@@ -1955,13 +1994,19 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   }
 
   const discoveryStartedAt = Date.now();
-  for (const theme of themes) {
+  for (const {theme,asins} of collections) {
     let found = [];
     try {
-      found = options.admitAsins
-        ? finalizeProducts((await observedAmazon('getItems', options.admitAsins, evidence))
-          .filter(product => options.admitAsins.includes(product.id)), theme, options)
+      const requestedAsins=asins??options.admitAsins;
+      const collect=async()=>requestedAsins
+        ? finalizeProducts((await observedAmazon('getItems', requestedAsins, evidence))
+          .filter(product => requestedAsins.includes(product.id)), theme, options)
         : await searchAmazonCandidates(theme, options, evidence);
+      found=reviewedDiscovery
+        ?(await options.editorialStages.run('discovery-collect',{
+          run:options.discoveryRunKey||telemetry.runId,theme,admitAsins:requestedAsins||null,
+          perTheme:options.perTheme,minPrice:options.minPrice,maxPrice:options.maxPrice},collect)).value
+        :await collect();
       console.log(`${theme}: ${found.length} candidate discoveries`);
       discoveredCandidates += found.length;
     } catch (error) {
@@ -1976,6 +2021,13 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
     for (const product of found) {
       const existing = seen.get(product.id);
       if (existing) {
+        if(reviewedDiscovery&&editorialSourceHash(existing)!==editorialSourceHash(product)){
+          contradictoryDiscoveries.add(product.id);
+          const first=candidates.findIndex(p=>p.id===product.id);if(first>=0)candidates.splice(first,1);
+          telemetry.items.record(product,{phase:'discovery',stage:'source_review',decision:'deferred',
+            reasonCode:'conflicting_same_run_observations',nextAction:'Keep the saved observations; defer this ambiguous identity without blocking other candidates.'});
+          continue;
+        }
         asinDuplicates += 1;
         telemetry.items.record(product, {
           phase: 'discovery',
@@ -1999,10 +2051,15 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   }
   await telemetry.items.flush();
 
-  candidates.sort((a, b) => b.qualityScore - a.qualityScore || a.id.localeCompare(b.id));
+  candidates.sort((a, b) => reviewedDiscovery?a.id.localeCompare(b.id):b.qualityScore - a.qualityScore || a.id.localeCompare(b.id));
   const rawCandidates = candidates.length;
+  // The reviewed path uses source readiness only. Legacy keyword heuristics
+  // remain solely for unupgraded frozen callers until coordinator activation.
+  const block=product=>reviewedDiscovery
+    ?discoverySourceBlockReason(product)
+    :discoveryCandidateBlockReason(product,options.minQualityScore,Boolean(options.admitAsins));
   const rejectedByQuality = candidates
-    .map((product) => ({ product, reasonCode: discoveryCandidateBlockReason(product, options.minQualityScore, Boolean(options.admitAsins)) }))
+    .map((product) => ({ product, reasonCode: block(product) }))
     .filter(({ reasonCode }) => reasonCode);
   rejectedByQuality.forEach(({ product, reasonCode }) => telemetry.items.record(product, {
     phase: 'discovery',
@@ -2012,12 +2069,10 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
     nextAction: 'No owner action; selection can change only with new listing or demand evidence.',
     details: { qualityScore: product.qualityScore, minimumQualityScore: options.minQualityScore },
   }));
-  const qualityCandidates = candidates.filter((product) => (
-    isHighQualityDiscoveryCandidate(product, options.minQualityScore, Boolean(options.admitAsins))
-  ));
+  const qualityCandidates = candidates.filter(product=>!block(product));
   const qualityRejected = rejectedByQuality.length;
   candidates.splice(0, candidates.length, ...qualityCandidates);
-  const deduplicated = deduplicateCandidates(candidates);
+  const deduplicated = reviewedDiscovery?{products:[...candidates],duplicates:0,rejected:[]}:deduplicateCandidates(candidates);
   deduplicated.rejected.forEach((product) => telemetry.items.record(product, {
     phase: 'discovery',
     stage: 'deduplication',
@@ -2028,10 +2083,20 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   candidates.splice(0, candidates.length, ...deduplicated.products);
   let catalogDuplicates = 0;
   let catalogSuperseded = [];
+  let discoveryCatalog=[];
   if (candidates.length > 0 && (!options.dryRun || catalogReadsAvailable)) {
     try {
-      const catalog = await store.getActiveCatalogIdentities({ includeInactive: options.discoveryNewOnly === true });
-      const catalogDeduplicated = deduplicateAgainstCatalog(candidates, catalog, 0.8, options.discoveryNewOnly === true);
+      const catalog = await store.getActiveCatalogIdentities({ includeInactive: reviewedDiscovery || options.discoveryNewOnly === true });
+      if(reviewedDiscovery)discoveryCatalog=catalog;
+      const catalogIds=new Set(catalog.map(p=>p.id));
+      const exactMatches=reviewedDiscovery?candidates.filter(p=>catalogIds.has(p.id)):[];
+      // Only exact identities or already verified duplicate relationships can
+      // veto the visual review. Similar titles are not proof of one design.
+      const catalogDeduplicated = reviewedDiscovery?{
+        products:candidates.filter(p=>!catalogIds.has(p.id)),
+        rejected:exactMatches.map(p=>({...p,duplicateOfProductId:p.id})),
+        duplicates:exactMatches.length,superseded:[],
+      }:deduplicateAgainstCatalog(candidates, catalog, 0.8, options.discoveryNewOnly === true);
       candidates.splice(0, candidates.length, ...catalogDeduplicated.products);
       catalogDuplicates = catalogDeduplicated.duplicates;
       catalogSuperseded = catalogDeduplicated.superseded || [];
@@ -2039,7 +2104,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
         phase: 'discovery',
         stage: 'deduplication',
         decision: 'duplicate',
-        reasonCode: 'near_duplicate_in_catalog',
+        reasonCode: reviewedDiscovery?'existing_catalog_identity':'near_duplicate_in_catalog',
         winnerProductId: product.duplicateOfProductId,
       }));
     } catch (error) {
@@ -2051,7 +2116,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   await telemetry.items.flush();
   const duplicatesFiltered = asinDuplicates + deduplicated.duplicates + catalogDuplicates;
   if (!Number.isSafeInteger(options.maxNew) || options.maxNew < 0) throw new Error('Invalid maximum new products');
-  const overflow = candidates.splice(options.maxNew);
+  const overflow = reviewedDiscovery?[]:candidates.splice(options.maxNew);
   overflow.forEach(product => telemetry.items.record(product, {
     phase: 'discovery', stage: 'selection', decision: 'deferred', reasonCode: 'max_new_limit',
     nextAction: 'No owner action; rediscover in a future bounded run without generating unused copy or embeddings.',
@@ -2062,7 +2127,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   }
 
   if (options.dryRun) {
-    const reviewCandidates = candidates.slice(0, Math.min(options.maxNew, 5)).map((product) => ({
+    const reviewCandidates = candidates.slice(0, reviewedDiscovery?5:Math.min(options.maxNew, 5)).map((product) => ({
       id: product.id,
       title: product.title,
       imageUrl: product.imageUrl,
@@ -2085,9 +2150,32 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
       deferredCandidates: overflow.length,
       activeCandidates: candidates.filter((product) => product.isActive).length,
       manualIntervention: backfillStats.manualReview,
-      candidates: candidates.slice(0, options.maxNew),
+      candidates: reviewedDiscovery?[...candidates]:candidates.slice(0, options.maxNew),
       reviewCandidates,
     };
+  }
+
+  let editorialDeferred=contradictoryDiscoveries.size,editorialRejected=0;
+  if(reviewedDiscovery&&candidates.length){
+    const decisions=await options.discoveryEditor.reviewDiscovery(candidates,{catalog:discoveryCatalog,
+      verifiedDuplicates:options.verifiedDiscoveryDuplicates||{}});
+    if(!Array.isArray(decisions)||decisions.length!==candidates.length||new Set(decisions.map(p=>p.id)).size!==candidates.length
+      ||decisions.some(d=>!candidates.some(p=>p.id===d.id)||!['admit','reject','defer'].includes(d.decision)
+        ||typeof d.reason!=='string'||d.reason.trim().length<8
+        ||d.decision==='admit'&&(!['standout','giftable'].includes(d.appeal)||d.imageMatches!==true)))
+      throw Error('discovery_editor_result_invalid');
+    const byId=new Map(decisions.map(d=>[d.id,d]));
+    for(const p of candidates){const decision=byId.get(p.id);
+      telemetry.items.record(p,{phase:'discovery',stage:'editorial_admission',decision:decision.decision,
+        reasonCode:'visual_editor_'+decision.decision,details:{appeal:decision.appeal,reason:decision.reason}});
+      if(decision.decision==='defer')editorialDeferred++;
+      if(decision.decision==='reject')editorialRejected++;
+    }
+    candidates.splice(0,candidates.length,...candidates.filter(p=>byId.get(p.id).decision==='admit'));
+    // Existing readiness plumbing consumes this site-authored fit field. The
+    // visual admission, not title keywords or a merchant rating, established it.
+    for(const p of candidates)p.qualityScore=0.8;
+    await telemetry.items.flush();
   }
 
   let inserted = 0;
@@ -2146,6 +2234,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
     catalogDuplicates,
     duplicatesFiltered,
     deferredCandidates: overflow.length,
+    editorialDeferred,editorialRejected,
     candidates: candidates.length,
     activeCandidates: enrichedCandidates.filter((product) => product.isActive).length,
     enrichedCandidates: enrichedCandidates.length,

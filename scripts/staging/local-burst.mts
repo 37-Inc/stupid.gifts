@@ -131,7 +131,7 @@ export async function safetyProbes() {
   assert.equal(after.embeddings, prior.embeddings + 1); assert.deepEqual(f.calls, after);
   for (let i = 0; i < 21; i++) {
     const response = await f.request('/api/search-products?q=rate-proof', { headers: { 'CF-Connecting-IP': 'rate' } });
-    assert.equal(response.status, i < 20 ? 200 : 429);
+    assert.equal(response.status, 200); // Owner removed the per-IP query cutoff.
   }
   f.env.ENVIRONMENT = 'production'; // Local cache-policy probe, never a deployment.
   assert.match((await f.request('/')).headers.get('Cache-Control')!, /max-age=60, s-maxage=60/);
@@ -190,7 +190,7 @@ export async function runLocalBurst(seconds = 600, progress: (value: unknown) =>
     const elapsedMs = performance.now() - start, cpuUsed = process.cpuUsage(cpu), endMemory = process.memoryUsage();
     const expectedSearch = seconds * RATE / 20;
     const checks = { adapterCounts: [f.calls.ids, f.calls.embeddings, f.calls.vectors, f.calls.diagnostics].every(value => value === expectedSearch)
-      && f.calls.budget === 0 && f.calls.keyword === 0, noNetwork: networkAttempts === 0 };
+      && f.calls.budget === 0 && f.calls.keyword === expectedSearch, noNetwork: networkAttempts === 0 };
     return { schemaVersion: 1, kind: 'local-only-worker-rehearsal', startedAt, durationRequestedSeconds: seconds, elapsedMs: Math.round(elapsedMs),
       environment: { node: process.version, platform: process.platform, architecture: process.arch, transport: 'in-process', cacheState: 'warm handler; no CDN' },
       measurement: 'Handler dispatch through consumed response body; not network TTFB.',
