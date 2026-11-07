@@ -33,7 +33,7 @@ export function codeOnlyInvocation(argv){
   const args=[...argv],flag=args.indexOf('--run');
   if(flag<0||!LABEL.test(args[flag+1]??''))refuse('arguments');
   const runKey=args[flag+1];args.splice(flag,2);const command=args[0]??'start';
-  if(args.length>1||!['prepare','start','resume','status'].includes(command))refuse('arguments');
+  if(args.length>1||!['prepare','start','resume','recover','status'].includes(command))refuse('arguments');
   return{command,runKey};
 }
 /** Protected immutable technical records only. No supplier bodies or keys. */
@@ -82,6 +82,27 @@ export function codeOnlyPublication({saved,sourceRoot,codeSha,releaseId,prior,se
     manifestSha256:prior.manifestSha256,versionReference:prior.versionReference},servingPrior,semanticSearch,
     acceptedCatalog:{...seal.publication,sealSha256:authority.sealSha256}});
 }
+/** Recovery changes the controller only, never the original build or journal. */
+export async function codeOnlyExecution({command,record,operatorRoot,operatorSource,helperSha256}){
+  if(!record)refuse('not_prepared');
+  if(command!=='recover'){
+    if(record.source!==operatorSource||record.helperSha256!==helperSha256)refuse('source_changed');
+    return{repository:operatorRoot,codeSha:record.source};
+  }
+  const old=record.config?.value?.sourceRoot,git=(root,...args)=>execFileSync('git',args,{cwd:root,encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();
+  try{
+    if(!old||record.config.value.codeSha!==record.source||record.authority?.value?.request?.codeSha!==record.source
+      ||await fs.realpath(old)!==old||git(old,'rev-parse','HEAD')!==record.source||git(old,'status','--porcelain','--untracked-files=all')
+      ||sha256(await fs.readFile(old+'/scripts/catalog/code-only-operator.mjs'))!==record.helperSha256
+      ||git(operatorRoot,'rev-parse','HEAD')!==operatorSource||git(operatorRoot,'status','--porcelain','--untracked-files=all'))refuse('original_source');
+    git(operatorRoot,'merge-base','--is-ancestor',record.source,operatorSource);
+  }catch{refuse('original_source');}
+  return{repository:old,codeSha:record.source,recoveryOperator:{source:operatorSource,helperSha256}};
+}
+export function codeOnlyFetchScope(config){
+  return{accountId:config.accountId,workerName:config.workerName,indexName:config.indexName,databaseId:config.database.id,identityOrigin:config.identityOrigin,
+    ...(config.semanticSearch?.derivedCatalog?{derivedIndexName:config.semanticSearch.derivedCatalog.indexName}:{})};
+}
 function source(){
   const git=(...args)=>execFileSync('git',args,{cwd:ROOT,encoding:'utf8'}).trim();
   if(process.versions.node.split('.')[0]!=='22'||process.cwd()!==ROOT||git('status','--porcelain','--untracked-files=all'))refuse('source');
@@ -96,9 +117,10 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
   let record=await store.optional(recordPath);
   const terminal=await codeOnlyTerminal(store,directory,record);if(terminal){console.log(JSON.stringify(terminal));return;}
   if(command==='status'){console.log(JSON.stringify(record?{state:await store.optional(directory+'/success.json')?'published':'prepared',runId:record.runId,source:record.source}:{state:'not_prepared'}));return;}
-  if(record&&(record.source!==codeSha||record.helperSha256!==helperSha256))refuse('source_changed');
+  if(!record&&command==='recover')refuse('not_prepared');
+  const execution=record?await codeOnlyExecution({command,record,operatorRoot:ROOT,operatorSource:codeSha,helperSha256}):null;
   if(record&&await store.optional(directory+'/success.json')){
-    await cleanupAcceptedPublication({directory:BASE+'/weekly-runs',repository:ROOT,mode:'resume',runId:record.runId,codeSha,
+    await cleanupAcceptedPublication({directory:BASE+'/weekly-runs',repository:execution.repository,mode:'resume',runId:record.runId,codeSha:execution.codeSha,
       configSha256:record.config.sha256,scope:SCOPE,retention:record.retention,budgetCaps:{httpRequests:record.limits.requests,sqlStatements:record.limits.statements},requestLimit:'observe'},record.runId);
     console.log(JSON.stringify({state:'already_completed',runId:record.runId,historicalAcceptance:true,supplierCalls:0,modelCalls:0}));return;
   }
@@ -137,15 +159,21 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
   const config=validatePublicationConfig(record.config.value),authority=record.authority.value,
     seal=await store.json(record.prior.control.path,record.prior.control.sha256),pointer=await store.bytes(care+'/last-success.json',record.pointerSha256);
   void pointer;encodeAcceptedCatalogAuthority(authority);
-  const workspaceOptions={directory:BASE+'/weekly-runs',repository:ROOT,mode:existsSync(BASE+'/weekly-runs/runs/'+record.runId+'/manifest.json')?'resume':'create',
-    runId:record.runId,codeSha,configSha256:record.config.sha256,scope:SCOPE,retention:record.retention,
+  const exists=existsSync(BASE+'/weekly-runs/runs/'+record.runId+'/manifest.json');
+  if(config.codeSha!==record.source||authority.request.codeSha!==record.source||command==='recover'&&!exists)refuse('recovery_binding');
+  if(execution?.recoveryOperator)await store.put(directory+'/recovery/'+codeSha+'.json',{schemaVersion:1,kind:'serving-only-recovery',runId:record.runId,
+    publicSource:record.source,...execution.recoveryOperator,operatorSha256:sha256(await store.bytes(recordPath)),configSha256:record.config.sha256,authoritySha256:record.authority.sha256});
+  const workspaceOptions={directory:BASE+'/weekly-runs',repository:execution?.repository??ROOT,mode:exists?'resume':'create',
+    runId:record.runId,codeSha:record.source,configSha256:record.config.sha256,scope:SCOPE,retention:record.retention,
     budgetCaps:{httpRequests:record.limits.requests,sqlStatements:record.limits.statements},requestLimit:'observe'};
   let workspace=await openRunWorkspace(workspaceOptions),result,success;
   try{
+    if(command==='recover'){const cp=await workspace.readCheckpoint({controlOnly:true});
+      if(!cp||!['freezing','activating'].includes(cp.checkpoint.owner?.phase)&&cp.checkpoint.control?.publication?.stage!=='published')refuse('recovery_checkpoint');}
     const token=await resolveWranglerOAuth(),budget=await workspace.budget();await observeHeadroom(token,budget,record.capacity,fetch,await currentD1Plan(token));
     const db=await createCatalogD1Rest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,limits:record.limits,requestLimit:'observe',
       accounting:{scope:{accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName},initial:await workspace.budget(),reserve:r=>workspace.reserveBudget(r),settle:(id,value)=>workspace.settleBudget(id,value)}}),
-      scope={accountId:SCOPE.accountId,workerName:SCOPE.workerName,indexName:SCOPE.indexName,databaseId:SCOPE.databaseId,identityOrigin:config.identityOrigin},
+      scope=codeOnlyFetchScope(config),
       send=accountedPublicationFetch(workspace,fetch,scope),observationSend=accountedPublicationReadFetch(workspace,fetch,scope);
     let cp=await workspace.readCheckpoint({controlOnly:true});
     if(!cp){cp=await workspace.writeCheckpoint(null,{phase:'created',owner:null,state:{kind:'serving-only'},pins:{},phaseComplete:null,control:{}});}
@@ -180,7 +208,8 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
         ||sha256(canonicalJson(original))!==seal.publication.receiptSha256)refuse('acceptance_changed');
       await store.bytes(care+'/last-success.json',record.pointerSha256);
       if(cp.checkpoint.owner!==null)cp=await workspace.writeControlCheckpoint(cp.sha256,{phase:'published',owner:null,control:cp.checkpoint.control});
-      success={schemaVersion:1,kind:'serving-only',releaseId:record.runId,source:codeSha,catalogPublication:seal.publication,acceptedCatalogPointerSha256:record.pointerSha256,
+      success={schemaVersion:1,kind:'serving-only',releaseId:record.runId,source:record.source,...(execution?.recoveryOperator?{recoveryOperator:execution.recoveryOperator}:{}),
+        catalogPublication:seal.publication,acceptedCatalogPointerSha256:record.pointerSha256,
         operator:{path:recordPath,sha256:sha256(await store.bytes(recordPath))},configSha256:record.config.sha256,authoritySha256:record.authority.sha256,
         receiptSha256:result.receiptSha256,receipt:result.receipt,checkpointSha256:cp.sha256,build,
         idle:{phase:idle.phase,generation:idle.generation,epoch:idle.mutation_epoch,externalPending:idle.external_pending},serving,usage:await workspace.budget()};

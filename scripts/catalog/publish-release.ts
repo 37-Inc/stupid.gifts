@@ -307,7 +307,8 @@ function provider(config:PublicationConfig,token:string,send:typeof fetch,identi
       const raw=JSON.parse(Buffer.concat(chunks).toString('utf8'));
       if(identity)return raw;if(!raw||raw.success!==true||!Object.hasOwn(raw,'result'))throw new Error();return raw.result;
     })();return await Promise.race([pending,aborted,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{abort();reject(new Error());},body===undefined?readTimeoutMs:2500);})]);
-    }catch{throw new Error(body===undefined?'publication_provider_unavailable':'publication_activation_unknown');}
+    }catch(error){if(error instanceof Error&&error.message==='publication_read_scope_invalid')throw error;
+      throw new Error(body===undefined?'publication_provider_unavailable':'publication_activation_unknown');}
     finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);if(controller.signal.aborted&&pending&&(body===undefined||isAccountedPublicationFetch(readSend))){
       if(isAccountedPublicationFetch(readSend)&&sent)await sent.catch(()=>{});
       await drainDeploymentObservation(Promise.allSettled([pending,cancellation]));}}

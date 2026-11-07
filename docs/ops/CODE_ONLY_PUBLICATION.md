@@ -7,6 +7,7 @@ catalog care. This is an owner-invoked command, not another scheduler.
 npm run catalog:care -- code-only prepare --run descriptive-label
 npm run catalog:care -- code-only start --run descriptive-label
 npm run catalog:care -- code-only resume --run descriptive-label
+npm run catalog:care -- code-only recover --run descriptive-label
 npm run catalog:care -- code-only status --run descriptive-label
 ```
 
@@ -14,6 +15,13 @@ npm run catalog:care -- code-only status --run descriptive-label
 verb means `start`. Resume the same label/source/config, never a replacement
 label to escape an uncertain upload or activation. Root CLI wiring dispatches
 the `code-only` arguments to `codeOnlyMain`.
+
+After a reviewed controller fix, `recover` can finish an existing saved intent.
+It validates the original clean checkout/helper and the clean descendant
+controller, then retains the original build source, config, authority, workspace,
+owner, deadlines and accounting. The controller identity is recorded separately;
+it cannot prepare a new run or call suppliers/models. Explicitly abandoned
+prebuild attempts are terminal, not recovery candidates.
 
 - Existing production scope, Wrangler OAuth, protected local workspace and
   accounted uploader are reused. No merchant or model credentials/calls exist.
