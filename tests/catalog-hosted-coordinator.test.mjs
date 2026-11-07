@@ -177,9 +177,12 @@ test('dependency install has no credentials and application child receives only 
   const app=hostedCommandEnvironment(env);assert.equal(app.STUPID_GIFTS_CLOUDFLARE_API_TOKEN,'synthetic');assert.equal(app.STUPID_GIFTS_OPERATOR_MODE,'hosted');
   for(const key of ['STUPID_GIFTS_UNKNOWN_SECRET','OPENAI_API_KEY','AMAZON_KEY','GH_TOKEN','GITHUB_TOKEN','CATALOG_MODE'])assert.equal(app[key],undefined);
 });
-test('manual workflow is main-only, protected, serialized, pinned and has no cron/PR trigger',async()=>{
+test('one Pacific workflow remains main-only, protected, serialized and has no PR/push trigger',async()=>{
   const yaml=await readFile(new URL('../.github/workflows/catalog-manual.yml',import.meta.url),'utf8');
-  assert.match(yaml,/workflow_dispatch:/);assert.doesNotMatch(yaml,/\b(?:schedule|pull_request|push):/);
+  assert.match(yaml,/workflow_dispatch:/);assert.doesNotMatch(yaml,/\b(?:pull_request|push):/);
+  assert.match(yaml,/cron: '30 8 \* \* \*'/);assert.match(yaml,/cron: '30 20 \* \* \*'/);assert.match(yaml,/cron: '30 10 \* \* \*'/);
+  assert.equal((yaml.match(/timezone: America\/Los_Angeles/g)||[]).length,3);
+  assert.match(yaml,/inputs.mode \|\| \(github.event.schedule == '30 20 \* \* \*' && 'photos' \|\| 'full'\)/);
   assert.match(yaml,/group: catalog-production/);assert.match(yaml,/cancel-in-progress: false/);assert.match(yaml,/environment: Production/);
   assert.match(yaml,/if: github.ref == 'refs\/heads\/main'/);assert.match(yaml,/runs-on: ubuntu-24.04/);assert.match(yaml,/node-version: '22.23.1'/);
   assert.match(yaml,/persist-credentials: false/);assert.match(yaml,/apparmor_parser -r \.github\/catalog-bwrap.apparmor/);

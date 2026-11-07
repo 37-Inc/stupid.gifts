@@ -246,6 +246,10 @@ async function main(){
   if((await exec('git',['rev-parse','HEAD'],{cwd:ROOT,env:hostedCommandEnvironment(process.env,{credentials:false})})).stdout.trim()!==source)fail('reviewed_source');
   const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit'})
     .formatToParts(new Date()).map(p=>[p.type,p.value]));
+  if(mode==='activate'){
+    const {activateHostedPolicy}=await import('./hosted-policy.mjs');
+    console.log(JSON.stringify(await activateHostedPolicy(runtime,canaryId)));return;
+  }
   const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),source,day:`${parts.year}-${parts.month}-${parts.day}`,runtime});
   console.log(JSON.stringify(result));if(result.state==='attention'){console.error('::warning::Catalog run remains pending; resume its existing identity.');process.exitCode=1;}
 }

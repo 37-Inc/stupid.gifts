@@ -1,15 +1,23 @@
-name: Stupid Gifts — Manual catalog care
+name: Stupid Gifts — Catalog care
 
 on:
+  schedule:
+    - cron: '30 8 * * *'
+      timezone: America/Los_Angeles
+    - cron: '30 20 * * *'
+      timezone: America/Los_Angeles
+    # Same coordinator/run key: resume pending work or recover a missed morning.
+    - cron: '30 10 * * *'
+      timezone: America/Los_Angeles
   workflow_dispatch:
     inputs:
       mode:
         description: Read-only shadow, normal full/photo care, or owner-invoked one-product canary
         type: choice
         default: shadow
-        options: [shadow, full, photos, canary]
+        options: [shadow, full, photos, canary, activate]
       canary_asin:
-        description: Exact existing public ASIN; required only for canary
+        description: Exact existing public ASIN; required for canary or explicit activation after its acceptance
         type: string
         default: ''
 
@@ -45,7 +53,7 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
       - name: Resume the original pending run or perform the explicitly chosen operation
         env:
-          CATALOG_MODE: ${{ inputs.mode }}
+          CATALOG_MODE: ${{ inputs.mode || (github.event.schedule == '30 20 * * *' && 'photos' || 'full') }}
           CATALOG_CANARY_ASIN: ${{ inputs.canary_asin }}
           STUPID_GIFTS_OPERATOR_MODE: hosted
           STUPID_GIFTS_CLOUDFLARE_API_TOKEN: ${{ secrets.STUPID_GIFTS_CLOUDFLARE_API_TOKEN }}

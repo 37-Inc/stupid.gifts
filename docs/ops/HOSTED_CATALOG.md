@@ -1,8 +1,9 @@
 # Stupid Gifts — Hosted catalog operations
 
 Implementation reference: [catalog automation specification](CATALOG_AUTOMATION_SPEC.md).
-Current rollout is manual-only. Committing this code does not move the active
-Codex timer, activate daily discovery, or authorize two production writers.
+After the accepted one-product canary and explicit policy activation, the single
+GitHub workflow owns daily care. The old Codex writing timer stays paused. Never
+run a local publisher while hosted care or a saved hosted publication is active.
 
 ## One application, one publisher
 
@@ -63,12 +64,22 @@ when newer metadata is supplied.
 4. Verify its actual public identity, D1 receipt, resolved build, idle owner,
    successor, loaded photos/copy and representative QA-labelled flows. Resume an
    interrupted canary under the same identity; never replace its batch.
-5. Only after acceptance, activate the new policy and the same workflow's
+5. Only after acceptance and live QA, dispatch **activate** with that canary's
+   exact ASIN. This configuration-only action verifies its saved acceptance,
+   current public identity, D1 receipt, resolved build and idle owner, then
+   version-updates only the automation policy. It makes no product/provider
+   batch and never changes the accepted catalog pointer. Activate the same workflow's
    Pacific morning/evening wakes plus a bounded catch-up wake. Leave local writing
    off. If cutover fails, stop hosted writes, reconcile pending work, then restore
    local writing—not both. Seven unattended cycles belong to the observation Bead.
 
-The checked-in workflow currently has **no cron**. Do not claim it runs daily.
+The same workflow has Pacific-time wakes at 08:30 (full care), 20:30 (due photos)
+and 10:30 (one morning catch-up). GitHub's native IANA timezone setting handles
+daylight saving time, without duplicate seasonal wakes or application clock
+gates. Catch-up uses the same daily run key: completed work skips, pending work
+resumes, and a missed morning can start once. Schedules can be delayed; the
+independent first-week checkup is not a publisher.
+See [GitHub scheduling documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onschedule).
 Do not add another timer just to retry a pending publication. Usage estimates
 alert; actual provider throttling, timeouts, finite payloads and integrity checks
 remain. A missing usage report is unknown, not zero or a public-search cutoff.

@@ -8,12 +8,14 @@ site with an old checkout or modify a source while its run is active.
 
 ## Current mode
 
-The existing `goose-gifts-daily-ops` Codex task is still the sole active writer:
-08:30 Pacific full care and 20:30 due-photo care. Absent/disabled automation policy
-preserves ten refreshes per run, Monday discovery and model-free Tuesday–Sunday.
-The new GitHub workflow is manual-only, with no cron. A merge does not activate
-hosted writing or daily discovery. See [HOSTED_CATALOG.md](HOSTED_CATALOG.md)
-for shadow, canary, credential approval and single-writer cutover, and
+The single GitHub catalog workflow owns 08:30 Pacific full care, 20:30 due-photo
+care and one 10:30 morning catch-up using the same daily run identity. The old
+`goose-gifts-daily-ops` Codex writing timer remains paused after cutover. Never
+enable both. The explicitly activated private automation policy enables scaled
+due-work, daily visual admission and API homepage editing; absence/disablement
+retains the legacy ten-product/Monday/model-free policy.
+See [HOSTED_CATALOG.md](HOSTED_CATALOG.md)
+for shadow, canary, explicit activation and single-writer recovery, and
 [the approved spec](CATALOG_AUTOMATION_SPEC.md) for successor behavior.
 
 November 6 baseline: 3,390 identities, 3,347 public gifts, 43 holds, 37 optional
@@ -70,7 +72,11 @@ seller messages, new paid service, duplicate publisher or blanket regeneration.
 Search-demand topics remain private under [SEARCH_DEMAND.md](SEARCH_DEMAND.md);
 never send them to GA4/PostHog or log visitor identities.
 
-## Existing local commands
+## Local fallback commands — never concurrent with hosted care
+
+These commands are for an explicitly reconciled fallback only. First stop hosted
+writes and settle its saved pending run; paused scheduling alone does not cancel
+an in-flight publisher. Routine hosted resumption uses the same GitHub workflow.
 
 Use Node22 and this scrubbed prefix from the canonical clean operator:
 
