@@ -133,7 +133,7 @@ export async function syncDerivedSearchVectors(input:{accountId:string;indexName
     finally{signal.removeEventListener('abort',cancel);void reader.cancel().catch(()=>{});try{reader.releaseLock();}catch{}}
     signal.throwIfAborted();const result=JSON.parse(Buffer.concat(chunks).toString());
     if(!response.ok||result.success!==true){
-      const codes=Array.isArray(result.errors)?result.errors.flatMap((e:{code?:unknown})=>Number.isSafeInteger(e?.code)?[e.code]:[]).slice(0,3):[];
+      const codes:number[]=Array.isArray(result.errors)?result.errors.flatMap((e:{code?:unknown})=>typeof e?.code==='number'&&Number.isSafeInteger(e.code)&&e.code>=0?[e.code]:[]).slice(0,3):[];
       throw Error(`semantic_delta_provider_failed_${path}_http_${response.status}${codes.map(code=>`_code_${code}`).join('')}`);
     }return result.result;
   };
