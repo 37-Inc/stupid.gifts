@@ -5,6 +5,32 @@ import {createCatalogR2Store} from '../scripts/catalog/r2-object-store.ts';
 
 const bytes=value=>new TextEncoder().encode(value);
 const hash=value=>createHash('sha256').update(value).digest('hex');
+
+test('journal listing stays in one run prefix, paginates and never writes',async()=>{
+  let calls=0;
+  const store=createCatalogR2Store({accountId:'a'.repeat(32),bucket:'private-test-bucket',prefix:'hosted-v1',
+    accessKeyId:'SYNTHETIC_ACCESS',secretAccessKey:'SYNTHETIC_SECRET',send:async request=>{
+      const url=new URL(request.url);assert.equal(request.method,'GET');assert.equal(url.pathname,'/private-test-bucket');
+      assert.equal(url.searchParams.get('prefix'),'hosted-v1/runs/test-run/events/');assert.equal(url.searchParams.get('encoding-type'),'url');
+      assert.equal(url.searchParams.get('list-type'),'2');assert.equal(request.redirect,'error');calls++;
+      assert.equal(url.searchParams.get('continuation-token'),calls===1?null:'next&part');
+      const name=String(calls).padStart(6,'0')+'.'+'a'.repeat(64)+'.json';
+      return new Response('<ListBucketResult><Contents><Key>'+encodeURIComponent('hosted-v1/runs/test-run/events/'+name)+'</Key></Contents>'
+        +'<IsTruncated>'+(calls===1?'true':'false')+'</IsTruncated>'+(calls===1?'<NextContinuationToken>next&amp;part</NextContinuationToken>':'')+'</ListBucketResult>');
+    }});
+  assert.deepEqual(await store.listJournal('test-run'),[1,2].map(n=>'events/'+String(n).padStart(6,'0')+'.'+'a'.repeat(64)+'.json'));
+  assert.equal(calls,2);await assert.rejects(store.listJournal('../outside'),/key/);assert.equal(calls,2);
+});
+
+test('journal listing rejects foreign keys and repeated provider pagination',async()=>{
+  for(const foreign of [true,false]){
+    let calls=0;const store=createCatalogR2Store({accountId:'a'.repeat(32),bucket:'private-test-bucket',prefix:'hosted-v1',
+      accessKeyId:'SYNTHETIC_ACCESS',secretAccessKey:'SYNTHETIC_SECRET',send:async()=>{calls++;
+        return new Response('<ListBucketResult><Key>'+encodeURIComponent(foreign?'other/run/events/foreign':'hosted-v1/runs/test-run/events/file')
+          +'</Key><IsTruncated>true</IsTruncated><NextContinuationToken>repeated</NextContinuationToken></ListBucketResult>');}});
+    await assert.rejects(store.listJournal('test-run'),/list_scope|list_response/);assert.equal(calls,foreign?1:2);
+  }
+});
 function fixture(){
   const objects=new Map(),calls=[];let loseAck=false,oddAck=false,readFaults=[],writeFaults=[];
   const config={accountId:'a'.repeat(32),bucket:'private-test-bucket',prefix:'hosted-v1',

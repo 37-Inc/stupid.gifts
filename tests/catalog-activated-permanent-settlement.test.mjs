@@ -54,12 +54,14 @@ test('explicit terminal settlement without its existing authority fails before p
   assert.equal(external,0);assert.equal(sql,0);assert.equal(writes,0);
 });
 
-async function sealFixture({historyOnly=false}={}){
+async function sealFixture({historyOnly=false,overlay=false}={}){
   const snapshot={schemaVersion:1,dataKind:'catalog',catalogRevision:'synthetic-catalog',generatedAt:OLD,
     products:[{id:'B000000001',publicId:UUID,slug:'owned-fixture',source:'amazon',title:'Owned fixture gift',
       description:'An independently owned fixture description.',imageUrl:'/images/gift-placeholder.svg',
       affiliateUrl:'https://www.amazon.com/dp/B000000001?tag=fixture-20',currency:'USD',price:0,isActive:true,
       qualityScore:.8,eligibleUntil:null,indexable:false}],heldProducts:[],slugHistory:[]};
+  if(overlay){const base=structuredClone(snapshot.products[0]);snapshot.products[0]={...base,
+    imageUrl:'https://example.invalid/original-finite-photo.jpg',eligibleUntil:CUTOFF,persistent:base};}
   const packet=await createProjectionPacket(snapshot,{[UUID]:HASH},HASH,new Date(OLD));
   const intent={releaseId:RELEASE,codeSha:CODE,catalogRevision:snapshot.catalogRevision,catalogSnapshotSha256:packet.receipt.snapshot_sha256,
     manifestSha256:HASH,vectorSyncWatermark:0,priorReleaseId:'synthetic-prior',nextExpiry:null};
@@ -93,6 +95,16 @@ test('post-expiry successor uses exact current resolved/idle receipt and native 
   assert.equal(seal.currentNative.revisionSha256,f.control.revisionSha256);assert.deepEqual(seal.currentNative.ids,[UUID]);
   assert.deepEqual(JSON.parse(seal.envelopeJson).products,[UUID]);assert.equal('sourceRows' in seal,false);
   assert.equal(f.queries.length,2);
+});
+
+test('routine permanent successor preserves finite overlay clocks and matches normal acceptance with cleared fallbacks',async()=>{
+  const f=await sealFixture({overlay:true,historyOnly:true}),before=structuredClone(f.control);
+  const recovered=await createPublishedApprovedCatalogSealFromControl(f.db,f.control,f.publication,f.vectorPlan);
+  assert.deepEqual(recovered,await createPublishedApprovedCatalogSeal(f.db,f.revision,f.publication));
+  assert.deepEqual(f.control,before);assert.equal(f.control.revision.snapshot.products[0].eligibleUntil,CUTOFF);
+  assert.equal(f.control.revision.snapshot.products[0].persistent.eligibleUntil,null);
+  const finite=structuredClone(f.control);delete finite.revision.snapshot.products[0].persistent;
+  await assert.rejects(createPublishedApprovedCatalogSealFromControl(f.db,finite,f.publication,f.vectorPlan),/cohort_successor_control_invalid/);
 });
 
 test('history-only successor verifies all native IDs but matches the original factory current-ID convention',async()=>{

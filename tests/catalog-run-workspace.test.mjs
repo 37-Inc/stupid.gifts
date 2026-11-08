@@ -242,7 +242,7 @@ test('an acknowledged preactivation finish preserves multiple settled unknowns a
   assert.deepEqual(await w.budget(),before);assert.equal(before.unconfirmedRequests,2);
 });
 
-async function finalizationFixture(t,{finite=false,skipFinish=false,noDeployment=false,preactivation=false,routine=false}={}){
+async function finalizationFixture(t,{finite=false,overlay=false,skipFinish=false,noDeployment=false,preactivation=false,routine=false}={}){
   const f=await fixture(t,routine?{requestLimit:'observe'}:{});f.input.repository=join(f.parent,'operator');
   await mkdir(f.input.repository,{mode:0o700});
   const w=await f.open(),value=recoveryCheckpoint(),p=value.control.publication;
@@ -251,6 +251,8 @@ async function finalizationFixture(t,{finite=false,skipFinish=false,noDeployment
       description:'An independently owned synthetic fixture gift.',imageUrl:'/images/gift-placeholder.svg',
       affiliateUrl:'https://www.amazon.com/dp/'+ID+'?tag=fixture-20',currency:'USD',price:0,isActive:true,qualityScore:.85,
       eligibleUntil:finite?LATER:null,indexable:false}],heldProducts:[],slugHistory:[]};
+  if(overlay){const base=structuredClone(snapshot.products[0]);snapshot.products[0]={...base,
+    imageUrl:'https://example.invalid/original-finite-photo.jpg',eligibleUntil:new Date(LATER).toISOString(),persistent:base};}
   const bytes=`${JSON.stringify(snapshot)}\n`,digest=sha256(bytes);
   p.intent.nextExpiry=null;p.intent.catalogSnapshotSha256=digest;p.build.request.sourceDigest=digest;
   p.requestId=p.build.requestId=sha256(encodeBuildRequest(p.build.request));
@@ -274,8 +276,8 @@ async function finalizationFixture(t,{finite=false,skipFinish=false,noDeployment
   return{f,w,saved,grant,finish,directory,snapshot};
 }
 
-async function permanentControlFixture(t,{blob=false,mutate,summaryMutate,preactivation=false,routine=false}={}){
-  const input=await finalizationFixture(t,{preactivation,routine,skipFinish:routine}),{w,snapshot,saved}=input,p=saved.checkpoint.control.publication;
+async function permanentControlFixture(t,{blob=false,mutate,summaryMutate,preactivation=false,routine=false,overlay=false}={}){
+  const input=await finalizationFixture(t,{preactivation,routine,overlay,skipFinish:routine}),{w,snapshot,saved}=input,p=saved.checkpoint.control.publication;
   const owner=p.permit?.mutationOwner??saved.checkpoint.owner;
   const packet=await createProjectionPacket(snapshot,{[snapshot.products[0].publicId]:HASH},HASH,new Date(NOW));
   const previous={...snapshot,catalogRevision:'prior-fixture',products:[snapshot.products[0].publicId]};
@@ -345,6 +347,22 @@ test('routine metadata completion cannot admit a preactivation or finite/supplie
     const f=await permanentControlFixture(t,{routine:true,mutate});
     await assert.rejects(f.w.readPermanentFinalization('revision'),/permanent_control|snapshot|publication/i);
   }
+});
+
+test('routine permanent completion accepts automation and unchanged finite overlays with permanent fallbacks',async t=>{
+  const {w,value,revision}=await permanentControlFixture(t,{routine:true,overlay:true,mutate:v=>{
+    const q=v.request.request,id=v.sourceIds[0];q.approval.changes=[{publicId:id,operationId:HASH,inputSha256:HASH,productSha256:HASH,displaySha256:HASH}];
+    q.approvalSha256=sha256(canonicalJson(q.approval));q.automation={schemaVersion:1,runId:q.approval.runId,
+      configSha256:HASH,journalSha256:HASH,writerGeneration:v.revision.persistent.generation,
+      refreshIds:[ID],admittedIds:[],products:[{id:ID,publicId:id}]};
+  }});
+  assert.deepEqual(await w.readPermanentFinalization('revision'),value);
+  assert.equal(value.revision.snapshot.products[0].eligibleUntil,new Date(LATER).toISOString());
+  assert.equal(value.revision.snapshot.products[0].persistent.eligibleUntil,null);
+  await assert.rejects(w.readArtifact(revision),/expired/);
+  const invalid=structuredClone(value),publication=(await w.readCheckpoint({controlOnly:true})).checkpoint.control.publication;
+  invalid.request.request.automation.products=[];
+  assert.throws(()=>activatedPermanentRevisionControl(invalid,publication),/automation_cohort_invalid/);
 });
 
 test('the ordinary acknowledged-upload continuation reads only permanent controls after supplier retention expires',async t=>{

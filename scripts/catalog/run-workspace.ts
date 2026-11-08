@@ -791,11 +791,14 @@ const eventName=(sequence:number,digest:string)=>`${String(sequence).padStart(6,
  * second workflow state, owner lease, saved config or host lock in the bucket. */
 async function durableJournal(input:RunWorkspaceOptions,directory:string,create:boolean) {
   const store=input.durable!,prefix=`runs/${input.runId}/`,headKey=prefix+'head.json';
+  const prefetched=new Map<string,DurableObject>(),prefetchErrors=new Map<string,unknown>();
   const get=async(name:string)=>{const object=await store.get(prefix+name);if(!object)fail('durable_missing');return object;};
   // The remote head anchors immutable local bytes. Reopening on the same
   // runner must not download the entire journal again; missing files still
   // restore from the store, and every reused byte is verified below.
   const cached=async(name:string)=>{
+    if(prefetched.has(name))return prefetched.get(name)!;
+    if(prefetchErrors.has(name))throw prefetchErrors.get(name);
     try{return{bytes:await readBytes(join(directory,name)),etag:''};}
     catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;return get(name);}
   };
@@ -830,6 +833,22 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
   }else{
     remote=await get('head.json');const head=journalHead(remoteJson(remote));
     const manifest=remoteJson(await get('manifest.json')) as WorkspaceManifest;manifestInfo(manifest,input);
+    let warm=false;
+    if(head.sequence)try{await protectedStat(join(directory,'events',eventName(head.sequence,head.sha256!)),false);warm=true;}
+    catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+    if(store.listJournal&&head.sequence&&!warm){
+      // Listing only discovers immutable candidates. The original anchored hash
+      // chain below remains the authority, including after concurrent downloads.
+      const names=[...new Set(await store.listJournal(input.runId))].filter(name=>{
+        const match=/^events\/(\d{6,})\.[a-f0-9]{64}\.json$/.exec(name),sequence=Number(match?.[1]);
+        return match&&Number.isSafeInteger(sequence)&&sequence>0&&sequence<=head.sequence;
+      });let cursor=0,completed=0;
+      console.info(JSON.stringify({state:'restoring',runId:input.runId,phase:'journal',completed,total:names.length}));
+      await Promise.all(Array.from({length:Math.min(16,names.length)},async()=>{
+        while(cursor<names.length){const name=names[cursor++];try{prefetched.set(name,await cached(name));}catch(error){prefetchErrors.set(name,error);}
+          completed++;if(completed%2000===0||completed===names.length)console.info(JSON.stringify({state:'restoring',runId:input.runId,phase:'journal',completed,total:names.length}));}
+      }));
+    }
     const records:{name:string;record:RecordFile}[]=[];let digest=head.sha256;
     for(let sequence=head.sequence;sequence>0;sequence--){
       const name=eventName(sequence,digest!),object=await cached('events/'+name);
@@ -838,6 +857,7 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
       records.push({name,record});digest=record.parent;
       if(sequence===1?digest!==null:!hash(digest))fail('journal_chain');
     }
+    prefetched.clear();prefetchErrors.clear();
     const state=empty(manifest,input.requestLimit??'enforce');
     for(const {name,record}of records.reverse())applyRecord(state,record,name);
     registrations=state.bodyRegistrations;
