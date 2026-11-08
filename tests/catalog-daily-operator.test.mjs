@@ -2,9 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { headroom, observeHeadroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation, cleanupAcceptedPublication,
-  routineAutomationPolicy,materializeRoutinePreparation,routineFreshnessPool,hydrateRoutineInputs,routineHostedPending } from '../scripts/catalog/daily-operator.mjs';
+  routineAutomationPolicy,materializeRoutinePreparation,routineFreshnessPool,hydrateRoutineInputs,routineHostedPending,routineRecoveryPhase } from '../scripts/catalog/daily-operator.mjs';
 import {sha256,canonicalJson} from '../scripts/catalog/migration.ts';
 import {derivedFixture} from './helpers/derived-search-fixture.mjs';
+import {automationRuntime} from '../scripts/catalog/automation-runtime.mjs';
+
+test('phase recovery binds the original finite config and writer; publication recovery still needs approval',()=>{
+  const hash='a'.repeat(64),config={runId:'original',cadence:{automation:{refreshIds:['B000000001'],discovery:false}}},
+    cp={phase:'phases_running',owner:{phase:'writing',ownerReference:'original',operationKey:sha256(`weekly:${hash}`)}};
+  assert.equal(routineRecoveryPhase(cp,config,hash,hash),true);
+  for(const changed of [{...cp,phase:'created'},{...cp,owner:{...cp.owner,ownerReference:'other'}},
+    {...cp,owner:{...cp.owner,operationKey:'b'.repeat(64)}}])assert.throws(()=>routineRecoveryPhase(changed,config,hash,hash),/provider_replay_forbidden/);
+  assert.throws(()=>routineRecoveryPhase(cp,config,hash,'b'.repeat(64)),/provider_replay_forbidden/);
+  assert.throws(()=>routineRecoveryPhase(cp,{...config,cadence:{}},hash,hash),/provider_replay_forbidden/);
+  assert.equal(routineRecoveryPhase({phase:'published',pins:{approval:{sha256:hash}}},config,hash,hash),false);
+});
 
 test('cleanup failures after acceptance are advisory, including open and close failures',async()=>{
   for(const failure of ['none','open','clean','close']){
@@ -172,14 +184,15 @@ test('preparation pins the settled storefront only when it serves the sealed cat
 });
 test('routine publication strips retired search budgets while preserving the verified index',()=>{
   assert.deepEqual(routineSearchPolicy(null),{enabled:false});
+  const base=automationRuntime().base;
   const policy={enabled:true,dailyRequestCap:50,dailyTokenCap:32768,derivedCatalog:{
-    path:'/Users/cameronehrlich/.codex/private/goose-gifts-migration/search/catalog.json',sha256:'a'.repeat(64),indexName:'stupid-gifts-semantic-v1'}};
+    path:base+'/search/catalog.json',sha256:'a'.repeat(64),indexName:'stupid-gifts-semantic-v1'}};
   const current={enabled:true,derivedCatalog:policy.derivedCatalog};
   assert.deepEqual(routineSearchPolicy(policy),current);assert.deepEqual(routineSearchPolicy(current),current);
   for(const change of [{dailyRequestCap:51},{dailyTokenCap:32769},{enabled:false},{extra:true},
     {derivedCatalog:{...policy.derivedCatalog,indexName:'stupid-gifts-production'}},
     {derivedCatalog:{...policy.derivedCatalog,path:'/tmp/catalog.json'}},
-    {derivedCatalog:{...policy.derivedCatalog,path:'/Users/cameronehrlich/.codex/private/goose-gifts-migration/../catalog.json'}}])
+    {derivedCatalog:{...policy.derivedCatalog,path:base+'/../catalog.json'}}])
     assert.throws(()=>routineSearchPolicy({...policy,...change}),/semantic_policy/);
 });
 test('routine Free admission accepts an empty provider error array but refuses actual or malformed errors',async()=>{

@@ -45,6 +45,12 @@ alternate daily commands; use the maintained same-run recovery path below.
   above cleared permanent fallbacks. Never treat a photo deadline as catalog
   expiry or renew it during receipt completion. The exact original snapshot,
   source, native proof, version and owner still have to match.
+- Routine SQL transactions are bounded by encoded request/individual statement
+  constraints, not the obsolete 50-statement allowance. Never split a logical
+  transaction merely to fit that count: rollback, receipt and owner CAS stay atomic.
+  Failure telemetry retains safe transport code, dispatch state, statement/byte
+  counts, HTTP/provider codes and phase/product IDs, never SQL/values/credentials.
+  The same sanitized record is saved in the existing phase journal and job output.
 - Cold restoration lists only this run's immutable journal objects and downloads
   them with sixteen concurrent reads, then verifies the original anchored hash
   chain before using any state. Listing is an accelerator, not authority; no
@@ -135,9 +141,15 @@ when newer metadata is supplied.
 4. Verify its actual public identity, D1 receipt, resolved build, idle owner,
    successor, loaded photos/copy and representative QA-labelled flows. Resume an
    interrupted canary under the same identity; never replace its batch.
-   A newer reviewed controller can use `catalog:care recover` only after the
-   original proposal is pinned and supplier phases are over. The original clean
+   Post-provider `catalog:care recover` requires the original proposal pin.
+   The original clean
    ancestor source/config/owner and all reservations stay bound; no refetch.
+   For a saved automated `phases_running` run, a reviewed descendant controller
+   may use `catalog:care recover <original-config-SHA> --run <original-key>`.
+   The original writing owner and exact finite cohort must match. Reuse saved
+   preparations/responses and committed receipts; only unattempted work already
+   in that original cohort can execute. Original source/config/observations stay
+   unchanged. Post-provider recovery still takes the actual reviewed proposal SHA.
 5. Only after acceptance and live QA, dispatch **activate** with that canary's
    exact ASIN. This configuration-only action verifies its saved acceptance,
    current public identity, D1 receipt, resolved build and idle owner, then

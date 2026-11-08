@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile, readdir } from 'node:fs/promises';
-import { createCatalogD1Rest, createCatalogD1ReadOnlyRest, CATALOG_D1_REST_LIMITS } from '../scripts/catalog/d1-write-rest.ts';
+import { createCatalogD1Rest, createCatalogD1ReadOnlyRest, CATALOG_D1_REST_LIMITS, catalogD1FailureDetail } from '../scripts/catalog/d1-write-rest.ts';
 import { claimMutationOwnership, readMutationOwner, releaseMutationOwnership } from '../lib/catalog/mutation-fence.ts';
 import { createD1CatalogTelemetryStore } from '../scripts/catalog/telemetry-d1.ts';
 import {MAINTENANCE_SLUG_TRIGGER} from '../scripts/catalog/maintenance-state.ts';
@@ -83,6 +83,27 @@ test('accounted routine requests are telemetry beyond the old limit, not a reaso
   assert.equal(db.metrics().unconfirmedRequests,2);assert.equal(reservations.length,4);
   await db.prepare('SELECT 3').all();
   assert.equal(db.metrics().statements,4);
+});
+
+test('routine 53-statement transaction passes the real transport atomically; failure detail contains no SQL or values',async t=>{
+  const f=await fixture(t),db=await createCatalogD1Rest({...config,fetch:f.fetch,requestLimit:'observe',accounting:{
+    scope:{accountId:config.accountId,databaseId:config.databaseId,databaseName:config.databaseName},
+    initial:{httpRequests:0,sqlStatements:0,knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:0},async reserve(){},async settle(){}}});
+  const batch=Array.from({length:53},(_,i)=>db.prepare('INSERT INTO items VALUES(?,?)').bind(String(i),'PRIVATE value'));
+  const before=f.calls.length;assert.equal((await db.batch(batch)).length,53);assert.equal(f.calls.length,before+1);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM items').get().n,53);
+  await assert.rejects(db.batch([...Array.from({length:52},(_,i)=>db.prepare('INSERT INTO items VALUES(?,?)').bind('new'+i,'PRIVATE')),
+    db.prepare("SELECT json('PRIVATE invalid JSON')")]),error=>{
+      assert.equal(error.message,'catalog_d1_result_unknown');const detail=catalogD1FailureDetail(error);
+      assert.equal(detail.statementCount,53);assert.equal(detail.dispatched,true);assert.equal(detail.httpStatus,400);
+      assert.equal(detail.reason,'http_error');assert.doesNotMatch(JSON.stringify(detail),/PRIVATE|INSERT|TEST_ONLY_TOKEN/);return true;
+    });
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM items').get().n,53,'the failed transaction rolls back every row');
+  const sent=f.calls.length;
+  await assert.rejects(f.db.batch(Array(53).fill(f.db.prepare('SELECT 1'))),error=>{
+    const detail=catalogD1FailureDetail(error);assert.equal(detail.statementCount,53);assert.equal(detail.dispatched,false);
+    assert.equal(detail.reason,'batch_statements');return true;
+  });assert.equal(f.calls.length,sent,'legacy preflight refusal is never dispatched');
 });
 
 test('read-only preparation observes aggregate estimates without allowing writes or relaxing old defaults',async t=>{

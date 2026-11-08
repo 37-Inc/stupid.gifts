@@ -1098,6 +1098,8 @@ test('CLI summary exposes coarse waiting/publication identity, never private own
     receiptSha256:'a'.repeat(64),owner:{token:'PRIVATE'},control:{candidate:'PRIVATE'},error:'raw provider body'}),
   {state:'pending',reason:'awaiting_reviewed_approval',errorCode:'mutation_unknown',releaseId:'test-release',receiptSha256:'a'.repeat(64)});
   assert.deepEqual(weeklyCommandSummary({state:'attention',reason:'not a coarse reason: PRIVATE'}),{state:'attention'});
+  const diagnostic={stage:'preflight',reason:'batch_statements',dispatched:false,statementCount:53,requestBytes:192780,requestSha256:'a'.repeat(64)};
+  assert.deepEqual(weeklyCommandSummary({state:'attention',diagnostic:{...diagnostic,sql:'PRIVATE',params:['PRIVATE']}}),{state:'attention',diagnostic});
 });
 
 test('ordered derived freeze artifacts switch to bounded blobs without canonicalizing JSON bytes or changing small refs',async t=>{

@@ -88,6 +88,18 @@ async function setup({products=[],presence={},intent,revision='r-new'}={}) {
     epoch:() => sqlite.prepare('SELECT mutation_epoch FROM catalog_mutation_scopes').get().mutation_epoch};
 }
 
+test('transport refusal is retained after exact receipt readback, not mislabeled as a maintenance conflict',async()=>{
+  const f=await setup({products:Array.from({length:7},(_,i)=>rawProduct(i+1))});
+  const original=Object.assign(Error('catalog_d1_batch_invalid'),{catalogDiagnostic:{stage:'preflight',reason:'batch_statements',dispatched:false,
+    statementCount:53,requestBytes:192780,requestSha256:'a'.repeat(64)}});
+  try{
+    let count=0;f.hookBefore(statements=>{count=statements.length;throw original;});
+    await assert.rejects(f.store.markConfirmedMissingUnavailable(Array.from({length:7},(_,i)=>id(i+1))),error=>error===original);
+    assert.ok(count>50);assert.equal(f.epoch(),f.owner.epoch);
+    assert.equal(f.sqlite.prepare('SELECT count(*) n FROM catalog_maintenance_operations').get().n,0);
+  }finally{f.close();}
+});
+
 // Local display-membership fixtures, not provider/publication evidence.
 function markPublic(f,products) {
   for(const p of products)f.sqlite.prepare('UPDATE products SET public_display_json=? WHERE id=?').run(canonicalJson({
