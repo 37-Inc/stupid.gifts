@@ -145,7 +145,11 @@ when newer metadata is supplied.
 4. Verify its actual public identity, D1 receipt, resolved build, idle owner,
    successor, loaded photos/copy and representative QA-labelled flows. Resume an
    interrupted canary under the same identity; never replace its batch.
-   Post-provider `catalog:care recover` requires the original proposal pin.
+   Post-provider `catalog:care recover` requires the original proposal pin,
+   including `draining` while an acknowledged native mutation becomes visible.
+   That retry resumes the saved outbox event; it never re-enters supplier/model work.
+   Retry/transition bounds apply to consecutive stalls, not a total number of
+   gifts: a new checkpoint phase or owner epoch is progress. No accounting is reset.
    The original clean
    ancestor source/config/owner and all reservations stay bound; no refetch.
    For a saved automated `phases_running` run, a reviewed descendant controller

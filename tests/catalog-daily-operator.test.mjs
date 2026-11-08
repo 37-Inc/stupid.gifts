@@ -18,7 +18,10 @@ test('phase recovery binds the original finite config and writer; publication re
   assert.throws(()=>routineRecoveryPhase(cp,config,hash,'b'.repeat(64)),/provider_replay_forbidden/);
   assert.throws(()=>routineRecoveryPhase(cp,{...config,cadence:{}},hash,hash),/provider_replay_forbidden/);
   assert.throws(()=>routineRecoveryPhase(null,config,hash,hash),/provider_replay_forbidden/);
-  assert.equal(routineRecoveryPhase({phase:'published',pins:{approval:{sha256:hash}}},config,hash,hash),'publication');
+  for(const phase of ['draining','freezing','publishing','attention','published','finalized']){
+    assert.equal(routineRecoveryPhase({...cp,phase,pins:{approval:{sha256:hash}}},config,hash,hash),'publication');
+    assert.throws(()=>routineRecoveryPhase({...cp,phase},config,hash,hash),/provider_replay_forbidden/);
+  }
 });
 
 test('cleanup failures after acceptance are advisory, including open and close failures',async()=>{

@@ -5,7 +5,7 @@ import {readFile} from 'node:fs/promises';
 import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
-import {routineReviewProduct} from '../scripts/catalog/daily-operator.mjs';
+import {routineReviewProduct,routineRecoveryPhase} from '../scripts/catalog/daily-operator.mjs';
 
 const SOURCE='a'.repeat(40),NEW_SOURCE='b'.repeat(40),HASH='c'.repeat(64),DAY='2026-11-06';
 const bytes=value=>Buffer.from(JSON.stringify(value)+'\n'),hash=value=>createHash('sha256').update(value).digest('hex');
@@ -122,6 +122,30 @@ test('new reviewed controller uses recovery only for the original already-approv
   assert.deepEqual(f.checkedOut,[SOURCE,SOURCE]);assert.deepEqual(f.restored,[ref,ref]);
 });
 
+test('descendant controller resumes approved draining visibility retries without replaying provider work',async()=>{
+  const f=fixture(),invoke=f.deps.invoke;
+  f.config.cadence={automation:{refreshIds:['B000000001'],discovery:false}};
+  const held=await f.run({}, {invoke:async(directory,args)=>{
+    if(args[0]==='publish'){f.calls.push(args);f.phase='draining';f.approvalPin=hash(canonicalJson(f.proposal));
+      return{state:'attention',errorCode:'catalog_hosted_operator_failed'};}return invoke(directory,args);}});
+  assert.equal(held.state,'attention');const original=f.pointer(),pin=f.approvalPin;let publications=0;
+  const result=await f.run({source:NEW_SOURCE},{invoke:async(directory,args)=>{
+    f.calls.push(args);assert.equal(args[0],'recover');assert.equal(args[1],f.proposalSha);
+    assert.equal(args.at(-1),'scheduled-'+DAY);assert.notEqual(directory,'/operators/'+SOURCE);
+    const cp={phase:f.phase,pins:{approval:{sha256:f.approvalPin}},owner:{phase:'writing',
+      ownerReference:f.config.runId,operationKey:hash('weekly:'+HASH)}};
+    assert.equal(routineRecoveryPhase(cp,f.config,HASH,args[1]),'publication');
+    assert.equal(f.approvalPin,pin);publications++;
+    if(publications===1)return{state:'pending',phase:'draining',errorCode:'not_visible'};
+    f.phase='finalized';return{state:'finalized'};
+  }});
+  assert.equal(result.state,'accepted');assert.equal(result.resumed,true);assert.ok(original);
+  assert.equal(publications,2);assert.deepEqual(f.waits,[45000]);
+  assert.equal(f.calls.filter(args=>args[0]==='prepare').length,1);
+  assert.equal(f.calls.filter(args=>args[0]==='start').length,1);
+  assert.equal(f.calls.filter(args=>args[0]==='review').length,1);
+});
+
 test('reviewed controller resumes a saved provider phase with the original config digest, not another prepare or batch',async()=>{
   const f=fixture(),invoke=f.deps.invoke;
   await f.run({}, {invoke:async(directory,args)=>{
@@ -215,6 +239,20 @@ test('visibility retries are finite and leave the same publication pending witho
     return invoke(directory,args);}});
   assert.equal(result.state,'attention');assert.equal(f.waits.length,8);assert.equal(f.calls.filter(a=>a[0]==='start').length,1);
   assert.equal(f.calls.filter(a=>a[0]==='review').length,1);assert.equal(f.calls.filter(a=>a[0]==='publish').length,9);assert.ok(JSON.parse(f.pointer()).pending);
+});
+test('a progressing finite native cohort is not cut off by aggregate visibility or transition counts',async()=>{
+  const f=fixture(),invoke=f.deps.invoke,owner={generation:76,epoch:1178};let delivered=0;
+  const result=await f.run({}, {inspect:async()=>({...await f.deps.inspect(),owner:{...owner}}),
+    invoke:async(directory,args)=>{
+      if(args[0]!=='publish')return invoke(directory,args);
+      f.calls.push(args);assert.equal(args[1],f.proposalSha);f.approvalPin=hash(canonicalJson(f.proposal));
+      if(delivered<17){delivered++;owner.epoch+=2;f.phase='draining';return{state:'pending',phase:f.phase,errorCode:'not_visible'};}
+      f.phase='finalized';return{state:'finalized'};
+    }});
+  assert.equal(result.state,'accepted');assert.equal(delivered,17);assert.equal(f.waits.length,17);
+  assert.equal(f.calls.filter(a=>a[0]==='publish').length,18,'all charged invocations remain recorded');
+  assert.equal(f.calls.filter(a=>a[0]==='prepare').length,1);assert.equal(f.calls.filter(a=>a[0]==='start').length,1);
+  assert.equal(f.calls.filter(a=>a[0]==='review').length,1);assert.equal(JSON.parse(f.pointer()).pending,null);
 });
 test('an accepted pending run is checked and cleared without running today\'s requested different operation',async()=>{
   const f=fixture();await assert.rejects(f.run({}, {invoke:async()=>{throw Error('lost runner');}}));

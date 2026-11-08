@@ -385,7 +385,7 @@ export function routineRecoveryPhase(cp,config,configSha256,digest){
     if(cp.phase==='phases_complete')return 'review';
   }
   if(originalWriter&&cp.phase==='phases_complete'&&HASH.test(digest??''))return 'publication';
-  if(!cp||!['freezing','publishing','attention','published','finalized'].includes(cp.phase)||!cp.pins?.approval)
+  if(!cp||!['draining','freezing','publishing','attention','published','finalized'].includes(cp.phase)||!cp.pins?.approval)
     refuse('provider_replay_forbidden');
   return 'publication';
 }

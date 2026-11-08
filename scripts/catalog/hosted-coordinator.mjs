@@ -223,9 +223,16 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     const bytes=await runtime.state.bytes(runtime.care+'/runs/'+record.runKey+'/reviewed-proposal.json');
     return validateHostedProposal({bytes,sha256:hash(bytes),runId:status.config.runId,catalogRevision:status.config.catalogRevision,approvalPin:status.approvalPin});
   };
-  let visibilityRetries=0;
-  for(let transitions=0;transitions<16;transitions++){
+  let visibilityRetries=0,transitions=0,lastProgress;
+  const observeProgress=status=>{
+    const key=JSON.stringify([status.prepared,status.started,status.phase,status.owner?.generation,status.owner?.epoch]);
+    // Bound a stalled operation, not the number of gifts in the saved cohort.
+    // Durable request charges and the original finite work remain untouched.
+    if(key!==lastProgress){lastProgress=key;visibilityRetries=0;transitions=0;}
+  };
+  while(transitions++<16){
     const status=await deps.inspect(record,directory);
+    observeProgress(status);
     if(status.phase==='finalized'){
       const accepted=await deps.accepted(record,status);if(accepted)return finish({state:'accepted',...accepted});
       // Finalized means provider/publication work is over. At most one normal
@@ -260,9 +267,10 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     if(result.state==='finalized')continue;
     if(result.reason==='awaiting_reviewed_approval')continue;
     // publication_provider_unavailable is GET-only; uncertain writes stay held.
-    if(result.state==='pending'&&['semantic_delta_pending','not_visible','publication_provider_unavailable','catalog_d1_identity_unavailable'].includes(result.errorCode)&&visibilityRetries++<8){
+    if(result.state==='pending'&&['semantic_delta_pending','not_visible','publication_provider_unavailable','catalog_d1_identity_unavailable'].includes(result.errorCode)){
       const pending=await deps.inspect(record,directory);
-      if(pending.approvalPin&&['draining','freezing','publishing'].includes(pending.phase)){await deps.wait(45000);continue;}
+      observeProgress(pending);
+      if(pending.approvalPin&&['draining','freezing','publishing'].includes(pending.phase)&&visibilityRetries++<8){await deps.wait(45000);continue;}
     }
     return{state:'attention',runKey:record.runKey,phase:result.phase??status.phase,errorCode:result.errorCode??result.reason??'catalog_hosted_run_pending',
       ...(catalogD1FailureDetail(result.diagnostic)?{diagnostic:catalogD1FailureDetail(result.diagnostic)}:{}),
