@@ -378,7 +378,7 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
     for(const [name,value]of Object.entries(sealed.files))await put(path.join(c.cwd,'build/stupid-gifts',name),value);
     for(const [name,value]of sealed.assets)await put(path.join(c.cwd,'static-site/out',name.slice(1)),value);
   };
-  const dependencies={repository:repo,fetch,resolveToken:async ref=>`TEST_ONLY_${ref.service.split('.').at(-1)}`,now:()=>clock,publication:{fetch,command,now:()=>new Date(clock)}};
+  const dependencies={repository:repo,fetch,resolveToken:async ref=>`TEST_ONLY_${ref.service.split('.').at(-1)}`,now:()=>clock,wait:async()=>{},publication:{fetch,command,now:()=>new Date(clock)}};
   const options={configPath,configSha256,workspace};
   return{sql,local,previous,packet,config,options,dependencies,mode,calls,wire,index,workspaceOptions,now:()=>clock,advance(ms){clock=new Date(Date.parse(clock)+ms).toISOString();},
     setServingPrior(){
@@ -445,6 +445,25 @@ test('acknowledged native indexing waits resume the same publication without rep
   f.mode.nativeProcessingPending=false;
   const result=await f.run('resume',approval);
   assert.equal(result.state,'finalized',JSON.stringify(weeklyCommandSummary(result)));
+  for(const [k,v]of Object.entries(paid))assert.equal(f.calls[k],v);
+  assert.equal(f.sql.prepare('SELECT attempts FROM catalog_vector_deliveries WHERE delivery_id=?').get(delivery.delivery_id).attempts,1);
+});
+
+test('acknowledged indexing waits in the same driver without rehydrating or repeating provider phases',async t=>{
+  const f=await setup(t);
+  assert.equal((await f.run('start')).reason,'awaiting_reviewed_approval');
+  const approval=await f.approve();f.mode.nativeProcessingPending=true;
+  const paid=Object.fromEntries(['getItems','search','chat','embedding'].map(k=>[k,f.calls[k]]));
+  let waits=0,delivery;
+  f.dependencies.wait=async ms=>{
+    assert.equal(ms,45000);waits++;
+    delivery=f.sql.prepare("SELECT delivery_id,attempts,mutation_reference FROM catalog_vector_deliveries WHERE status='pending'").get();
+    assert.equal(delivery.attempts,1);assert.ok(delivery.mutation_reference);
+    f.mode.nativeProcessingPending=false;
+  };
+  const result=await f.run('resume',approval);
+  assert.equal(result.state,'finalized',JSON.stringify(weeklyCommandSummary(result)));
+  assert.equal(waits,1);
   for(const [k,v]of Object.entries(paid))assert.equal(f.calls[k],v);
   assert.equal(f.sql.prepare('SELECT attempts FROM catalog_vector_deliveries WHERE delivery_id=?').get(delivery.delivery_id).attempts,1);
 });

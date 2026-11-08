@@ -11,7 +11,6 @@ import type {ApprovedCohortRevision} from '../../lib/catalog/freeze-approved-coh
 import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import {mutationAssertion} from '../../lib/catalog/mutation-fence.ts';
 import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
-import {preservedPhotoVector} from './photo-vector-reuse.ts';
 import {canonicalDescriptionEmbeddingInput,hasRepairedSemanticCopy} from '../../lib/catalog/presentation.ts';
 import {validateAutomationCohort} from '../../lib/catalog/automation-cohort.ts';
 
@@ -20,6 +19,17 @@ export type DerivedVector={id:string;values:number[];metadata:ReturnType<typeof 
 const digest=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 const hash=(value:unknown)=>sha256(canonicalJson(value));
 function refuse():never{throw Error('semantic_delta_source_mismatch');}
+/** Absence means the saved embedding describes different public copy. Keep the
+ * correct listing/keyword result; optional semantic coverage cannot block it. */
+function semanticInputBinding(product:PublicCatalogProduct,text:unknown):{inputRecipe?:'canonical-short-description-v2'}|null {
+  if(typeof text!=='string')return null;
+  if(text===canonicalDescriptionEmbeddingInput(product))return{inputRecipe:'canonical-short-description-v2'};
+  if(semanticProductInput(product,null)===text)return{};
+  const prefix=[product.punnyTitle,product.title,product.wittyDescription].filter(Boolean).join('. '),suffix=product.humorTags?.join(' ');
+  if(!text.startsWith(prefix+'. ')||suffix&&!text.endsWith('. '+suffix))return null;
+  const context=text.slice(prefix.length+2,suffix?-(suffix.length+2):undefined);
+  return context&&semanticProductInput(product,context)===text?{}:null;
+}
 function assertSource(product:PublicCatalogProduct,row:Row,state:Row,
   inventory:{productSha256:string;privateStateSha256:string}) {
   if(product.id!==row.id||product.publicId!==row.public_id||row.is_active!==1||row.duplicate_of_product_id!==null
@@ -29,7 +39,7 @@ function assertSource(product:PublicCatalogProduct,row:Row,state:Row,
 /** Reuse VERIFIED native bytes, not another embedding/model call. The complete
  * private sidecar and products row must belong to the approved inventory. */
 export async function deriveMaintenanceSearchVector(product:PublicCatalogProduct,row:Row,state:Row,
-  inventory:{productSha256:string;privateStateSha256:string},previous?:PublicCatalogProduct) {
+  inventory:{productSha256:string;privateStateSha256:string}) {
   assertSource(product,row,state,inventory);
   if(state.embedding_present!==1||typeof state.embedding_native_base64!=='string')refuse();
   const native=decodePgvectorSendBase64(state.embedding_native_base64);
@@ -39,19 +49,14 @@ export async function deriveMaintenanceSearchVector(product:PublicCatalogProduct
     ||proof.embeddingTextHash!==sha256(text)
     ||proof.vectorBytesSha256!==digest(Buffer.from(state.embedding_native_base64,'base64'))
     ||!/^objects\/[a-f0-9]{64}\.json$/.test(proof.reference))refuse();
-  if(row.embedding_text_hash!==proof.embeddingTextHash||proof.sourceFactsHash!==row.source_facts_hash)
-    preservedPhotoVector(row,state,previous,{publicId:product.publicId,sourceFactsHash:String(row.source_facts_hash),embeddingTextHash:null},String(row.catalog_revision));
+  // Supplier facts/photos are not embedding input. The inventory binds the
+  // current row/state; the verified saved text/native bytes below bind semantic
+  // reuse. Keep the ORIGINAL proof's source facts, never invent a fresh model
+  // observation or require a photo-specific exception for unchanged copy.
   // Keep the original retained context verbatim. Never relabel a vector whose
   // public semantic fields have changed independently of its captured input.
-  const prefix=[product.punnyTitle,product.title,product.wittyDescription].filter(Boolean).join('. ');
-  const suffix=product.humorTags?.join(' ');
-  let context:string|null=null;
-  const recipe=text===canonicalDescriptionEmbeddingInput(product)?'canonical-short-description-v2' as const:undefined;
-  if(!recipe&&semanticProductInput(product,null)!==text){
-    if(!text.startsWith(prefix+'. ')||suffix&&!text.endsWith('. '+suffix))refuse();
-    context=text.slice(prefix.length+2,suffix?-(suffix.length+2):undefined);
-    if(!context||semanticProductInput(product,context)!==text)refuse();
-  }
+  const binding=semanticInputBinding(product,text);if(!binding)refuse();
+  const recipe=binding.inputRecipe;
   const values=normalizeSemanticPrefix(native,DERIVED_SEARCH_PROFILE.dimensions);
   const identity={productId:product.id,publicId:product.publicId,publicFieldsSha256:hash(semanticPublicFields(product,recipe)),
     ...(recipe?{inputRecipe:recipe}:{}),
@@ -92,9 +97,8 @@ export async function prepareMaintenanceSearchDelta(db:CatalogD1,revision:Approv
     const prior=known.get(product.publicId);
     if(prior&&prior.originalNativeSha256===proof.vectorBytesSha256
       &&prior.publicFieldsSha256===hash(semanticPublicFields(product,prior.inputRecipe)))continue;
-    if(hasRepairedSemanticCopy(product)&&proof.text!==canonicalDescriptionEmbeddingInput(product))continue;
-    const projected=await deriveMaintenanceSearchVector(product,rows[0],states[0],captured,
-      revision.request.previous?.products.find(p=>p.publicId===product.publicId));
+    if(!semanticInputBinding(product,proof.text))continue;
+    const projected=await deriveMaintenanceSearchVector(product,rows[0],states[0],captured);
     if(known.get(product.publicId)?.vectorId!==projected.entry.vectorId){entries.push(projected.entry);vectors.push(projected.vector);}
   }
   return {indexName:catalog.indexName,vectors,entries};

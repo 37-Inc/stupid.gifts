@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { createCatalogD1Rest, catalogD1FailureDetail } from './d1-write-rest.ts';
 import { checkCloudflareRunner, resolveReadToken, resolveCatalogCredential, resolveCloudflareCredential, validateRunnerCheckConfig } from './check-cloudflare-runner.ts';
 import type { CloudflareCredentialReference } from './check-cloudflare-runner.ts';
@@ -268,6 +269,8 @@ export interface WeeklyDriverOptions {
   durable?:RunWorkspaceOptions['durable'];
 }
 type Dependencies={repository?:string;fetch?:typeof fetch;resolveToken?:(ref:KeychainRef)=>Promise<string>;resolveWranglerOAuth?:()=>Promise<string>;now?:()=>string;
+  /** Keep the hydrated revision in memory while an acknowledged native write becomes visible. */
+  wait?:(ms:number)=>Promise<void>;
   /** Hosted adapter mirrors new immutable objects and this accepted head before
    * the next external effect. No alternative ownership/checkpoint store. */
   checkpointSaved?:(input:{workspace:RunWorkspace;checkpoint:{sha256:string;checkpoint:WorkspaceCheckpoint}})=>Promise<void>;
@@ -694,6 +697,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           const errorCode=await pendingVectorCode(db,result);
           if(pass===3||errorCode==='mutation_unknown')
             return{state:'pending',phase:cp.phase,errorCode,budget:await ws.budget()};
+          if(errorCode==='not_visible')await (dependencies.wait??sleep)(45000);
         }
         if(n===drainLimit-1)throw new Error('weekly_outbox_bound');
       }
@@ -751,6 +755,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           const errorCode=await pendingVectorCode(db,result);
           if(pass===3||errorCode==='mutation_unknown')
             return{state:'pending',phase:cp.phase,errorCode,budget:await ws.budget()};
+          if(errorCode==='not_visible')await (dependencies.wait??sleep)(45000);
         }
       }
       const derived=config.publication.semanticSearch?.derivedCatalog;
