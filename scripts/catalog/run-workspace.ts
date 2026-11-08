@@ -123,7 +123,7 @@ type Event = {type:'artifact';ref:ArtifactRef} | {type:'checkpoint';ref:Artifact
   | {type:'reserve';reservation:BudgetReservation} | {type:'settle';id:string;settlement:BudgetSettlement};
 type RecordFile = {schemaVersion:1;sequence:number;parent:string|null;event:Event};
 type JournalHead={sequence:number;sha256:string|null};
-type State = {manifest:WorkspaceManifest;requestLimit:'enforce'|'observe';execution:ExecutionAdoption|null;recovery:RecoveryGrant|null;finish:FinishGrant|null;requestGrant:RequestGrant|null;success:PublicationSuccess|null;head:string|null;count:number;bytes:number;checkpoint:CheckpointView|null;body:ArtifactRef|null;previous:string|null;totals:BudgetTotals;
+type State = {manifest:WorkspaceManifest;requestLimit:'enforce'|'observe';execution:ExecutionAdoption|null;recovery:RecoveryGrant|null;finish:FinishGrant|null;requestGrant:RequestGrant|null;success:PublicationSuccess|null;head:string|null;count:number;checkpoint:CheckpointView|null;body:ArtifactRef|null;previous:string|null;totals:BudgetTotals;
   successor:{sha256:string;count:number;parts:string[]}|null;
   refs:Map<string,ArtifactRef>;purged:Map<string,PurgedArtifact>;bodyRegistrations:Map<string,PurgedArtifact>;
   publications:Map<string,{retention:PublicationDirectories;buildCleaned:boolean;purged:boolean;package?:{ref:ArtifactRef;sha256:string}}>;
@@ -188,7 +188,7 @@ export interface RunWorkspace {
 }
 const HASH=/^[a-f0-9]{64}$/;const KEY=/^[A-Za-z0-9._-]{1,100}$/;const REF=/^[A-Za-z0-9._:/-]{1,200}$/;
 const KINDS:Kind[]=['amazon-observation','embedding-response','phase','publication','checkpoint'];
-const MAX_JSON=512*1024, MAX_EVENTS=20_000, MAX_JOURNAL=32*1024*1024;
+const MAX_JSON=512*1024;
 const MAX_PUBLICATION_CLEANUP_ENTRIES=100_000;
 function fail(code:string):never {throw new Error(`run_workspace_${code}`);}
 const same=(a:unknown,b:unknown)=>canonicalJson(a)===canonicalJson(b);
@@ -435,7 +435,7 @@ function validateStored(value:Stored,ref:ArtifactRef,manifest:WorkspaceManifest)
   return value;
 }
 function fresh(value:Stored,now:string) {if(Date.parse(value.observedAt)>Date.parse(now)||Date.parse(value.expiresAt)<=Date.parse(now))fail('expired');}
-const empty=(manifest:WorkspaceManifest,requestLimit:'enforce'|'observe'):State=>({manifest,requestLimit,execution:null,recovery:null,finish:null,requestGrant:null,success:null,successor:null,head:null,count:0,bytes:0,checkpoint:null,body:null,previous:null,
+const empty=(manifest:WorkspaceManifest,requestLimit:'enforce'|'observe'):State=>({manifest,requestLimit,execution:null,recovery:null,finish:null,requestGrant:null,success:null,successor:null,head:null,count:0,checkpoint:null,body:null,previous:null,
   totals:{httpRequests:0,sqlStatements:0,knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:0},refs:new Map(),purged:new Map(),bodyRegistrations:new Map(),publications:new Map(),reservations:new Map()});
 function publicationSuccess(state:State,p:PublicationSuccess) {
   const cp=state.checkpoint,c=cp?.checkpoint.control?.publication,o=c?.permit?.mutationOwner;
@@ -445,7 +445,7 @@ function publicationSuccess(state:State,p:PublicationSuccess) {
     ||!hash(p.receiptSha256)||p.receiptSha256!==sha256(canonicalJson(p.receipt))||!same(p.usage,totals(state))
     ||!exact(p.journal,['sequence','sha256'])||p.journal.sequence!==state.count||p.journal.sha256!==state.head
     ||[...state.reservations.values()].some(r=>!r.settlement)
-    ||!exact(p.recoveryBounds,['count','sha256'])||!integer(p.recoveryBounds.count)||p.recoveryBounds.count>MAX_EVENTS||!hash(p.recoveryBounds.sha256))fail('publication_success');
+    ||!exact(p.recoveryBounds,['count','sha256'])||!integer(p.recoveryBounds.count)||!hash(p.recoveryBounds.sha256))fail('publication_success');
   const r=p.receipt,b=p.build,s=p.scope;
   const completedAt=Date.parse(time(r.completed_at)),observedAt=Date.parse(time(s.observed_at));
   if(c.receiptSha256!==sha256(canonicalJson({schemaVersion:1,environment:state.manifest.scope.environment,
@@ -471,7 +471,7 @@ function publicationSuccess(state:State,p:PublicationSuccess) {
 async function recoveryBoundsInventory(directory:string,state:State) {
   const root=join(directory,'publication-recovery-bounds'),inventory=[];
   try{await protectedStat(root,true);await pathWithoutLinks(root);}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return{count:0,sha256:sha256(canonicalJson([]))};throw e;}
-  const names=(await readdir(root)).sort();if(names.length>MAX_EVENTS)fail('publication_success_metadata');
+  const names=(await readdir(root)).sort();
   for(const name of names){
     if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.json$/.test(name))fail('publication_success_metadata');
     const v=await readJson(join(root,name),16*1024) as {schemaVersion:number;kind:string;recoveryBudgetSha256:string;helperSha256:string;bound:{id:string;requestSha256:string;sqlStatements:number;statementSha256s:string[];rowsReadBound:number;rowsWrittenBound:number}};
@@ -710,14 +710,12 @@ function requireRetainedPackage(state:State,checkpoint:CheckpointControl|null) {
     &&(!p.intent||p.intent.releaseId===releaseId)))fail('durable_package_missing');
 }
 async function loadState(directory:string,manifest:WorkspaceManifest,repairHead=false,requestLimit:'enforce'|'observe'='enforce'):Promise<State> {
-  const entries=await readdir(join(directory,'events'));if(entries.length>MAX_EVENTS+32)fail('entries');
-  if((await readdir(join(directory,'objects'))).length>MAX_EVENTS)fail('entries');
-  const files=entries.filter(name=>!name.startsWith('.pending-')).sort();
-  if(files.length>MAX_EVENTS)fail('entries');const state=empty(manifest,requestLimit),checkpoints:Extract<Event,{type:'checkpoint'}>[]=[];
+  const entries=await readdir(join(directory,'events'));
+  const files=entries.filter(name=>!name.startsWith('.pending-')).sort((a,b)=>parseInt(a)-parseInt(b)||a.localeCompare(b));
+  const state=empty(manifest,requestLimit),checkpoints:Extract<Event,{type:'checkpoint'}>[]=[];
   let previousHead={sequence:0,sha256:null as string|null};
   for(const filename of files){
-    if(!/^\d{6}\.[a-f0-9]{64}\.json$/.test(filename))fail('journal_name');
-    state.bytes+=(await protectedStat(join(directory,'events',filename),false)).size;if(state.bytes>MAX_JOURNAL)fail('journal_bytes');
+    if(!/^\d{6,}\.[a-f0-9]{64}\.json$/.test(filename))fail('journal_name');
     const record=await readJson(join(directory,'events',filename)) as RecordFile;
     if(record.event.type==='checkpoint')checkpoints.push(record.event);
     previousHead={sequence:state.count,sha256:state.head};
@@ -784,7 +782,7 @@ function remoteJson(object:DurableObject,max=MAX_JSON*2):unknown {
 }
 function journalHead(value:unknown):JournalHead {
   const v=value as JournalHead;
-  if(!exact(v,['sequence','sha256'])||!integer(v.sequence)||v.sequence>MAX_EVENTS
+  if(!exact(v,['sequence','sha256'])||!integer(v.sequence)
     ||(v.sequence===0?v.sha256!==null:!hash(v.sha256)))fail('durable_head');return v;
 }
 const eventName=(sequence:number,digest:string)=>`${String(sequence).padStart(6,'0')}.${digest}.json`;
@@ -831,10 +829,9 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
   }else{
     remote=await get('head.json');const head=journalHead(remoteJson(remote));
     const manifest=remoteJson(await get('manifest.json')) as WorkspaceManifest;manifestInfo(manifest,input);
-    const records:{name:string;record:RecordFile}[]=[];let digest=head.sha256,bytes=0;
+    const records:{name:string;record:RecordFile}[]=[];let digest=head.sha256;
     for(let sequence=head.sequence;sequence>0;sequence--){
-      const name=eventName(sequence,digest!),object=await cached('events/'+name);bytes+=object.bytes.length;
-      if(bytes>MAX_JOURNAL)fail('journal_bytes');
+      const name=eventName(sequence,digest!),object=await cached('events/'+name);
       const record=remoteJson(object) as RecordFile;
       if(sha256(canonicalJson(record))!==digest||record.sequence!==sequence)fail('journal_chain');
       records.push({name,record});digest=record.parent;
@@ -1009,15 +1006,14 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
     async function append(event:Event){
       event=json(event) as unknown as Event;
       if(durability&&(event.type==='checkpoint'||event.type==='control'))requireRetainedPackage(state,event.control);
-      if(state.count>=MAX_EVENTS)fail('entries');const next={schemaVersion:1 as const,sequence:state.count+1,parent:state.head,event};
+      if(!integer(state.count+1))fail('journal_sequence');const next={schemaVersion:1 as const,sequence:state.count+1,parent:state.head,event};
       // Validate the transition BEFORE publishing immutable journal bytes.
-      apply(state,event,true);const digest=sha256(canonicalJson(next)),bytes=Buffer.byteLength(canonicalJson(next))+1;
-      if(state.bytes+bytes>MAX_JOURNAL)fail('journal_bytes');
+      apply(state,event,true);const digest=sha256(canonicalJson(next));
       try{await immutable(join(directory,'events',`${String(next.sequence).padStart(6,'0')}.${digest}.json`),next);
         await durability?.commit(next);
         await replaceHead(directory,{sequence:state.count,sha256:state.head},{sequence:next.sequence,sha256:digest});
       }catch(error){poisoned=true;poisonCause??=error;throw error;}
-      apply(state,event);state.count=next.sequence;state.head=digest;state.bytes+=bytes;
+      apply(state,event);state.count=next.sequence;state.head=digest;
     }
     async function catalogSuccessor(){
       const saved=state.successor;if(!saved)return null;if(saved.parts.length!==saved.count)fail('catalog_successor_incomplete');

@@ -73,6 +73,26 @@ test('lost remote CAS ACK is reconciled by exact readback',async t=>{
   assert.equal(f.calls.filter(([method])=>method==='cas').length,2); // initial head + reservation, no redispatch
 });
 
+test('a long recovery preserves all charges and appends beyond the former journal count limit',async t=>{
+  const f=await fixture(t),first=await f.open({requestLimit:'observe'});await first.close();
+  let sequence=0,parent=null;
+  const seed=event=>{const record={schemaVersion:1,sequence:++sequence,parent,event};parent=sha256(canonicalJson(record));
+    f.objects.set(`runs/test-run/events/${String(sequence).padStart(6,'0')}.${parent}.json`,{bytes:encode(record),etag:`"seed-${sequence}"`});};
+  for(let i=0;i<10_001;i++){
+    seed({type:'reserve',reservation:{id:`saved-${i}`,requestSha256:HASH,units:{httpRequests:1,sqlStatements:1}}});
+    seed({type:'settle',id:`saved-${i}`,settlement:i===0?{status:'unknown',usage:null}:{status:'known',usage:{rowsRead:1,rowsWritten:0}}});
+  }
+  f.objects.set('runs/test-run/head.json',{bytes:encode({sequence,sha256:parent}),etag:'"saved-head"'});
+  const originalHead=Buffer.from(f.objects.get('runs/test-run/head.json').bytes);
+  const resumed=await f.open({directory:join(f.parent,'runner-two'),mode:'resume',requestLimit:'observe'});
+  assert.deepEqual(await resumed.budget(),{httpRequests:10_001,sqlStatements:10_001,knownRowsRead:10_000,knownRowsWritten:0,unconfirmedRequests:1});
+  assert.deepEqual(Buffer.from(f.objects.get('runs/test-run/head.json').bytes),originalHead);
+  await resumed.reserveBudget({...reservation,id:'same-run-continuation'});
+  assert.equal(JSON.parse(Buffer.from(f.objects.get('runs/test-run/head.json').bytes)).sequence,20_003);
+  assert.equal((await resumed.budget()).unconfirmedRequests,2);
+  assert.equal(f.objects.size,20_005); // manifest, head, every old event and the new event; nothing pruned.
+});
+
 test('same-runner resume reuses hash-verified immutable bytes but still checks the remote head and manifest',async t=>{
   const f=await fixture(t),w=await f.open();await w.putArtifact({fixture:'cached'},{kind:'phase',observedAt:NOW});
   await w.writeCheckpoint(null,cp());await w.reserveBudget(reservation);await w.close();f.calls.length=0;
