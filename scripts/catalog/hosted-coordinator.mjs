@@ -73,8 +73,13 @@ function parsedOutput(stdout){
  * bodies or raw output (which may contain credentials). */
 export function hostedOperatorFailure(error){
   const codes=String(error.stderr??'').split('\n').map(line=>line.trim());
-  if(codes.includes('semantic_delta_pending'))return{state:'pending',errorCode:'semantic_delta_pending'};
-  const code=codes.findLast(value=>/^(?:routine|run_workspace|catalog_[a-z0-9]+|publication|weekly|vector_[a-z0-9]+|cohort|prune|owned_[a-z0-9]+|search_[a-z0-9]+)_[a-z0-9_]{1,100}$/.test(value));
+  // The maintained operator emits a typed, already-redacted record. Do not
+  // maintain a second namespace allowlist which hides newly introduced errors.
+  let tagged;for(const line of codes)try{const value=JSON.parse(line);
+    if(exact(value,'state,errorCode')&&value.state==='operator_error'&&/^[a-z][a-z0-9_]{0,149}$/.test(value.errorCode))tagged=value.errorCode;
+  }catch{/* Never echo unstructured child output. */}
+  const code=tagged??codes.findLast(value=>/^(?:routine|run_workspace|catalog_[a-z0-9]+|publication|weekly|vector_[a-z0-9]+|cohort|prune|owned_[a-z0-9]+|search_[a-z0-9]+|semantic_delta|permanent)_[a-z0-9_]{1,100}$/.test(value));
+  if(code==='semantic_delta_pending')return{state:'pending',errorCode:code};
   if(code==='catalog_d1_identity_unavailable')return{state:'pending',errorCode:code}; // Initial GET only, before SQL dispatch.
   const causeCode=code==='run_workspace_journal_uncertain'?codes.findLast(value=>/^catalog_object_store_[a-z_]{1,80}$/.test(value)):null;
   return{state:'attention',errorCode:code??(error.killed?'catalog_hosted_operator_timeout':'catalog_hosted_operator_failed'),...(causeCode?{causeCode}:{})};

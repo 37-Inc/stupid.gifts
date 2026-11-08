@@ -32,7 +32,7 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run test:catalog-automation
       - run: node --import tsx --test tests/catalog-semantic-delta.test.mjs tests/catalog-photo-vector-reuse.test.mjs
-      - run: node --import tsx --test --test-name-pattern="acknowledged indexing waits in the same driver" tests/catalog-cloudflare-weekly.test.mjs
+      - run: node --import tsx --test --test-name-pattern="acknowledged indexing waits in the same driver|prepared freezing revision reuses" tests/catalog-cloudflare-weekly.test.mjs
       - run: node --import tsx --test tests/catalog-d1-write-rest.test.mjs tests/catalog-maintenance-d1.test.mjs tests/catalog-daily-operator.test.mjs
       - run: node --import tsx --test --test-name-pattern="routine activated permanent|routine metadata completion|routine permanent completion|routine completion finishes|routine permanent successor" tests/catalog-run-workspace.test.mjs tests/catalog-permanent-freeze.test.mjs tests/catalog-activated-permanent-settlement.test.mjs
       - run: node --import tsx --test --test-name-pattern="routine background publication|background activation requires" tests/catalog-publish-release.test.mjs
