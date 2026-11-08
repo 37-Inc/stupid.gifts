@@ -66,9 +66,24 @@ test('photo-only fact refresh reuses the original serving identity and observati
   x.row.public_display_json=JSON.stringify({...x.product,imageUrl:'https://example.invalid/fresh-photo.jpg',
     eligibleUntil:'2026-11-05T00:00:00.000Z',persistent:x.product});
   x.inventory={productSha256:hash(x.row),privateStateSha256:hash(x.state)};
-  await assert.rejects(deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory));
-  const before=structuredClone(x),current=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory,x.product);
+  const before=structuredClone(x),current=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory);
   assert.deepEqual(current,original);assert.deepEqual(x,before);
+});
+test('supplier-only changes reuse verified semantic input without requiring a finite-photo overlay or a new observation',async()=>{
+  for(const keepBinding of [false,true]){
+    const x=await fixture(),original=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory);
+    if(!keepBinding)x.row.embedding_text_hash=null;
+    x.row.source_facts_hash='c'.repeat(64);
+    const semantic=JSON.parse(x.state.semantic_json);semantic.sourceFactsHash=x.row.source_facts_hash;
+    x.state.semantic_json=JSON.stringify(semantic);
+    x.inventory={productSha256:hash(x.row),privateStateSha256:hash(x.state)};
+    const before=structuredClone(x),current=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory);
+    assert.deepEqual(current,original);assert.deepEqual(x,before);
+    assert.notEqual(current.entry.sourceFactsHash,x.row.source_facts_hash);
+    semantic.title='Different semantic input';x.state.semantic_json=JSON.stringify(semantic);
+    x.inventory.privateStateSha256=hash(x.state);
+    await assert.rejects(deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory),/source_mismatch/);
+  }
 });
 test('delta visits only reviewed public changes, skipping unchanged seed entries and excluded products',async()=>{
   const x=await fixture(),calls=[],catalog=structuredClone(x.f.catalog);
@@ -78,6 +93,17 @@ test('delta visits only reviewed public changes, skipping unchanged seed entries
     request:{approval:{changes:x.f.snapshot.products.map(p=>({publicId:p.publicId})).concat([{publicId:'excluded'}])}}};
   const result=await prepareMaintenanceSearchDelta(db,revision,catalog);
   assert.equal(result.vectors.length,1);assert.deepEqual(calls,[x.product.id,x.product.id]);
+});
+test('legacy embedding for different public copy is optional coverage, not a catalog publication gate',async()=>{
+  const x=await fixture(),catalog=structuredClone(x.f.catalog);
+  catalog.entries=catalog.entries.filter(e=>e.publicId!==x.product.publicId);
+  const product={...x.product,title:'Correct current title'};
+  const db={prepare(sql){return{bind(){return{async all(){return{results:[sql.includes('maintenance_products')?x.state:x.row]};}};}};}};
+  const revision={snapshot:{...x.f.snapshot,products:[product]},persistent:{inventory:[{publicId:product.publicId,...x.inventory}]},
+    request:{approval:{changes:[{publicId:product.publicId}]}}};
+  assert.deepEqual(await prepareMaintenanceSearchDelta(db,revision,catalog),{indexName:catalog.indexName,vectors:[],entries:[]});
+  x.state.version++;
+  await assert.rejects(prepareMaintenanceSearchDelta(db,revision,catalog),/source_mismatch/);
 });
 test('authenticated legacy products without saved embeddings stay public and keyword-searchable',async()=>{
   for(const present of [null,0]){

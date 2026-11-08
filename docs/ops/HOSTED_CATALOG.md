@@ -51,6 +51,16 @@ alternate daily commands; use the maintained same-run recovery path below.
   Failure telemetry retains safe transport code, dispatch state, statement/byte
   counts, HTTP/provider codes and phase/product IDs, never SQL/values/credentials.
   The same sanitized record is saved in the existing phase journal and job output.
+- An acknowledged native write waits up to three 45-second intervals in the same
+  hydrated driver before returning visibility-pending. It never resends the write
+  or repeats supplier/model work. Unacknowledged writes remain uncertain.
+- Secondary semantic projection binds the exact current inventory and verified
+  saved embedding text/bytes, not a supplier-fact equality or photo-only exception.
+  Availability/photo changes alone do not change semantic input. Original model
+  provenance stays original; changed copy, corrupt bytes or unverified input still
+  cannot be relabeled as current semantic coverage.
+  A legacy vector describing different public copy is omitted from new secondary
+  coverage, not used to block the correct listing and working keyword fallback.
 - Review preserves a legacy `sourceFactsHash: null` as unknown, not invalid or a
   reason to generate substitute facts. The exact proposal still binds every
   current product/display row. Identity, short copy, image and affiliate checks
