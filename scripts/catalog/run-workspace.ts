@@ -622,7 +622,7 @@ function validateControlTransition(old:CheckpointControl,next:CheckpointControl,
   if(!same(old.pins,next.pins)||!same(old.phaseComplete,next.phaseComplete)
     ||!old.control?.publication||!next.control?.publication)fail('control_reconciliation');
   const prior=old.control.publication,current=next.control.publication;
-  if((state.recovery?.scope==='approved-permanent-finalization'||state.finish)&&prior.stage==='published'
+  if((state.requestLimit==='observe'||state.recovery?.scope==='approved-permanent-finalization'||state.finish)&&prior.stage==='published'
     &&same(prior,current)&&hash(prior.receiptSha256)&&['published','finalized'].includes(next.phase)){
     recoveryPermit({...state,checkpoint:{sha256:state.checkpoint!.sha256,checkpoint:next}},true,true);
     const a=prior.permit!.mutationOwner!,before=old.owner,after=next.owner;
