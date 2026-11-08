@@ -34,6 +34,16 @@ Codex timer, activate daily discovery, or authorize two production writers.
   genuine D1 receipt/build and owner; do not rebuild, upload or activate again.
   Finish first, then run the registered source-bound cleanup. A finalized retry
   uses its accepted successor without reopening expired phase bodies.
+- Routine completion uses the same automation authority and permanent-display
+  rule as normal publishing: finite overlays may retain their original clocks
+  above cleared permanent fallbacks. Never treat a photo deadline as catalog
+  expiry or renew it during receipt completion. The exact original snapshot,
+  source, native proof, version and owner still have to match.
+- Cold restoration lists only this run's immutable journal objects and downloads
+  them with sixteen concurrent reads, then verifies the original anchored hash
+  chain before using any state. Listing is an accelerator, not authority; no
+  records, counters or original bytes are changed. Warm local caches still
+  verify against the remote head. Numeric restore progress appears in job logs.
 - Restored R2 bytes are a hash-verified local cache, not a second durable copy.
   Avoid per-record disk flushes during restore; original remote ACKs and all new
   reservations/appends retain their durable-before-dispatch ordering.

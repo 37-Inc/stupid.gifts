@@ -5,6 +5,7 @@ import {setTimeout as wait} from 'node:timers/promises';
 export interface DurableObject {bytes:Uint8Array;etag:string}
 export interface CatalogObjectStore {
   get(key:string):Promise<DurableObject|null>;
+  listJournal?(runId:string):Promise<string[]>;
   putImmutable(key:string,bytes:Uint8Array):Promise<DurableObject>;
   compareAndSwap(key:string,expectedEtag:string|null,bytes:Uint8Array):Promise<DurableObject>;
   remove(key:string,expectedEtag:string):Promise<void>;
@@ -16,7 +17,7 @@ const mutableKey=(key:string)=>/^runs\/[a-zA-Z0-9._-]+\/head\.json$/.test(key)
   ||/^pointers\/(?:last-success|pending-run|operator-inputs)\.json$/.test(key);
 const fail=(code:string):never=>{throw Error('catalog_object_store_'+code);};
 
-/** One private bucket/prefix; no list/create-bucket, public URL or credential
+/** One private bucket/prefix; only scoped run-journal listing, no create-bucket, public URL or credential
  * discovery. Conditional writes are atomic in R2. SDK transport retries are
  * disabled; transient GETs have bounded retries. An uncertain write is
  * reconciled against exact bytes before ACK. A transient write retries only
@@ -37,8 +38,7 @@ export function createCatalogR2Store(options:{accountId:string;bucket:string;pre
       ||key.split('/').some(part=>!part||part==='.'||part==='..'||part==='locks'))fail('key');
     return `https://${accountId}.r2.cloudflarestorage.com/${bucket}/${prefix}/${key}`;
   };
-  async function request(key:string,method:string,headers:Record<string,string>={},body?:Uint8Array){
-    const target=url(key);
+  async function request(target:string,method:string,headers:Record<string,string>={},body?:Uint8Array){
     if(body&&body.byteLength>MAX_BYTES)fail('body_bound');
     try{
       const signed=await client.sign(new Request(target,{method,headers,...(body?{body:new Uint8Array(body)}:{})}));
@@ -48,22 +48,25 @@ export function createCatalogR2Store(options:{accountId:string;bucket:string;pre
     }
     catch{return fail('unavailable');}
   }
-  async function object(response:Response):Promise<DurableObject>{
-    const etag=response.headers.get('etag')??'',digest=response.headers.get('x-amz-meta-sha256')??'';
-    if(!validEtag(etag)||!/^[a-f0-9]{64}$/.test(digest))fail('metadata');
+  async function responseBytes(response:Response){
     const reader=response.body?.getReader(),parts:Uint8Array[]=[];let size=0;
     try{if(reader)for(;;){const part=await reader.read();if(part.done)break;
       size+=part.value.byteLength;if(size>MAX_BYTES)fail('body_bound');parts.push(part.value);}}
     catch(error){void reader?.cancel().catch(()=>{});if(error instanceof Error&&error.message==='catalog_object_store_body_bound')throw error;return fail('unavailable');}
     finally{reader?.releaseLock();}
-    const bytes=Buffer.concat(parts);
+    return Buffer.concat(parts);
+  }
+  async function object(response:Response):Promise<DurableObject>{
+    const etag=response.headers.get('etag')??'',digest=response.headers.get('x-amz-meta-sha256')??'';
+    if(!validEtag(etag)||!/^[a-f0-9]{64}$/.test(digest))fail('metadata');
+    const bytes=await responseBytes(response);
     if(hash(bytes)!==digest)fail('digest');return{bytes:new Uint8Array(bytes),etag};
   }
-  async function get(key:string){
+  async function read<T>(target:string,decode:(response:Response)=>Promise<T>){
     for(let attempt=0;;attempt++){
       let delay=100*2**attempt;
       try{
-        const response=await request(key,'GET');
+        const response=await request(target,'GET');
         if(response.status===404){await response.body?.cancel();return null;}
         if(response.status===429||response.status>=500){
           const header=response.headers.get('retry-after'),retry=header===null?NaN:/^\d+$/.test(header)?Number(header)*1000:Date.parse(header)-Date.now();
@@ -71,17 +74,37 @@ export function createCatalogR2Store(options:{accountId:string;bucket:string;pre
           if(delay>30000)fail('read_throttled');fail('unavailable');
         }
         if(response.status!==200){await response.body?.cancel();return fail('read_refused');}
-        return await object(response);
+        return await decode(response);
       }catch(error){if(attempt===2||!(error instanceof Error)||error.message!=='catalog_object_store_unavailable')throw error;}
       await wait(delay);
     }
+  }
+  const get=async(key:string)=>read(url(key),object);
+  async function listJournal(runId:string){
+    if(!/^[a-zA-Z0-9._-]{1,100}$/.test(runId))fail('key');
+    const root=`${prefix}/runs/${runId}/`,wanted=root+'events/',keys:string[]=[],seen=new Set<string>();let token='';
+    const xmlText=(value:string)=>value.replace(/&(amp|lt|gt|quot|apos);/g,(_,entity:string)=>({amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"}[entity]!));
+    do{
+      const target=new URL(`https://${accountId}.r2.cloudflarestorage.com/${bucket}`);
+      target.search=new URLSearchParams({'list-type':'2',prefix:wanted,'max-keys':'1000','encoding-type':'url',...(token?{'continuation-token':token}:{})}).toString();
+      const xml=await read(target.href,async response=>(await responseBytes(response)).toString('utf8'));
+      if(xml===null)return fail('list_response');
+      if(!/<ListBucketResult\b/.test(xml)||!/<\/ListBucketResult>\s*$/.test(xml))fail('list_response');
+      for(const match of xml.matchAll(/<Key>([^<]*)<\/Key>/g)){
+        const key=decodeURIComponent(xmlText(match[1]));if(!key.startsWith(wanted))fail('list_scope');keys.push(key.slice(root.length));
+      }
+      const truncated=xml.match(/<IsTruncated>(true|false)<\/IsTruncated>/)?.[1];
+      if(!truncated)fail('list_response');token=truncated==='true'?xmlText(xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/)?.[1]??''):'';
+      if(truncated==='true'&&(!token||seen.has(token)))fail('list_response');if(token)seen.add(token);
+    }while(token);
+    return keys;
   }
   async function write(key:string,expectedEtag:string|null,body:Uint8Array){
     if(!(body instanceof Uint8Array)||body.byteLength>MAX_BYTES||expectedEtag!==null&&!validEtag(expectedEtag))fail('configuration');
     const bytes=new Uint8Array(body),digest=hash(bytes),md5=createHash('md5').update(bytes).digest();
     for(let attempt=0;;attempt++){
       let status:number|undefined,delay=100*2**attempt;
-      try{const response=await request(key,'PUT',{'Content-Type':'application/octet-stream','x-amz-meta-sha256':digest,'Content-MD5':md5.toString('base64'),
+      try{const response=await request(url(key),'PUT',{'Content-Type':'application/octet-stream','x-amz-meta-sha256':digest,'Content-MD5':md5.toString('base64'),
       ...(expectedEtag===null?{'If-None-Match':'*'}:{'If-Match':expectedEtag})},bytes);
       status=response.status;const etag=response.headers.get('etag'),header=response.headers.get('retry-after'),
         retry=header===null?NaN:/^\d+$/.test(header)?Number(header)*1000:Date.parse(header)-Date.now();
@@ -106,7 +129,7 @@ export function createCatalogR2Store(options:{accountId:string;bucket:string;pre
       await wait(delay);
     }
   }
-  return Object.freeze({get,putImmutable:(key:string,bytes:Uint8Array)=>write(key,null,bytes),
+  return Object.freeze({get,listJournal,putImmutable:(key:string,bytes:Uint8Array)=>write(key,null,bytes),
     compareAndSwap:async(key:string,expectedEtag:string|null,bytes:Uint8Array)=>{
       if(!mutableKey(key))fail('immutable_key');return write(key,expectedEtag,bytes);
     },
@@ -119,7 +142,7 @@ export function createCatalogR2Store(options:{accountId:string;bucket:string;pre
       const before=await get(key);if(before===null)return;
       if(before.etag!==expectedEtag)fail('conflict');
       let status:number|undefined;
-      try{const response=await request(key,'DELETE');status=response.status;await response.body?.cancel();}catch{/* reconcile */}
+      try{const response=await request(url(key),'DELETE');status=response.status;await response.body?.cancel();}catch{/* reconcile */}
       const actual=await get(key);if(actual===null)return;
       if(status!==undefined&&status>=400)fail('delete_refused');return fail('delete_unknown');
     }});

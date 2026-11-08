@@ -67,6 +67,25 @@ test('journal ACK precedes dispatch; fresh runner restores original bodies, owne
   assert.ok(bodyIndex>=0&&f.calls.slice(bodyIndex+1).some(([method,key])=>method==='cas'&&key.endsWith('/head.json')));
 });
 
+test('cold journal reads are parallel but original hash chain, charges and write ordering stay authoritative',async t=>{
+  const f=await fixture(t),w=await f.open({requestLimit:'observe'});
+  for(let i=0;i<24;i++)await w.reserveBudget({...reservation,id:'original-'+i});await w.close();
+  const head=Buffer.from(f.objects.get('runs/test-run/head.json').bytes),get=f.store.get;
+  let active=0,peak=0;
+  f.store.listJournal=async()=>[...f.objects.keys()].filter(k=>k.startsWith('runs/test-run/events/')).map(k=>k.slice('runs/test-run/'.length)).reverse();
+  f.store.get=async key=>{if(!key.includes('/events/'))return get(key);active++;peak=Math.max(peak,active);
+    try{await new Promise(resolve=>setTimeout(resolve,2));return await get(key);}finally{active--;}};
+  f.calls.length=0;const restored=await f.open({directory:join(f.parent,'parallel-runner'),mode:'resume',requestLimit:'observe'});
+  assert.ok(peak>1&&peak<=16);assert.equal((await restored.budget()).unconfirmedRequests,24);
+  assert.deepEqual(Buffer.from(f.objects.get('runs/test-run/head.json').bytes),head);
+  assert.ok(f.calls.every(([method])=>method==='get'));await restored.reserveBudget({...reservation,id:'continuation'});
+  assert.equal(JSON.parse(Buffer.from(f.objects.get('runs/test-run/head.json').bytes)).sequence,25);
+  await restored.close();
+  const event=[...f.objects.keys()].find(k=>k.includes('/events/000001.'));
+  f.objects.get(event).bytes=encode({corrupt:true});
+  await assert.rejects(f.open({directory:join(f.parent,'corrupt-parallel-runner'),mode:'resume',requestLimit:'observe'}),/journal_chain/);
+});
+
 test('lost remote CAS ACK is reconciled by exact readback',async t=>{
   const f=await fixture(t),w=await f.open();f.setFault('after');await w.reserveBudget(reservation);
   assert.equal((await w.budget()).unconfirmedRequests,1);
