@@ -7,6 +7,11 @@ run a local publisher while hosted care or a saved hosted publication is active.
 
 ## One application, one publisher
 
+The completed October24–25 editorial recovery/upload/finish CLIs and held-preview
+entrypoint are retired from maintained main. Their exact code remains in Git and
+the original frozen operators alongside the private receipts. They are not
+alternate daily commands; use the maintained same-run recovery path below.
+
 - `catalog:care` remains the maintained local/hosted operator. `code-only` is its
   owner-invoked serving-only route; it preserves the genuine catalog receipt and
   accepted catalog pointer. See [CODE_ONLY_PUBLICATION.md](CODE_ONLY_PUBLICATION.md).
