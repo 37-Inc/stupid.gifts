@@ -802,7 +802,7 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
     const actual=await store.putImmutable(prefix+name,bytes);
     if(!Buffer.from(actual.bytes).equals(Buffer.from(bytes)))fail('durable_readback');
   };
-  let remote:DurableObject,registrations=new Map<string,PurgedArtifact>();
+  let remote:DurableObject,restoredState:State|undefined,registrations=new Map<string,PurgedArtifact>();
   async function cas(expected:string|null,next:JournalHead):Promise<DurableObject>{
     const bytes=encoded(next);let actual:DurableObject;
     try{actual=await store.compareAndSwap(headKey,expected,bytes);}
@@ -879,8 +879,9 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
     }
     const current=await get('head.json');
     if(!Buffer.from(current.bytes).equals(remote.bytes)||current.etag!==remote.etag)fail('durable_head_changed');
+    restoredState=loaded;
   }
-  return{commit,async purge(artifact:PurgedArtifact){
+  return{restoredState,commit,async purge(artifact:PurgedArtifact){
     const object=await store.get(prefix+artifact.ref.reference);if(!object)return;
     const body=remoteJson(object) as Stored;validateStored(body,artifact.ref,(await readManifest(directory,input)).manifest);
     if(sha256(canonicalJson(body))!==artifact.storedSha256||Date.parse(body.expiresAt)>Date.parse(time((input.now||(()=>new Date().toISOString()))())))fail('purge_body');
@@ -977,7 +978,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
     const info=await readManifest(directory,input);const manifest=JSON.parse(canonicalJson(info.manifest)) as WorkspaceManifest;
     // Runtime freeze prevents accidental caller scope/policy mutation.
     const freeze=(v:unknown):void=>{if(v&&typeof v==='object'){Object.values(v).forEach(freeze);Object.freeze(v);}};freeze(manifest);
-    const state=await loadState(directory,manifest,true,input.requestLimit);let closed=false,poisoned=false,poisonCause:unknown;let queue:Promise<unknown>=Promise.resolve();
+    const state=durability?.restoredState??await loadState(directory,manifest,true,input.requestLimit);let closed=false,poisoned=false,poisonCause:unknown;let queue:Promise<unknown>=Promise.resolve();
     if(durability)requireRetainedPackage(state,state.checkpoint?.checkpoint??null);
     await verifyExecutionMetadata(directory,state,repository);
     if(state.execution)await acquireExecutionRoot(state.execution);
