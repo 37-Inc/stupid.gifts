@@ -28,6 +28,9 @@ Codex timer, activate daily discovery, or authorize two production writers.
   parent hash, source, owner and atomic head transition is still verified.
   Accounting errors retain safe workspace codes rather than describing every
   storage failure as an exhausted provider budget.
+- Restored R2 bytes are a hash-verified local cache, not a second durable copy.
+  Avoid per-record disk flushes during restore; original remote ACKs and all new
+  reservations/appends retain their durable-before-dispatch ordering.
 - Routine background publishing keeps its original build token and attempt
   history under the unchanged, non-expiring mutation-owner fence. Saving a large
   package does not require another timed build claim. The original source cutoff,

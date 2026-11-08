@@ -391,17 +391,17 @@ async function readJson(path:string,max?:number):Promise<unknown> {
  * An interrupted link/unlink may leave nlink=2: reopening refuses it, never guesses
  * success or repairs a lock/archive automatically. Private same-UID tampering is
  * detected where possible, not a replacement for OS account isolation. */
-async function immutable(path:string,value:unknown) {
-  return immutableBytes(path,encoded(value));
+async function immutable(path:string,value:unknown,sync=true) {
+  return immutableBytes(path,encoded(value),MAX_JSON*2,sync);
 }
-async function immutableBytes(path:string,bytes:Buffer,max=MAX_JSON*2) {
+async function immutableBytes(path:string,bytes:Buffer,max=MAX_JSON*2,sync=true) {
   if(bytes.length>max)fail('bytes');
   try{if(!(await readBytes(path,max)).equals(bytes))fail('immutable_conflict');return;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
   const temp=join(dirname(path),`.pending-${randomUUID()}`);const fd=await open(temp,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
-  try{await fd.writeFile(bytes);await fd.sync();}finally{await fd.close();}
+  try{await fd.writeFile(bytes);if(sync)await fd.sync();}finally{await fd.close();}
   if(!(await readBytes(temp,max)).equals(bytes))fail('write_readback');
   try{await link(temp,path);}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}
-  await syncDirectory(dirname(path));await unlink(temp);await syncDirectory(dirname(path));
+  if(sync)await syncDirectory(dirname(path));await unlink(temp);if(sync)await syncDirectory(dirname(path));
   if(!(await readBytes(path,max)).equals(bytes))fail('write_readback');
 }
 async function replaceHead(directory:string,expected:{sequence:number;sha256:string|null},next:{sequence:number;sha256:string|null}) {
@@ -841,15 +841,16 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
     for(const {name,record}of records.reverse())applyRecord(state,record,name);
     registrations=state.bodyRegistrations;
     if(state.head!==head.sha256||state.count!==head.sequence)fail('journal_chain');
-    // Fresh files only. Never restore local inode identities, .pending files,
-    // source outputs or locks; D1 checkpoint ownership remains byte-identical.
-    await immutable(join(directory,'manifest.json'),manifest);
-    for(const {name,record}of records)await immutable(join(directory,'events',name),record);
+    // These bytes are already durable in R2. The local copy is a verified cache,
+    // not another authority requiring a disk flush for every restored record.
+    // New append/dispatch ACKs still use the fully synced default writer.
+    await immutable(join(directory,'manifest.json'),manifest,false);
+    for(const {name,record}of records)await immutable(join(directory,'events',name),record,false);
     for(const ref of state.refs.values())if(!state.purged.has(ref.sha256)){
       const registration=state.bodyRegistrations.get(ref.sha256);
       const body=remoteJson(await (registration?cached(ref.reference):get(ref.reference))) as Stored;validateStored(body,ref,manifest);boundPublicationBody(body,state);
       if(registration&&registration.storedSha256!==sha256(canonicalJson(body)))fail('body_registration');
-      await immutable(join(directory,ref.reference),body);
+      await immutable(join(directory,ref.reference),body,false);
     }
     // A crash may land between original-expiry registration, object upload and
     // the referencing head. Only these NOT activated bodies may be absent.
@@ -857,12 +858,12 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
       const object=await store.get(prefix+registration.ref.reference);if(!object)continue;
       const body=remoteJson(object) as Stored;validateStored(body,registration.ref,manifest);boundPublicationBody(body,state);
       if(registration.storedSha256!==sha256(canonicalJson(body)))fail('body_registration');
-      await immutable(join(directory,registration.ref.reference),body);
+      await immutable(join(directory,registration.ref.reference),body,false);
     }
     let local:JournalHead;
     try{local=journalHead(await readJson(join(directory,'head.json')));}
     catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
-      await immutable(join(directory,'head.json'),head);local=head;}
+      await immutable(join(directory,'head.json'),head,false);local=head;}
     if(local.sequence<=head.sequence){
       const expected=local.sequence===0?null:sha256(canonicalJson(records[local.sequence-1].record));
       if(local.sha256!==expected)fail('durable_local_fork');
