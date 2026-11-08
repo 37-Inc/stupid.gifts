@@ -86,7 +86,7 @@ print(json.dumps(report))`;
 // Shared authentic installer/native predecessor, also used by the whole runner.
 // The real executor starts from its accepted receipt and exact activating claim.
 // All D1 SQL/native bytes are real fixture data; only external HTTP is simulated.
-async function resolveThroughExecutor(t,f,db,revision,build,publication,permit,plan,intent,expected='published'){
+async function resolveThroughExecutor(t,f,db,revision,build,publication,permit,plan,intent,expected='published',routine=false){
   const approved=Boolean(revision.persistent);
   const sourceRoot=await realpath(fileURLToPath(new URL('..',import.meta.url))),version=permit.versionReference;
   const config={schemaVersion:1,...scope,accountId,workerName:'permanent-fixture',database:{id:databaseId,name:'permanent-freeze'},
@@ -95,8 +95,10 @@ async function resolveThroughExecutor(t,f,db,revision,build,publication,permit,p
     prior:{directory:null,manifestSha256:JSON.parse(revision.priorRow.manifest_json).manifestSha256,
       releaseId:revision.request.context.priorPublication.releaseId,versionReference:uuid(8000)}};
   const control={schemaVersion:1,configSha256:sha256(canonicalJson(config)),requestId:build.requestId,runReference:build.runReference,
-    stage:'activating',build,publication,intent,permit,vectorPlan:plan,packageSha256:'a'.repeat(64),
-    uploadMarker:'fixture-upload',versionReference:version,deploymentMarker:'fixture-deployment',deploymentId:uuid(8002)};
+    stage:routine==='receipt'?'published':'activating',build,publication,intent,permit,vectorPlan:plan,packageSha256:'a'.repeat(64),
+    uploadMarker:'fixture-upload',versionReference:version,deploymentMarker:'fixture-deployment',deploymentId:f.unknownDeployment?null:uuid(8002)};
+  if(routine==='receipt')control.receiptSha256=sha256(canonicalJson({schemaVersion:1,environment:config.environment,
+    accountId,workerName:config.workerName,releaseId:intent.releaseId,versionReference:version,requestId:build.requestId,intent}));
   let checkpoint={sha256:'0'.repeat(64),checkpoint:{phase:'attention',owner:permit.mutationOwner,pins:{},control:{publication:control}}};
   const workspace={directory:sourceRoot,repository:sourceRoot,manifest:{codeSha:config.codeSha},async assertHeld(){},
     assertScope(actual){assert.deepEqual(actual,{accountId,...scope,databaseId,databaseName:'permanent-freeze',workerName:config.workerName});},
@@ -111,24 +113,56 @@ async function resolveThroughExecutor(t,f,db,revision,build,publication,permit,p
   const response=result=>Response.json({success:true,result});
   const send=async(input,init={})=>{const url=new URL(input);assert.notEqual(init.method,'PUT');
     if(url.origin===config.identityOrigin)return Response.json({release_id:intent.releaseId,code_sha:intent.codeSha,
-      catalog_revision:intent.catalogRevision,catalog_snapshot_sha256:intent.catalogSnapshotSha256,manifest_sha256:intent.manifestSha256});
+      catalog_revision:intent.catalogRevision,catalog_snapshot_sha256:intent.catalogSnapshotSha256,manifest_sha256:f.badIdentity?'0'.repeat(64):intent.manifestSha256});
     assert.equal(url.origin,'https://api.cloudflare.com');
     if(url.pathname.endsWith(`/d1/database/${databaseId}`))return response({uuid:databaseId,name:'permanent-freeze',read_replication:{mode:'disabled'}});
     if(url.pathname.endsWith(`/indexes/${scope.indexName}`))return response({name:scope.indexName,config:{dimensions:1536,metric:'cosine'}});
+    if(routine&&url.pathname.endsWith('/versions/'+version))return response({id:version,
+      annotations:{'workers/tag':control.uploadMarker,'workers/message':'package:'+control.packageSha256},
+      resources:{script_runtime:{compatibility_date:config.compatibilityDate},bindings:[
+        {name:'DB',type:'d1',id:f.badVersion?'wrong-database':databaseId},{name:'VECTORIZE',type:'vectorize',index_name:scope.indexName},
+        {name:'ASSETS',type:'assets'},{name:'ENVIRONMENT',type:'plain_text',text:config.environment},
+        {name:'SEMANTIC_SEARCH_ENABLED',type:'plain_text',text:'false'},
+        ...(config.environment==='staging'?[{name:'STAGING_AUTH_SECRET',type:'secret_text'}]:[])]}});
     if(url.pathname.endsWith('/deployments')){assert.equal(init.method,'GET');return response({deployments:[{id:uuid(8002),versions:[{version_id:version,percentage:100}],annotations:{'workers/message':control.deploymentMarker}}]});}
-    assert.ok(url.pathname.endsWith('/get_by_ids'));assert.equal(timed,true);nativeReads++;
+    assert.ok(url.pathname.endsWith('/get_by_ids'));if(!routine)assert.equal(timed,true);nativeReads++;
     const vectors=JSON.parse(init.body).ids.map(id=>f.index.get(id)).filter(Boolean);
     return new Response(`{"success":true,"result":[${vectors.map(v=>`{"id":${JSON.stringify(v.id)},"values":[${v.values.map(n=>Object.is(n,-0)?'-0':n).join(',')}],"metadata":${JSON.stringify(v.metadata)}}`).join(',')}]}`);
   };
-  try{const result=await executePublication({db,owner:permit.mutationOwner,revision,...(approved?{approvedCatalog:revision}:{permanent:revision}),requestId:build.requestId,
+  try{const result=await executePublication({db,owner:permit.mutationOwner,revision:routine==='receipt'?null:revision,
+    ...(routine==='receipt'?{acceptedReceiptOnly:true}:approved?{approvedCatalog:revision}:{permanent:revision}),requestId:build.requestId,
     runReference:build.runReference,workspace,config,credentials:{cloudflareToken:'FIXTURE_ONLY'},
-    dependencies:{fetch:send,command:async()=>assert.fail('Receipt resolution must not build/upload/activate'),now:f.now}});
+    dependencies:{fetch:send,command:async()=>assert.fail('Receipt resolution must not build/upload/activate'),now:f.now},routineCare:Boolean(routine)});
     assert.equal(result.state,expected,JSON.stringify(result));
-    if(expected==='published'){assert.ok(scans>(approved?0:100));assert.ok(nativeReads>0&&shortSql>0);
+    if(expected==='published'){if(routine==='receipt'){assert.equal(scans,0);assert.equal(nativeReads,0);}
+      else{assert.ok(scans>(routine?0:approved?0:100));assert.ok(nativeReads>0&&shortSql>0);}
+      if(routine)assert.equal(checkpoint.checkpoint.control.publication.deploymentId,uuid(8002));
       assert.equal(checkpoint.checkpoint.control.publication.stage,'published');}
     return{scans,nativeReads,shortSql};
   }finally{f.inspect(undefined);t.mock.restoreAll();}
 }
+test('routine permanent completion verifies the deployed version without a temporary package or recovery grant',async t=>{
+  const f=await fixture(t,{afterExpiry:true}),prepared=await preparePermanentCatalog(f.db,f.owner,f.request),r=prepared.revision,
+    queued=await settlePermanentCatalog(f.db,prepared.owner,r,f.adapters),build=await claimBuildRequest(f.db,queued.requestId,'fixture:routine-build',f.now()),
+    intent={releaseId:'routine-permanent-completion',catalogRevision:r.snapshot.catalogRevision,codeSha:r.request.codeSha,
+      catalogSnapshotSha256:r.packet.receipt.snapshot_sha256,manifestSha256:'a'.repeat(64),vectorSyncWatermark:0,priorReleaseId:'original-release',nextExpiry:null};
+  await enqueuePublication(f.db,r.snapshot,intent,f.now());const publication=await claimPublication(f.db,r.snapshot,intent.releaseId,f.now());
+  await recordPublicationDispatch(f.db,r.snapshot,publication,`version:${uuid(8001)}`,f.now());
+  const permit=await beginBuildActivation(f.db,build,r.snapshot,publication,uuid(8001),async()=>({environment:scope.environment,settled:true,
+    active:{...f.original.intent,versionReference:f.original.permit.versionReference}}),f.now(),queued.owner),plan=prunedVectorPlan(r),
+    control={catalogRevision:r.snapshot.catalogRevision,planSha256:sha256(canonicalJson(plan)),ids:prunedVectorIds(plan)};
+  f.badVersion=true;await resolveThroughExecutor(t,f,f.db,r,build,publication,permit,control,intent,'pending',true);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM publication_receipts WHERE release_id=?').get(intent.releaseId).n,0);
+  f.badVersion=false;f.unknownDeployment=true;await resolveThroughExecutor(t,f,f.db,r,build,publication,permit,control,intent,'published',true);
+  assert.equal(f.sql.prepare('SELECT state FROM catalog_build_requests WHERE request_id=?').get(build.requestId).state,'resolved');
+  assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'idle');
+  f.unknownDeployment=false;const writes=f.sql.prepare('SELECT total_changes() n').get().n;
+  f.badIdentity=true;await resolveThroughExecutor(t,f,f.db,r,build,publication,permit,control,intent,'pending','receipt');
+  f.badIdentity=false;
+  await resolveThroughExecutor(t,f,f.db,r,build,publication,permit,control,intent,'published','receipt');
+  assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,writes);
+});
+
 test('ordinary permanent executor keeps source, held, projection, prior, native and exact-owner drift fenced before resolution',async t=>{
   const f=await fixture(t,{afterExpiry:true}),prepared=await preparePermanentCatalog(f.db,f.owner,f.request),r=prepared.revision,
     queued=await settlePermanentCatalog(f.db,prepared.owner,r,f.adapters),build=await claimBuildRequest(f.db,queued.requestId,'fixture:bulk-build',f.now()),

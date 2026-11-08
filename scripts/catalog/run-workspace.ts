@@ -340,7 +340,8 @@ function recoveryPermit(state:State,reconciled=false,finalizing=state.recovery?.
     ||!(p.stage==='activating'&&same(cp.owner,a)||reconciled&&p.stage==='published'&&hash(p.receiptSha256)
       &&(cp.phase==='attention'&&same(cp.owner,a)||cp.phase==='published'&&cp.owner===null||telemetry
         ||finalizing&&cp.phase==='finalized'&&cp.owner===null)))fail('recovery_control');
-  if(finalizing&&(!state.finish||state.finish.versionReference!==p.versionReference||p.intent.nextExpiry!==null||!p.deploymentId))fail('recovery_control');
+  if(finalizing&&(state.requestLimit!=='observe'&&(!state.finish||state.finish.versionReference!==p.versionReference||!p.deploymentId)
+    ||p.intent.nextExpiry!==null))fail('recovery_control');
   bindCheckpoint(cp,state.manifest,state.execution);return p.permit;
 }
 function ceiling(state:State):BudgetCeiling {
@@ -1313,7 +1314,8 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
         await append({type:'control',previous:expected,sha256:digest,control:view});return structuredClone(state.checkpoint!);
       }),
       readPermanentFinalization:(label:'revision'|'summary')=>serial(async()=>{
-        if((state.recovery?.scope!=='approved-permanent-finalization'&&!state.finish)||!['revision','summary'].includes(label))fail('permanent_control');
+        if((state.requestLimit!=='observe'&&state.recovery?.scope!=='approved-permanent-finalization'&&!state.finish)
+          ||!['revision','summary'].includes(label))fail('permanent_control');
         const cp=state.checkpoint!.checkpoint,p=cp.control!.publication!;
         if(p.permit)recoveryPermit(state,true,true);
         else if(!state.finish||!cp.pins.publicationUploadAcknowledged||cp.pins.publicationUploadReview

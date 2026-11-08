@@ -279,13 +279,14 @@ type Dependencies={repository?:string;fetch?:typeof fetch;resolveToken?:(ref:Key
  * activation is created; the ordinary publisher settles the existing permit. */
 export async function settleActivatedPermanentWeekly(input:{db:CatalogD1 & {providerIdentity:string};ws:RunWorkspace;config:CloudflareWeeklyConfig;configSha256:string;
   token:string;publication:NonNullable<Dependencies['publication']>;reviewedUploadRetry:Parameters<typeof executePublication>[0]['reviewedUploadRetry'];
-  finish:NonNullable<Dependencies['finishRecovery']>}){
+  finish?:NonNullable<Dependencies['finishRecovery']>}){
   const {db,ws,config}=input;
   let saved=await ws.readCheckpoint({controlOnly:true});
   if(!saved?.checkpoint.control?.publication)throw Error('weekly_permanent_settlement_invalid');
   if(!saved.checkpoint.control.publication.permit&&!(await ws.publicationFinishBudget()))throw Error('weekly_permanent_settlement_invalid');
   const releaseId=saved.checkpoint.control.publication.intent?.releaseId;
   if(!releaseId||releaseId!==config.publication.releaseId)throw Error('weekly_permanent_settlement_invalid');
+  if(saved.checkpoint.phase==='finalized')return{state:'finalized',runId:config.runId,catalogSeal:await ws.catalogSuccessor(),budget:await ws.budget()};
   const control=await ws.readPermanentFinalization('revision') as unknown as ReturnType<typeof approvedRevisionControl>;
   const save=async(phase:'published'|'finalized',owner:MutationOwner|null)=>{
     saved=await ws.readCheckpoint({controlOnly:true});if(!saved?.checkpoint.control)throw Error('weekly_checkpoint_missing');
@@ -294,11 +295,12 @@ export async function settleActivatedPermanentWeekly(input:{db:CatalogD1 & {prov
   if(saved.checkpoint.phase!=='published'&&saved.checkpoint.phase!=='finalized'){
     const p=saved.checkpoint.control!.publication!,owner=saved.checkpoint.owner;
     if(!owner)throw Error('weekly_permanent_settlement_invalid');
-    const revision=input.finish.terminalReceiptOnly||p.stage==='published'?null:await hydrateApprovedRevision(db,owner,control);
+    const receiptOnly=input.finish?.terminalReceiptOnly||Boolean(config.cadence&&p.stage==='published');
+    const revision=receiptOnly||p.stage==='published'?null:await hydrateApprovedRevision(db,owner,control);
     const result=await executePublication({db,workspace:ws,owner,revision,...(revision?{approvedCatalog:revision}:{}),
-      ...(input.finish.terminalReceiptOnly?{acceptedReceiptOnly:true as const}:{}),
+      ...(receiptOnly?{acceptedReceiptOnly:true as const}:{}),routineCare:Boolean(config.cadence),
       requestId:p.requestId,runReference:p.runReference,config:config.publication,credentials:{cloudflareToken:input.token},
-      dependencies:input.publication,reviewedUploadRetry:input.reviewedUploadRetry,finishAuthorization:input.finish.authorization});
+      dependencies:input.publication,reviewedUploadRetry:input.reviewedUploadRetry,finishAuthorization:input.finish?.authorization});
     if(result.state!=='published')return{...result,budget:await ws.budget()};
     if(result.releaseId!==releaseId)throw Error('weekly_publication_receipt_missing');
     const receipt=(await db.prepare('SELECT * FROM publication_receipts WHERE release_id=?').bind(releaseId).all()).results;
@@ -307,7 +309,6 @@ export async function settleActivatedPermanentWeekly(input:{db:CatalogD1 & {prov
       {releaseId,receiptSha256:sha256(canonicalJson(receipt[0]))},p.vectorPlan);
     await ws.recordCatalogSuccessor(seal);await save('published',null);
   }
-  if(saved!.checkpoint.phase==='finalized')return{state:'finalized',runId:config.runId,catalogSeal:await ws.catalogSuccessor(),budget:await ws.budget()};
   if(!await ws.catalogSuccessor())throw Error('weekly_permanent_successor_missing');
   const p=saved!.checkpoint.control!.publication!;
   const summary=await ws.readPermanentFinalization('summary') as Record<string,unknown>;
@@ -432,11 +433,13 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       command:accountedPublicationUploadCommand({workspace:ws,scope:networkScope,
         send:dependencies.publication?.fetch??dependencies.fetch,command:dependencies.publication?.command}),
       observationFetch:accountedPublicationReadFetch(ws,observationSend,networkScope)};
-    const permanentFinalization=Boolean(finish&&(await ws.budgetRowsReadCeiling()!==null||!adoption));
+    let saved=await ws.readCheckpoint({controlOnly:true});
+    const routineFinalization=Boolean(config.cadence&&saved?.checkpoint.control?.publication?.permit
+      &&saved.checkpoint.control.publication.intent?.nextExpiry===null&&resolving(saved.checkpoint));
+    const permanentFinalization=routineFinalization||Boolean(finish&&(await ws.budgetRowsReadCeiling()!==null||!adoption));
     if(finish?.terminalReceiptOnly&&!permanentFinalization)throw Error('weekly_terminal_scope_required');
     if(!permanentFinalization)await ws.purgeExpired();
-    let saved=await ws.readCheckpoint({controlOnly:true});
-    if(config.cadence&&!reviewedUploadRetry&&saved?.checkpoint.control?.publication){
+    if(config.cadence&&!routineFinalization&&!reviewedUploadRetry&&saved?.checkpoint.control?.publication){
       try{reviewedUploadRetry=await routineUploadRetry(ws,now());}
       catch(error){return{state:'attention',phase:saved.checkpoint.phase,errorCode:safeCode(error),budget:await ws.budget()};}
     }
@@ -461,7 +464,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           await ws.reserveBudget(value);
         },settle:(id,value)=>ws.settleBudget(id,value)}});
     if(permanentFinalization)return await settleActivatedPermanentWeekly({db,ws,config,configSha256:options.configSha256,token,
-      publication,reviewedUploadRetry,finish:finish!});
+      publication,reviewedUploadRetry,finish});
     // Expiry never hides the minimal control identity required to resolve an
     // already-dispatched activation. No expired snapshot/evidence is read here.
     let cp:WorkspaceCheckpoint;

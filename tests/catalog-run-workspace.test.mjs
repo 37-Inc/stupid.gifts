@@ -242,8 +242,8 @@ test('an acknowledged preactivation finish preserves multiple settled unknowns a
   assert.deepEqual(await w.budget(),before);assert.equal(before.unconfirmedRequests,2);
 });
 
-async function finalizationFixture(t,{finite=false,skipFinish=false,noDeployment=false,preactivation=false}={}){
-  const f=await fixture(t);f.input.repository=join(f.parent,'operator');
+async function finalizationFixture(t,{finite=false,skipFinish=false,noDeployment=false,preactivation=false,routine=false}={}){
+  const f=await fixture(t,routine?{requestLimit:'observe'}:{});f.input.repository=join(f.parent,'operator');
   await mkdir(f.input.repository,{mode:0o700});
   const w=await f.open(),value=recoveryCheckpoint(),p=value.control.publication;
   const snapshot={schemaVersion:1,dataKind:'catalog',catalogRevision:p.intent.catalogRevision,generatedAt:new Date(NOW).toISOString(),
@@ -274,8 +274,8 @@ async function finalizationFixture(t,{finite=false,skipFinish=false,noDeployment
   return{f,w,saved,grant,finish,directory,snapshot};
 }
 
-async function permanentControlFixture(t,{blob=false,mutate,summaryMutate,preactivation=false}={}){
-  const input=await finalizationFixture(t,{preactivation}),{w,snapshot,saved}=input,p=saved.checkpoint.control.publication;
+async function permanentControlFixture(t,{blob=false,mutate,summaryMutate,preactivation=false,routine=false}={}){
+  const input=await finalizationFixture(t,{preactivation,routine,skipFinish:routine}),{w,snapshot,saved}=input,p=saved.checkpoint.control.publication;
   const owner=p.permit?.mutationOwner??saved.checkpoint.owner;
   const packet=await createProjectionPacket(snapshot,{[snapshot.products[0].publicId]:HASH},HASH,new Date(NOW));
   const previous={...snapshot,catalogRevision:'prior-fixture',products:[snapshot.products[0].publicId]};
@@ -297,7 +297,7 @@ async function permanentControlFixture(t,{blob=false,mutate,summaryMutate,preact
   const complete=await w.putArtifact(summary,{kind:'publication',observedAt:NOW});
   const current=await w.writeCheckpoint(saved.sha256,{...saved.checkpoint,pins:{...saved.checkpoint.pins,revision},phaseComplete:complete});
   input.f.setNow('2026-10-22T14:00:00.000Z');
-  if(!preactivation)await w.grantActivationRecoveryBudget({...input.grant,expectedCheckpointSha256:current.sha256});
+  if(!preactivation&&!routine)await w.grantActivationRecoveryBudget({...input.grant,expectedCheckpointSha256:current.sha256});
   return{...input,value,summary,current,revision,complete};
 }
 
@@ -316,12 +316,35 @@ test('only exact permanent technical controls survive both retention and activat
   });
 });
 
+test('routine activated permanent completion needs no budget grant and never revives expired supplier reads',async t=>{
+  const {w,f,value,summary,revision}=await permanentControlFixture(t,{routine:true,blob:true});
+  const before=await w.budget(),manifest=await readFile(join(w.directory,'manifest.json'));
+  assert.equal(await w.publicationFinishBudget(),null);assert.equal(await w.budgetRowsReadCeiling(),null);
+  assert.deepEqual(await w.readPermanentFinalization('revision'),value);
+  assert.deepEqual(await w.readPermanentFinalization('summary'),summary);
+  await assert.rejects(w.readBlob(revision),/expired/);
+  assert.deepEqual(await w.budget(),before);assert.deepEqual(await readFile(join(w.directory,'manifest.json')),manifest);
+  await w.close();const resumed=await f.open({mode:'resume'});
+  assert.deepEqual(await resumed.readPermanentFinalization('revision'),value);
+  assert.equal((await resumed.budget()).unconfirmedRequests,1);
+});
+
 test('permanent preactivation control is tied to the unchanged freezing owner, not a fabricated activation permit',async t=>{
   const {value,current}=await permanentControlFixture(t),p=structuredClone(current.checkpoint.control.publication);
   const owner={...p.permit.mutationOwner,phase:'freezing'};p.permit=null;
   assert.deepEqual(activatedPermanentRevisionControl(value,p,owner),value);
   assert.throws(()=>activatedPermanentRevisionControl(value,p),/permanent_control/);
   assert.throws(()=>activatedPermanentRevisionControl(value,p,{...owner,generation:owner.generation+1}),/permanent_control/);
+});
+
+test('routine metadata completion cannot admit a preactivation or finite/supplier-bearing control',async t=>{
+  const before=await permanentControlFixture(t,{routine:true,preactivation:true});
+  await assert.rejects(before.w.readPermanentFinalization('revision'),/permanent_control|recovery_control/);
+  for(const mutate of [v=>{v.revision.snapshot.products[0].eligibleUntil=LATER;},v=>{v.request.request.context.sourceFacts={raw:'forbidden'};},
+    v=>{v.revision.persistent.generation++;}]){
+    const f=await permanentControlFixture(t,{routine:true,mutate});
+    await assert.rejects(f.w.readPermanentFinalization('revision'),/permanent_control|snapshot|publication/i);
+  }
 });
 
 test('the ordinary acknowledged-upload continuation reads only permanent controls after supplier retention expires',async t=>{
