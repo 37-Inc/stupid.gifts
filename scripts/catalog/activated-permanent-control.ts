@@ -1,4 +1,6 @@
 import {validateCatalogSnapshot} from '../../lib/catalog/snapshot.ts';
+import {earliestDisplayExpiry} from '../../lib/catalog/display.ts';
+import {validateAutomationCohort} from '../../lib/catalog/automation-cohort.ts';
 import {encodePublicationIntent} from '../../lib/catalog/publication.ts';
 import {canonicalJson,sha256} from './migration.ts';
 import {catalogSuccessorBytes} from './approved-catalog-seal.ts';
@@ -46,7 +48,7 @@ export function activatedPermanentRevisionControl(value:unknown,p:PublicationCon
     ||!v.sourceIds.every(uuid)
     ||!q||!exact(q,['schemaVersion','kind','request','previous','requestSha256'])
     ||q.schemaVersion!==1||q.kind!=='approved-request-control'||!hash(q.requestSha256)
-    ||!exact(q.request,['scope','codeSha','context','approval','approvalSha256',...(q.request.predecessor?['predecessor']:[])])
+    ||!exact(q.request,['scope','codeSha','context','approval','approvalSha256',...(q.request.predecessor?['predecessor']:[]),...(q.request.automation?['automation']:[])])
     ||!exact(q.request.scope,['environment','indexName'])
     ||!exact(q.request.context,['envelopeSha256','snapshotSha256','projectionSha256','sourceExportSha256',
       'vectorSyncWatermark','publicationReceiptWatermark','cutoff','priorPublication'])
@@ -73,11 +75,12 @@ export function activatedPermanentRevisionControl(value:unknown,p:PublicationCon
     ||typeof r.priorRow.manifest_json!=='string'
     ||encodePublicationIntent(JSON.parse(r.priorRow.manifest_json))!==r.priorRow.manifest_json)fail();
   if(!exact(q.request.approval,['schemaVersion','runId','catalogRevision','changes'])||q.request.approval.schemaVersion!==1
-    ||!Array.isArray(q.request.approval.changes)||q.request.approval.changes.length>30
+    ||!Array.isArray(q.request.approval.changes)||!q.request.automation&&q.request.approval.changes.length>30
     ||q.request.approval.changes.some(v=>!exact(v,['publicId','operationId','inputSha256','productSha256','displaySha256'])
       ||![v.operationId,v.inputSha256,v.productSha256,v.displaySha256].every(hash)))fail();
+  if(q.request.automation)validateAutomationCohort(q.request.automation,q.request.approval);
   const snapshot=validateCatalogSnapshot(r.snapshot,new Date(r.snapshot.generatedAt));
-  if(!snapshot.products.length||snapshot.products.some(product=>product.eligibleUntil!==null||product.persistent)
+  if(!snapshot.products.length||earliestDisplayExpiry(snapshot.products)!==null
     ||snapshot.catalogRevision!==p.intent?.catalogRevision||sha256(JSON.stringify(snapshot)+'\n')!==p.intent.catalogSnapshotSha256
     ||p.build.request.sourceDigest!==p.intent.catalogSnapshotSha256||p.intent.nextExpiry!==null
     ||!exact(r.packet,['rows','receipt'])||!exact(r.packet.receipt,receiptKeys)||!Array.isArray(r.packet.rows)||r.packet.rows.length!==snapshot.products.length
@@ -88,7 +91,7 @@ export function activatedPermanentRevisionControl(value:unknown,p:PublicationCon
   for(const row of r.packet.rows){
     const product=snapshot.products.find(product=>product.publicId===row.public_id);
     if(!exact(row,['catalog_revision','public_id','product_id','slug','title','description','tags','source_facts_hash','eligible_until','public_display_json','display_sha256'])
-      ||!product||row.eligible_until!==null||row.public_display_json!==JSON.stringify(product)
+      ||!product||row.eligible_until!==product.eligibleUntil||row.public_display_json!==JSON.stringify(product)
       ||row.display_sha256!==sha256(String(row.public_display_json)))fail();
   }
   const old=JSON.parse(q.previous.envelopeJson);

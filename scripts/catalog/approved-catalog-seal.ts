@@ -9,6 +9,7 @@ import {encodeBuildRequest} from '../../lib/catalog/build-requests.ts';
 import {encodePublicationIntent} from '../../lib/catalog/publication.ts';
 import {approvedCohortOperationKey} from '../../lib/catalog/freeze-approved-cohort.ts';
 import {validateCatalogSnapshot} from '../../lib/catalog/snapshot.ts';
+import {earliestDisplayExpiry} from '../../lib/catalog/display.ts';
 import {canonicalJson,sha256} from './migration.ts';
 import {createSealedSnapshotEnvelope,readOwnedProjection,readApprovedRevisionSource} from './export-d1-snapshot.ts';
 import type {SealedSnapshotEnvelope,SnapshotReadContext} from './export-d1-snapshot.ts';
@@ -99,7 +100,7 @@ export async function createPublishedApprovedCatalogSeal(db:CatalogD1,revision:A
 export async function createPublishedApprovedCatalogSealFromControl(db:CatalogD1,control:ReturnType<typeof approvedRevisionControl>,
   publication:ApprovedCatalogSeal['publication'],vectorPlan:{catalogRevision:string;planSha256:string;ids:string[]}){
   const r=control.revision,q=control.request.request;
-  if(!r.persistent||r.snapshot.products.some(p=>p.eligibleUntil!==null)||vectorPlan.catalogRevision!==r.snapshot.catalogRevision)
+  if(!r.persistent||earliestDisplayExpiry(r.snapshot.products)!==null||vectorPlan.catalogRevision!==r.snapshot.catalogRevision)
     throw new Error('cohort_successor_control_invalid');
   const rows=(await db.prepare(`SELECT * FROM catalog_vector_deliveries WHERE environment=? AND index_name=? AND generation=?
     AND status='complete' AND disposition='verified' AND json_extract(request_json,'$.kind')='approved-cohort-plan'
