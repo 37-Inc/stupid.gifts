@@ -365,6 +365,24 @@ test('routine permanent completion accepts automation and unchanged finite overl
   assert.throws(()=>activatedPermanentRevisionControl(invalid,publication),/automation_cohort_invalid/);
 });
 
+test('routine permanent completion journals its exact telemetry owner and finalizes without a recovery grant',async t=>{
+  const {w,current,value}=await permanentControlFixture(t,{routine:true}),publication=structuredClone(current.checkpoint.control.publication);
+  publication.stage='published';publication.receiptSha256=HASH;
+  let saved=await w.writeControlCheckpoint(current.sha256,{phase:'published',owner:null,control:{publication}});
+  const original=publication.permit.mutationOwner,finalizer={...original,phase:'writing',generation:original.generation+1,
+    token:'routine-finalizer',ownerReference:w.manifest.runId+':finalize',operationKey:sha256('finalize:'+w.manifest.configSha256),
+    capturedAt:'2026-10-22T14:00:00.000Z'};
+  for(const patch of [{generation:finalizer.generation+1},{operationKey:'f'.repeat(64)},{ownerReference:'foreign-run:finalize'}])
+    await assert.rejects(w.writeControlCheckpoint(saved.sha256,{phase:'published',owner:{...finalizer,...patch},control:{publication}}),/recovery_control|control_owner/);
+  saved=await w.writeControlCheckpoint(saved.sha256,{phase:'published',owner:finalizer,control:{publication}});
+  assert.deepEqual(await w.readPermanentFinalization('revision'),value);
+  saved=await w.writeControlCheckpoint(saved.sha256,{phase:'published',owner:{...finalizer,epoch:finalizer.epoch+1},control:{publication}});
+  saved=await w.writeControlCheckpoint(saved.sha256,{phase:'finalized',owner:null,control:{publication}});
+  assert.equal(saved.checkpoint.phase,'finalized');assert.equal(saved.checkpoint.owner,null);
+  assert.deepEqual(await w.readPermanentFinalization('revision'),value);
+  assert.equal((await w.budget()).unconfirmedRequests,1);
+});
+
 test('the ordinary acknowledged-upload continuation reads only permanent controls after supplier retention expires',async t=>{
   const {w,value,summary}=await permanentControlFixture(t,{preactivation:true,blob:true});
   const before=await w.budget();
