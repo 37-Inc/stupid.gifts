@@ -1,10 +1,18 @@
 # Stupid Gifts — Daily homepage editor
 
-The existing Codex catalog-care task is the editor. There is no additional
-schedule, recommendation service, per-visitor AI or automatic category whitelist.
-Use the same clean, accepted operator and scrubbed Node22 environment as catalog care.
+After hosted activation, the morning catalog workflow runs the optional
+photo-backed `gpt-6-luna` editor using the approved API key. It saves the same
+ID-only edition used by the publisher; there is no second schedule,
+recommendation service, per-visitor AI or category whitelist. Failure reuses the
+last good edition and does not stop catalog care. The local Codex writer stays
+paused. See [HOSTED_CATALOG.md](HOSTED_CATALOG.md) for activation and recovery.
 
-## Before `catalog:care prepare`
+## Candidate pool and editorial judgment
+
+The hosted editor uses the selection rules below automatically. The local
+preview/select commands are a fallback for an explicitly reconciled local
+operation, never a concurrent publisher. Use the same clean, accepted operator
+and scrubbed Node22 environment as catalog care.
 
 Run `npm run catalog:homepage -- preview` (or `brief` if a visual browser is
 unavailable). This reads only the last accepted public D1 projection: up to20
@@ -65,8 +73,9 @@ for an extra supplier batch, reset reservations, regenerate all product content,
 or block a valid catalog publication just because curation failed.
 
 All catalog identities, short copy, licensed imagery and native/search history
-remain intact. Only presentation order changes. Existing refresh, Monday
-discovery, model policy, plan and budgets are unchanged. Keep publisher source
-and active runs immutable. Review future real QA-excluded retailer-click rates
+remain intact. Only presentation order changes. The activated automation policy
+controls daily discovery and due refresh; disabled policy retains the legacy
+cadence. This editor never changes those settings or the service plan. Keep
+publisher source and active runs immutable. Review real QA-excluded retailer-click rates
 relative to exposure, rather than declaring title heuristics or bot clicks a
 conversion signal; no new analytics surface is needed for this change.
