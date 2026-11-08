@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, mkdtemp, realpath, chmod, rm } from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {openRunWorkspace} from '../scripts/catalog/run-workspace.ts';
 import { createCatalogD1Rest, createCatalogD1ReadOnlyRest, CATALOG_D1_REST_LIMITS, catalogD1FailureDetail } from '../scripts/catalog/d1-write-rest.ts';
 import { claimMutationOwnership, readMutationOwner, releaseMutationOwnership } from '../lib/catalog/mutation-fence.ts';
 import { createD1CatalogTelemetryStore } from '../scripts/catalog/telemetry-d1.ts';
@@ -104,6 +107,36 @@ test('routine 53-statement transaction passes the real transport atomically; fai
     const detail=catalogD1FailureDetail(error);assert.equal(detail.statementCount,53);assert.equal(detail.dispatched,false);
     assert.equal(detail.reason,'batch_statements');return true;
   });assert.equal(f.calls.length,sent,'legacy preflight refusal is never dispatched');
+});
+
+test('53-statement routine transaction uses the actual durable ledger and survives reopening without lost charges',async t=>{
+  const f=await fixture(t),parent=await mkdtemp(join(await realpath(tmpdir()),'catalog-transaction-ledger-'));await chmod(parent,0o700);
+  t.after(()=>rm(parent,{recursive:true,force:true}));
+  const now='2026-11-08T12:00:00.000Z',input={directory:join(parent,'workspace'),repository:await realpath(new URL('..',import.meta.url).pathname),
+    mode:'create',runId:'routine-53',configSha256:'a'.repeat(64),codeSha:'b'.repeat(40),requestLimit:'observe',
+    scope:{environment:'staging',accountId:config.accountId,databaseId:config.databaseId,databaseName:config.databaseName,indexName:'test-index',workerName:'test-worker'},
+    retention:{reviewReference:'fixture',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint'].map(kind=>[kind,{maxAgeMs:3600000,notAfter:'2026-11-09T00:00:00.000Z'}]))},
+    budgetCaps:{httpRequests:3,sqlStatements:3},now:()=>now};
+  const workspace=await openRunWorkspace(input);t.after(async()=>{try{await workspace.close();}catch{}});
+  const db=await createCatalogD1Rest({...config,fetch:f.fetch,requestLimit:'observe',accounting:{
+    scope:{accountId:config.accountId,databaseId:config.databaseId,databaseName:config.databaseName},initial:await workspace.budget(),
+    reserve:r=>workspace.reserveBudget(r),settle:(id,s)=>workspace.settleBudget(id,s)}});
+  await db.batch(Array.from({length:53},(_,i)=>db.prepare('INSERT INTO items VALUES(?,?)').bind(String(i),'fixture')));
+  const charged=await workspace.budget();assert.equal(charged.sqlStatements,54);assert.equal(charged.knownRowsWritten,53);
+  assert.equal(charged.unconfirmedRequests,0);await workspace.close();
+  const reopened=await openRunWorkspace({...input,mode:'resume'});try{assert.deepEqual(await reopened.budget(),charged);}finally{await reopened.close();}
+});
+
+test('an accounting refusal retains pre-dispatch transaction diagnostics, never an uncertain provider claim',async t=>{
+  const f=await fixture(t),db=await createCatalogD1Rest({...config,fetch:f.fetch,requestLimit:'observe',accounting:{
+    scope:{accountId:config.accountId,databaseId:config.databaseId,databaseName:config.databaseName},
+    initial:{httpRequests:0,sqlStatements:0,knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:0},
+    async reserve(r){if(r.units.sqlStatements>50)throw Error('run_workspace_budget_reservation');},async settle(){}}});
+  const before=f.calls.length;
+  await assert.rejects(db.batch(Array(53).fill(db.prepare('SELECT 1'))),error=>{
+    assert.equal(error.message,'run_workspace_budget_reservation');const detail=catalogD1FailureDetail(error);
+    assert.equal(detail.reason,'accounting_reservation');assert.equal(detail.dispatched,false);assert.equal(detail.statementCount,53);return true;
+  });assert.equal(f.calls.length,before);assert.equal(db.metrics().unconfirmedRequests,0);
 });
 
 test('read-only preparation observes aggregate estimates without allowing writes or relaxing old defaults',async t=>{

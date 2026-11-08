@@ -232,7 +232,7 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
       const saved = await currentReceipt(operationId,inputHash); if (saved) return saved.result as T;
       // A preflight/transport refusal is not a compare-and-swap conflict.
       // Keep its safe code/diagnostic after the exact committed-receipt check.
-      if(error instanceof Error&&/^catalog_d1_[a-z_]+$/.test(error.message))throw error;
+      if(error instanceof Error&&/^(?:catalog_d1|run_workspace)_[a-z_]+$/.test(error.message))throw error;
       throw new Error('maintenance_conflict');
     }
     const saved = await currentReceipt(operationId,inputHash); if (!saved) throw new Error('maintenance_receipt_missing');

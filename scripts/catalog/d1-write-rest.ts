@@ -36,7 +36,7 @@ type FailureDetail = { stage:'preflight'|'request'|'response';reason:string;disp
 export function catalogD1FailureDetail(value:unknown):FailureDetail|undefined {
   const v=(value instanceof Error?(value as Error&{catalogDiagnostic?:unknown}).catalogDiagnostic:value) as FailureDetail;
   if(!v||!['preflight','request','response'].includes(v.stage)
-    ||!['batch_statements','request_bytes','http_error','provider_error','invalid_response','timeout','cancelled','transport_error'].includes(v.reason)
+    ||!['batch_statements','request_bytes','accounting_reservation','http_error','provider_error','invalid_response','timeout','cancelled','transport_error'].includes(v.reason)
     ||typeof v.dispatched!=='boolean'||![v.statementCount,v.requestBytes].every(n=>Number.isSafeInteger(n)&&n>=0)
     ||!/^[a-f0-9]{64}$/.test(v.requestSha256))return;
   const detail:FailureDetail={stage:v.stage,reason:v.reason,dispatched:v.dispatched,statementCount:v.statementCount,requestBytes:v.requestBytes,requestSha256:v.requestSha256};
@@ -334,7 +334,9 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     if(enforceRequests&&(statements+batch.length>limits.statements||requests>=limits.requests
       ||rowsRead>=limits.reportedRowsRead||rowsWritten>=limits.reportedRowsWritten))throw new Error('catalog_d1_budget_exhausted');
     beforeBatch?.(batch);
-    const reservation=await reserve(body,batch.length);
+    let reservation:string|undefined;
+    try{reservation=await reserve(body,batch.length);}
+    catch(error){if(error instanceof Error)Object.assign(error,{catalogDiagnostic:{...detail,reason:'accounting_reservation'}});throw error;}
     if(enforceRequests&&(statements+batch.length>limits.statements||requests>=limits.requests
       ||rowsRead>=limits.reportedRowsRead||rowsWritten>=limits.reportedRowsWritten))throw new Error('catalog_d1_budget_exhausted');
     statements+=batch.length;

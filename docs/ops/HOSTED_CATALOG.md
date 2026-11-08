@@ -150,6 +150,10 @@ when newer metadata is supplied.
    preparations/responses and committed receipts; only unattempted work already
    in that original cohort can execute. Original source/config/observations stay
    unchanged. Post-provider recovery still takes the actual reviewed proposal SHA.
+   The coordinator keeps using that compatible controller for ledger reads,
+   review, publication and successor repair; it does not return to the ancestor's
+   older journal parser. At `phases_complete`, the original config digest requests
+   review only; publishing still needs the actual reviewed proposal digest.
 5. Only after acceptance and live QA, dispatch **activate** with that canary's
    exact ASIN. This configuration-only action verifies its saved acceptance,
    current public identity, D1 receipt, resolved build and idle owner, then
