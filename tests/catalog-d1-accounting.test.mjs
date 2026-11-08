@@ -11,7 +11,7 @@ function fixture({requests=20,statements=20}={}){
     knownRowsWritten:[...entries.values()].reduce((n,r)=>n+(r.result?.usage?.rowsWritten||0),0),
     unconfirmedRequests:[...entries.values()].filter(r=>r.result?.status!=='known').length});
   const accounting=()=>({scope,initial:state(),async reserve(input){
-    if(failReserve)throw new Error('PRIVATE ledger failure');
+    if(failReserve)throw new Error(failReserve);
     assert.match(input.requestSha256,/^[a-f0-9]{64}$/);assert.deepEqual(Object.keys(input).sort(),['id','requestSha256','units']);
     assert.equal(entries.has(input.id),false);const old=state();
     if(old.httpRequests+1>requests||old.sqlStatements+input.units.sqlStatements>statements)throw new Error('test-only cap');
@@ -26,7 +26,7 @@ function fixture({requests=20,statements=20}={}){
     return Response.json({success:true,result:batch.map(q=>({success:true,results:q.sql.includes('catalog_d1_primary')?[{catalog_d1_primary:1}]:[{value:1}],
       meta:{served_by_primary:true,rows_read:1,rows_written:0}}))});
   };
-  return{accounting,fetch,state,entries,calls:()=>calls,settlements:()=>settlements,setReserveFailure(){failReserve=true;},setSettleFailure(value=true){failSettle=value;},
+  return{accounting,fetch,state,entries,calls:()=>calls,settlements:()=>settlements,setReserveFailure(message='PRIVATE ledger failure'){failReserve=message;},setSettleFailure(value=true){failSettle=value;},
     loseSettlementAck(){loseAck=true;},loseResponse(){failResponse=true;}};
 }
 test('restored exact-scoped durable reservations precede network; independent clients share finite caps',async()=>{
@@ -39,7 +39,7 @@ test('restored exact-scoped durable reservations precede network; independent cl
 });
 test('reservation failure sends nothing; unacknowledged response settlement refuses success and survives restart as unknown',async()=>{
   const f=fixture();const db=await createCatalogD1Rest({...config,fetch:f.fetch,accounting:f.accounting()});
-  f.setReserveFailure();await assert.rejects(db.prepare('SELECT 1').all(),/^Error: catalog_d1_budget_reservation_failed$/);assert.equal(f.calls(),2);
+  f.setReserveFailure();await assert.rejects(db.prepare('SELECT 1').all(),/^Error: catalog_d1_accounting_reservation_failed$/);assert.equal(f.calls(),2);
   const g=fixture();const first=await createCatalogD1Rest({...config,fetch:g.fetch,accounting:g.accounting()});
   g.setSettleFailure();await assert.rejects(first.prepare('SELECT 1').all(),/^Error: catalog_d1_accounting_unknown$/);
   assert.equal(g.calls(),3);assert.equal(first.metrics().unconfirmedRequests,1);assert.equal(g.state().unconfirmedRequests,1);
@@ -47,6 +47,16 @@ test('reservation failure sends nothing; unacknowledged response settlement refu
   const second=await createCatalogD1Rest({...config,fetch:g.fetch,accounting:g.accounting()});
   assert.equal(second.metrics().requests,5);assert.equal(second.metrics().reportedRowsRead,null);assert.equal(second.metrics().reportedRowsWritten,null);
 });
+test('accounting preserves safe workspace errors but never exposes arbitrary adapter errors',async()=>{
+  const f=fixture(),db=await createCatalogD1Rest({...config,fetch:f.fetch,accounting:f.accounting()});
+  f.setReserveFailure('run_workspace_journal_uncertain');
+  await assert.rejects(db.prepare('SELECT 1').all(),/^Error: run_workspace_journal_uncertain$/);
+  assert.equal(f.calls(),2);
+  f.setReserveFailure('PRIVATE provider credential or body');
+  await assert.rejects(db.prepare('SELECT 1').all(),/^Error: catalog_d1_accounting_reservation_failed$/);
+  assert.equal(f.calls(),2);
+});
+
 test('unknown provider result is durably consumed without refund or automatic retry; restored limits cannot grow',async()=>{
   const f=fixture();const first=await createCatalogD1Rest({...config,fetch:f.fetch,accounting:f.accounting()});
   f.loseResponse();await assert.rejects(first.prepare('SELECT 1').all(),/^Error: catalog_d1_result_unknown$/);assert.equal(f.calls(),3);
