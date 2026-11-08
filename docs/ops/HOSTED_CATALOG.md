@@ -51,6 +51,10 @@ alternate daily commands; use the maintained same-run recovery path below.
   Failure telemetry retains safe transport code, dispatch state, statement/byte
   counts, HTTP/provider codes and phase/product IDs, never SQL/values/credentials.
   The same sanitized record is saved in the existing phase journal and job output.
+- Review preserves a legacy `sourceFactsHash: null` as unknown, not invalid or a
+  reason to generate substitute facts. The exact proposal still binds every
+  current product/display row. Identity, short copy, image and affiliate checks
+  remain required; malformed/missing hashes receive a specific review error.
 - Cold restoration lists only this run's immutable journal objects and downloads
   them with sixteen concurrent reads, then verifies the original anchored hash
   chain before using any state. Listing is an accelerator, not authority; no

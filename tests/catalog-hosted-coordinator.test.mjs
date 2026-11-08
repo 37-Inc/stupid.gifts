@@ -5,6 +5,7 @@ import {readFile} from 'node:fs/promises';
 import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
+import {routineReviewProduct} from '../scripts/catalog/daily-operator.mjs';
 
 const SOURCE='a'.repeat(40),NEW_SOURCE='b'.repeat(40),HASH='c'.repeat(64),DAY='2026-11-06';
 const bytes=value=>Buffer.from(JSON.stringify(value)+'\n'),hash=value=>createHash('sha256').update(value).digest('hex');
@@ -70,6 +71,27 @@ test('one existing operator performs prepare/start/review/exact-SHA publish; poi
   assert.deepEqual(JSON.parse(f.pointer()),{schemaVersion:1,pending:null});
   assert.deepEqual(JSON.parse(f.files.get(f.runtime.care+'/runs/scheduled-'+DAY+'/hosted-run.json')),
     {schemaVersion:1,runKey:'scheduled-'+DAY,source:SOURCE,day:DAY,kind:'full',inputsRef:ref});
+});
+
+test('actual review producer preserves nullable legacy facts through hosted review and publication without refetching',async()=>{
+  const f=fixture(),row={id:'B000000001',public_id:'public-gift',slug:'retained-legacy-gift',editorial_status:'pending',
+    availability_status:'UNAVAILABLE',source_facts_hash:null,public_display_json:JSON.stringify({title:'Retained legacy gift',
+      description:'The original licensed short description.',imageUrl:'https://example.invalid/cleared.jpg',
+      affiliateUrl:'https://www.amazon.com/dp/B000000001?tag=goose-gifts-37-20',eligibleUntil:null})};
+  const before=structuredClone(row);f.summary=[routineReviewProduct(row)];
+  f.proposal.changes[0].productSha256=hash(canonicalJson(row));f.proposalBytes=bytes(f.proposal);f.proposalSha=hash(f.proposalBytes);
+  const result=await f.run();assert.equal(result.state,'accepted');assert.deepEqual(row,before);
+  assert.equal(f.summary[0].sourceFactsHash,null);assert.equal(f.summary[0].description,'The original licensed short description.');
+  assert.equal(f.calls.filter(a=>a[0]==='start').length,1);assert.equal(f.calls.filter(a=>a[0]==='publish').length,1);
+  for(const value of [undefined,'','not-a-hash',7]){
+    assert.throws(()=>validateHostedProposal({bytes:f.proposalBytes,sha256:f.proposalSha,runId:f.config.runId,
+      catalogRevision:f.config.catalogRevision,summary:[{...f.summary[0],sourceFactsHash:value}]}),/review_source_facts_hash/);
+  }
+  for(const mutate of [p=>{p.description='';},p=>{p.imageUrl='file:///private';},p=>{p.publicAffiliateUrl='https://www.amazon.com/dp/B000000001?tag=wrong-20';}]){
+    const product={...f.summary[0]};mutate(product);
+    assert.throws(()=>validateHostedProposal({bytes:f.proposalBytes,sha256:f.proposalSha,runId:f.config.runId,
+      catalogRevision:f.config.catalogRevision,summary:[product]}),/review_(?:copy|image|link)/);
+  }
 });
 test('pending intent survives interrupted prepare and resumes original source/day/inputs before any new operation',async()=>{
   const f=fixture();await assert.rejects(f.run({}, {invoke:async()=>{throw Error('lost runner');}}));
