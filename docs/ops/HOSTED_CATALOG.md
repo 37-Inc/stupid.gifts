@@ -67,6 +67,11 @@ alternate daily commands; use the maintained same-run recovery path below.
   cannot be relabeled as current semantic coverage.
   A legacy vector describing different public copy is omitted from new secondary
   coverage, not used to block the correct listing and working keyword fallback.
+- Secondary Vectorize readback splits IDs into provider-sized groups of20,
+  independent of the approved cohort/upsert group. Every approved vector is
+  still processed. After acknowledged writes, bounded30-second visibility waits
+  stay in process rather than immediately rehydrating the whole catalog. Provider
+  failures retain operation, HTTP status and numeric codes, never raw bodies.
 - Review preserves a legacy `sourceFactsHash: null` as unknown, not invalid or a
   reason to generate substitute facts. The exact proposal still binds every
   current product/display row. Identity, short copy, image and affiliate checks

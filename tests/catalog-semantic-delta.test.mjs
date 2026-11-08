@@ -147,15 +147,17 @@ test('provider corruption and overlarge responses fail closed; pending visibilit
   const x=await fixture(),{vector}=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory);
   const options={accountId:'a'.repeat(32),indexName:'derived',token:'FIXTURE_ONLY',vectors:[vector],wait:async()=>{}};
   await assert.rejects(syncDerivedSearchVectors({...options,fetch:async()=>Response.json({success:true,result:[{...vector,values:Array(1024).fill(.1)}]})}),/readback_mismatch/);
-  let calls=0;await assert.rejects(syncDerivedSearchVectors({...options,fetch:async(url)=>{calls++;
+  let calls=0,waits=0;await assert.rejects(syncDerivedSearchVectors({...options,wait:async ms=>{assert.equal(ms,30000);waits++;},fetch:async(url)=>{calls++;
     return Response.json({success:true,result:url.endsWith('/upsert')?{mutationId:'mutation'}:[]});}}),/pending/);
-  assert.equal(calls,8);
+  assert.equal(calls,8);assert.equal(waits,5);
   await assert.rejects(syncDerivedSearchVectors({...options,fetch:async()=>new Response('x'.repeat(1024*1024+1))}),/too_large/);
+  await assert.rejects(syncDerivedSearchVectors({...options,fetch:async()=>Response.json({success:false,errors:[{code:40007,message:'PRIVATE provider text'}]},{status:400})}),
+    error=>error.message==='semantic_delta_provider_failed_get_by_ids_http_400_code_40007');
 });
 
-test('exact automation delivers more than thirty saved vectors in technical provider chunks and reuses them on retry',async()=>{
+for(const total of [22,64])test(`exact automation delivers all ${total} saved vectors using provider-sized lookups and reuses them on retry`,async()=>{
   const base=await fixture(),rows=new Map(),states=new Map(),products=[],inventory=[];
-  for(let n=0;n<64;n++){
+  for(let n=0;n<total;n++){
     const id=`B${String(5000+n).padStart(9,'0')}`,publicId=`00000000-0000-4000-8000-${String(5000+n).padStart(12,'0')}`;
     const product={...structuredClone(base.product),id,publicId,title:`Synthetic distinct gift ${n}`,slug:`synthetic-gift-${n}`};products.push(product);
     const semantic={...JSON.parse(base.state.semantic_json),id,publicId,title:product.title,slug:product.slug};
@@ -171,7 +173,7 @@ test('exact automation delivers more than thirty saved vectors in technical prov
   const nativeBefore=structuredClone([...states]),catalog=base.f.catalog,stored=new Map(),reads=[];let upserts=0;
   const fetch=async(url,init)=>{
     assert.ok(url.includes('/indexes/'+catalog.indexName+'/'));let result;
-    if(url.endsWith('/get_by_ids')){const ids=JSON.parse(init.body).ids;assert.ok(ids.length<=30);reads.push(ids);
+    if(url.endsWith('/get_by_ids')){const ids=JSON.parse(init.body).ids;assert.ok(ids.length<=20);reads.push(ids);
       result=ids.flatMap(id=>stored.has(id)?[stored.get(id)]:[]);
     }else{assert.ok(url.endsWith('/upsert'));const vector=JSON.parse(init.body);stored.set(vector.id,vector);upserts++;result={mutationId:'fixture-mutation'};}
     return Response.json({success:true,result});
@@ -179,12 +181,12 @@ test('exact automation delivers more than thirty saved vectors in technical prov
   const input={db,owner:{phase:'freezing',environment:'staging',indexName:'fixture',generation:1,epoch:0,
     token:'00000000-0000-4000-8000-000000000001',ownerReference:'fixture',operationKey:'a'.repeat(64),capturedAt:'2026-11-06T20:00:00.000Z'},
     revision,catalog,accountId:'a'.repeat(32),token:'FIXTURE_ONLY',fetch};
-  const first=await syncApprovedSearchDelta(input);assert.equal(first.verified,64);assert.equal(first.upserted,64);assert.equal(first.entries.length,64);
-  assert.equal(reads.length,6);assert.equal(new Set(reads.flat()).size,64);
-  const again=await syncApprovedSearchDelta(input);assert.equal(again.verified,64);assert.equal(again.upserted,0);assert.equal(upserts,64);
+  const first=await syncApprovedSearchDelta(input);assert.equal(first.verified,total);assert.equal(first.upserted,total);assert.equal(first.entries.length,total);
+  assert.equal(reads.length,total===22?4:10);assert.equal(new Set(reads.flat()).size,total);
+  const again=await syncApprovedSearchDelta(input);assert.equal(again.verified,total);assert.equal(again.upserted,0);assert.equal(upserts,total);
   assert.deepEqual([...states],nativeBefore,'Derived delivery never changes the original native index or saved inputs');
   const invalid=structuredClone(revision);delete invalid.request.automation;
-  await assert.rejects(prepareMaintenanceSearchDelta(db,invalid,catalog),/source_mismatch/);
+  if(total>30)await assert.rejects(prepareMaintenanceSearchDelta(db,invalid,catalog),/source_mismatch/);
   const duplicate=structuredClone(revision);duplicate.request.automation.products[1]=duplicate.request.automation.products[0];
   await assert.rejects(prepareMaintenanceSearchDelta(db,duplicate,catalog),/automation_cohort_invalid/);
 });
