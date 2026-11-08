@@ -461,11 +461,28 @@ test('acknowledged indexing waits in the same driver without rehydrating or repe
     assert.equal(delivery.attempts,1);assert.ok(delivery.mutation_reference);
     f.mode.nativeProcessingPending=false;
   };
-  const result=await f.run('resume',approval);
-  assert.equal(result.state,'finalized',JSON.stringify(weeklyCommandSummary(result)));
+  f.dependencies.checkpointSaved=async({checkpoint})=>{
+    if(checkpoint.checkpoint.phase==='publishing')throw Error('fixture_visibility_proved');
+  };
+  await assert.rejects(f.run('resume',approval),/fixture_visibility_proved/);
+  assert.equal((await fullCheckpoint(f.workspaceOptions)).checkpoint.phase,'publishing');
   assert.equal(waits,1);
   for(const [k,v]of Object.entries(paid))assert.equal(f.calls[k],v);
   assert.equal(f.sql.prepare('SELECT attempts FROM catalog_vector_deliveries WHERE delivery_id=?').get(delivery.delivery_id).attempts,1);
+});
+
+test('prepared freezing revision reuses its verified request and resumes without provider replay',async t=>{
+  const f=await setup(t);assert.equal((await f.run('start')).reason,'awaiting_reviewed_approval');
+  const approval=await f.approve(),paid=Object.fromEntries(['getItems','search','chat','embedding'].map(k=>[k,f.calls[k]]));
+  f.dependencies.checkpointSaved=async({checkpoint})=>{
+    if(checkpoint.checkpoint.pins.preparedRevision)throw Error('fixture_prepared_pause');
+  };
+  await assert.rejects(f.run('resume',approval),/fixture_prepared_pause/);
+  const paused=await fullCheckpoint(f.workspaceOptions);assert.equal(paused.checkpoint.phase,'freezing');assert.ok(paused.checkpoint.pins.preparedRevision);
+  f.dependencies.checkpointSaved=async({checkpoint})=>{if(checkpoint.checkpoint.phase==='publishing')throw Error('fixture_prepared_verified');};
+  await assert.rejects(f.run('resume',approval),/fixture_prepared_verified/);
+  assert.equal((await fullCheckpoint(f.workspaceOptions)).checkpoint.phase,'publishing');
+  for(const [key,value]of Object.entries(paid))assert.equal(f.calls[key],value);
 });
 
 test('same routine publication recovers a committed projection seal without repeating providers',async t=>{

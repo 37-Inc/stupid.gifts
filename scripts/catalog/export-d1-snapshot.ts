@@ -320,7 +320,10 @@ export async function readOwnerBaseOperationReceipts(db:CatalogD1,owner:Mutation
 /** Same byte-bounded reader in small technical chunks, with exact original
  * operation IDs plus independently validated same-run slug repair receipts. */
 export async function readAutomationOperationReceipts(db:CatalogD1,owner:MutationOwner,ids:string[],runId:string,approvedRecovery=false,signal?:AbortSignal) {
-  const wanted=new Set(ids);if(wanted.size!==ids.length||ids.some(id=>!HASH.test(id)))throw Error('read_bounds');
+  // A single atomic maintenance receipt can legitimately change many products.
+  // Read that receipt once, just as normal preparation does; product approval
+  // identities and their exact per-product operation linkage stay independent.
+  const wanted=new Set(ids);if(ids.some(id=>!HASH.test(id)))throw Error('read_bounds');
   const gate=approvedRecovery?approvedRevisionReadFence(owner):mutationFenceQuery(owner,['freezing']);let after='';
   for(;;){
     const found=(await db.prepare(`SELECT operation_id FROM catalog_maintenance_operations WHERE run_id=? AND operation_id>?

@@ -719,10 +719,16 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       const recovered=stored.kind==='approved-request-control'&&!cp.pins.preparedRevision&&cp.owner?.phase==='freezing'
         ?await recoverProjectionSeal(db,cp.owner,stored):null;
       if(recovered&&canonicalJson(recovered.owner)!==canonicalJson(cp.owner))await write({owner:recovered.owner});
-      const request=recovered?.request??(stored.kind==='approved-request-control'?await hydrateApprovedRequest(db,cp.owner!,stored):stored as unknown as ApprovedCohortRequest);
-      if(cp.pins.preparedRevision)revision=await hydrateApprovedRevision(db,cp.owner!,
-        await readOrdered<ReturnType<typeof approvedRevisionControl>>(ws,cp.pins.preparedRevision));
-      else{
+      let request:ApprovedCohortRequest;
+      if(cp.pins.preparedRevision){
+        revision=await hydrateApprovedRevision(db,cp.owner!,await readOrdered<ReturnType<typeof approvedRevisionControl>>(ws,cp.pins.preparedRevision));
+        request=revision.request;
+        // Hydration already verifies this request and its full predecessor.
+        // Bind the independent checkpoint pin without reading the catalog twice.
+        if(canonicalJson(stored.kind==='approved-request-control'?approvedRequestControl(request):request)!==canonicalJson(stored))
+          throw Error('cohort_request_changed');
+      }else{
+        request=recovered?.request??(stored.kind==='approved-request-control'?await hydrateApprovedRequest(db,cp.owner!,stored):stored as unknown as ApprovedCohortRequest);
         const claim={phase:'freezing' as const,ownerReference:`${config.runId}:freeze`,operationKey:approvedCohortOperationKey(request)};
         let owner=await claimMutationOwnership(db,scope,claim);
         if(!owner){if(cp.owner?.phase!=='writing')throw new Error('weekly_freeze_claim');await releaseExact(db,cp.owner);owner=await claimMutationOwnership(db,scope,claim);}

@@ -54,6 +54,12 @@ alternate daily commands; use the maintained same-run recovery path below.
 - An acknowledged native write waits up to three 45-second intervals in the same
   hydrated driver before returning visibility-pending. It never resends the write
   or repeats supplier/model work. Unacknowledged writes remain uncertain.
+- Recovery reads each atomic maintenance receipt once even when it changed
+  several approved products. Shared operation IDs are not duplicate products.
+  A prepared revision reuses its verified predecessor, with an exact comparison
+  against the independent checkpoint pin, instead of loading it twice.
+  Typed redacted operator errors survive the hosted wrapper without a second
+  error-namespace list hiding new failures.
 - Secondary semantic projection binds the exact current inventory and verified
   saved embedding text/bytes, not a supplier-fact equality or photo-only exception.
   Availability/photo changes alone do not change semantic input. Original model

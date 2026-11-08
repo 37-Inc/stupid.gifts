@@ -457,6 +457,8 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1]
   for(let cause=error instanceof Error?error.cause:null,depth=0;cause instanceof Error&&depth++<4;cause=cause.cause)
     if(/^catalog_object_store_[a-z_]{1,80}$/.test(cause.message))console.error(cause.message);
   const code=error instanceof Error?error.message:'';
-  console.error(/^[a-z][a-z0-9_]{0,149}$/.test(code)?code:'catalog_care_failed');process.exitCode=1;
+  const errorCode=/^[a-z][a-z0-9_]{0,149}$/.test(code)?code:'catalog_care_failed';
+  console.error(JSON.stringify({state:'operator_error',errorCode}));
+  console.error(errorCode);process.exitCode=1;
 });
 
