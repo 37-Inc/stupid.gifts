@@ -10,12 +10,15 @@ import {automationRuntime} from '../scripts/catalog/automation-runtime.mjs';
 test('phase recovery binds the original finite config and writer; publication recovery still needs approval',()=>{
   const hash='a'.repeat(64),config={runId:'original',cadence:{automation:{refreshIds:['B000000001'],discovery:false}}},
     cp={phase:'phases_running',owner:{phase:'writing',ownerReference:'original',operationKey:sha256(`weekly:${hash}`)}};
-  assert.equal(routineRecoveryPhase(cp,config,hash,hash),true);
+  assert.equal(routineRecoveryPhase(cp,config,hash,hash),'provider');
+  assert.equal(routineRecoveryPhase({...cp,phase:'phases_complete'},config,hash,hash),'review');
+  assert.equal(routineRecoveryPhase({...cp,phase:'phases_complete'},config,hash,'b'.repeat(64)),'publication');
   for(const changed of [{...cp,phase:'created'},{...cp,owner:{...cp.owner,ownerReference:'other'}},
     {...cp,owner:{...cp.owner,operationKey:'b'.repeat(64)}}])assert.throws(()=>routineRecoveryPhase(changed,config,hash,hash),/provider_replay_forbidden/);
   assert.throws(()=>routineRecoveryPhase(cp,config,hash,'b'.repeat(64)),/provider_replay_forbidden/);
   assert.throws(()=>routineRecoveryPhase(cp,{...config,cadence:{}},hash,hash),/provider_replay_forbidden/);
-  assert.equal(routineRecoveryPhase({phase:'published',pins:{approval:{sha256:hash}}},config,hash,hash),false);
+  assert.throws(()=>routineRecoveryPhase(null,config,hash,hash),/provider_replay_forbidden/);
+  assert.equal(routineRecoveryPhase({phase:'published',pins:{approval:{sha256:hash}}},config,hash,hash),'publication');
 });
 
 test('cleanup failures after acceptance are advisory, including open and close failures',async()=>{

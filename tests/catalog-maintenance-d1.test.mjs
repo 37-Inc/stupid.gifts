@@ -95,6 +95,8 @@ test('transport refusal is retained after exact receipt readback, not mislabeled
   try{
     let count=0;f.hookBefore(statements=>{count=statements.length;throw original;});
     await assert.rejects(f.store.markConfirmedMissingUnavailable(Array.from({length:7},(_,i)=>id(i+1))),error=>error===original);
+    original.message='run_workspace_budget_reservation';
+    await assert.rejects(f.store.markConfirmedMissingUnavailable(Array.from({length:7},(_,i)=>id(i+1))),error=>error===original);
     assert.ok(count>50);assert.equal(f.epoch(),f.owner.epoch);
     assert.equal(f.sqlite.prepare('SELECT count(*) n FROM catalog_maintenance_operations').get().n,0);
   }finally{f.close();}

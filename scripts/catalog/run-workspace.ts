@@ -309,9 +309,9 @@ function checkpoint(value:WorkspaceCheckpoint) {
   for(const [label,ref]of Object.entries(value.pins)){if(!key(label))fail('pins');artifactRef(ref);}
   if(value.phaseComplete!==null)artifactRef(value.phaseComplete);control(value.control);
 }
-function reservation(value:BudgetReservation) {
+function reservation(value:BudgetReservation,requestLimit:'enforce'|'observe'='enforce') {
   if(!exact(value,['id','requestSha256','units'])||!key(value.id)||!hash(value.requestSha256)||!exact(value.units,['httpRequests','sqlStatements'])
-    ||!Object.values(value.units).every(integer)||value.units.httpRequests!==1||value.units.sqlStatements>50)fail('budget_reservation');
+    ||!Object.values(value.units).every(integer)||value.units.httpRequests!==1||requestLimit==='enforce'&&value.units.sqlStatements>50)fail('budget_reservation');
 }
 function settlement(value:BudgetSettlement) {
   if(!exact(value,['status','usage'])||!['known','unknown'].includes(value.status)||value.status==='unknown'&&value.usage!==null
@@ -605,7 +605,7 @@ function apply(state:State,event:Event,dry=false) {
     if(!exact(event,['type','proof']))fail('publication_success');publicationSuccess(state,event.proof);
     if(!dry)state.success=event.proof;
   } else if(event.type==='reserve'){
-    if(!exact(event,['type','reservation']))fail('event');reservation(event.reservation);
+    if(!exact(event,['type','reservation']))fail('event');reservation(event.reservation,state.requestLimit);
     if(state.reservations.has(event.reservation.id))fail('budget_duplicate');
     budgetReservation(state,event.reservation);
     if(!dry){state.reservations.set(event.reservation.id,{reservation:event.reservation});state.totals.httpRequests+=event.reservation.units.httpRequests;
@@ -1347,7 +1347,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
             ?JSON.parse((await loadBlob(ref,registered)).toString('utf8')):body.value;
         return structuredClone(label==='revision'?activatedPermanentRevisionControl(value,p,p.permit?.mutationOwner??cp.owner??undefined):activatedPermanentSummary(value)) as unknown as Json;
       }),
-      reserveBudget:(value:BudgetReservation)=>serial(async()=>{reservation(value);const old=state.reservations.get(value.id);
+      reserveBudget:(value:BudgetReservation)=>serial(async()=>{reservation(value,state.requestLimit);const old=state.reservations.get(value.id);
         if(old){if(!same(old.reservation,value))fail('budget_replay');return;}budgetReservation(state,value);
         await append({type:'reserve',reservation:json(value) as unknown as BudgetReservation});}),
       settleBudget:(id:string,value:BudgetSettlement)=>serial(async()=>{settlement(value);const old=state.reservations.get(id);if(!old)fail('budget_reservation_missing');

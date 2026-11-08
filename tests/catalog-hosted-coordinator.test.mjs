@@ -45,11 +45,12 @@ function fixture(){
   f.deps={currentInputs:async()=>{events.push('current-inputs');return f.activeRef;},restoreInputs:async input=>{restored.push(input);},
     shadowCheck:async()=>{events.push('provider-read-check');return providerReport();},
     checkout:async source=>{checkedOut.push(source);f.executingSource=source;return '/operators/'+source;},
-    inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,config:f.config,approvalPin:f.approvalPin}),
+    inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,config:f.config,configSha256:HASH,approvalPin:f.approvalPin}),
     accepted:async()=>f.phase==='finalized'?f.accepted:null,
     registerCleanup:async()=>{events.push('cleanup-register');},cleanup:async()=>{},
     invoke:async(directory,args)=>{
-      calls.push(args);const command=args[0];events.push(command);
+      calls.push(args);let command=args[0];events.push(command);
+      if(command==='recover')command=args[1]===HASH?(f.phase==='phases_complete'?'review':'resume'):'publish';
       if(command==='prepare'){assert.ok(events.indexOf('pending')<events.indexOf('prepare'));f.prepared=true;
         return{source:f.executingSource,configSha256:HASH,runId:f.config.runId};}
       if(command==='start'||command==='resume'){f.phase='phases_complete';return{state:'pending',reason:'awaiting_reviewed_approval',phase:f.phase};}
@@ -109,13 +110,17 @@ test('reviewed controller resumes a saved provider phase with the original confi
   const result=await f.run({source:NEW_SOURCE},{inspect:async()=>({...await f.deps.inspect(),configSha256:HASH}),
     invoke:async(directory,args)=>{
       if(args[0]==='recover'){
-        repaired++;assert.equal(args[1],HASH);assert.equal(args.at(-1),'scheduled-'+DAY);
-        assert.notEqual(directory,'/operators/'+SOURCE);f.phase='phases_complete';
-        return{state:'pending',reason:'awaiting_reviewed_approval'};
+        assert.equal(args.at(-1),'scheduled-'+DAY);assert.notEqual(directory,'/operators/'+SOURCE);
+        if(f.phase==='phases_running'){
+          repaired++;assert.equal(args[1],HASH);f.phase='phases_complete';
+          return{state:'pending',reason:'awaiting_reviewed_approval'};
+        }
+        return invoke(directory,args);
       }return invoke(directory,args);
     }});
   assert.equal(result.state,'accepted');assert.equal(repaired,1);
   assert.equal(f.calls.filter(a=>a[0]==='prepare').length,1);
+  assert.equal(f.calls.filter(a=>a[0]==='recover').length,2,'review and publication also use the compatible descendant');
 });
 
 test('failure diagnostics and charged counters survive coordinator output without arbitrary fields',async()=>{

@@ -214,8 +214,12 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:null},pointerBytes);
     return{...result,runKey:record.runKey,kind:record.kind,resumed};};
   const invoke=(command,extra=[])=>deps.invoke(directory,[command,...extra,'--run',record.runKey]);
-  const publish=(status,sha)=>record.source!==source&&['freezing','publishing','attention','published'].includes(status.phase)
+  const publish=(status,sha)=>record.source!==source
     ?deps.invoke(ROOT,['recover',sha,'--run',record.runKey]):invoke('publish',[sha]);
+  const savedApproval=async status=>{
+    const bytes=await runtime.state.bytes(runtime.care+'/runs/'+record.runKey+'/reviewed-proposal.json');
+    return validateHostedProposal({bytes,sha256:hash(bytes),runId:status.config.runId,catalogRevision:status.config.catalogRevision,approvalPin:status.approvalPin});
+  };
   let visibilityRetries=0;
   for(let transitions=0;transitions<16;transitions++){
     const status=await deps.inspect(record,directory);
@@ -223,7 +227,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
       const accepted=await deps.accepted(record,status);if(accepted)return finish({state:'accepted',...accepted});
       // Finalized means provider/publication work is over. At most one normal
       // resume repairs existing successor bookkeeping; never re-publish here.
-      await invoke('resume');const checked=await deps.inspect(record,directory),repaired=await deps.accepted(record,checked);
+      if(record.source!==source)await publish(status,(await savedApproval(status)).sha256);else await invoke('resume');
+      const checked=await deps.inspect(record,directory),repaired=await deps.accepted(record,checked);
       return repaired?finish({state:'accepted',...repaired}):{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_successor_pending'};
     }
     let result;
@@ -237,14 +242,14 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     }
     if(!status.started)result=await invoke('start');
     else if(status.phase==='phases_complete'&&!status.approvalPin){
-      const review=await invoke('review'),file=runtime.care+'/runs/'+record.runKey+'/reviewed-proposal.json';
+      const review=record.source!==source?await deps.invoke(ROOT,['recover',status.configSha256,'--run',record.runKey]):await invoke('review'),
+        file=runtime.care+'/runs/'+record.runKey+'/reviewed-proposal.json';
       if(review.state!=='requires_agent_review'||review.proposalPath!==file)fail('review_output');
       const checked=validateHostedProposal({bytes:await runtime.state.bytes(file),sha256:review.proposalSha256,
         runId:status.config.runId,catalogRevision:status.config.catalogRevision,summary:review.summary});
       result=await publish(status,checked.sha256);
     }else if(status.approvalPin){
-      const bytes=await runtime.state.bytes(runtime.care+'/runs/'+record.runKey+'/reviewed-proposal.json');
-      const checked=validateHostedProposal({bytes,sha256:hash(bytes),runId:status.config.runId,catalogRevision:status.config.catalogRevision,approvalPin:status.approvalPin});
+      const checked=await savedApproval(status);
       result=await publish(status,checked.sha256);
     }else if(['created','phases_running'].includes(status.phase))result=record.source!==source&&status.phase==='phases_running'
       ?await deps.invoke(ROOT,['recover',status.configSha256,'--run',record.runKey]):await invoke('resume');
