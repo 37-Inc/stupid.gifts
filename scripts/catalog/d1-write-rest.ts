@@ -250,7 +250,8 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     if(!accounting)return undefined;
     const id=randomUUID();const requestSha256=createHash('sha256').update(JSON.stringify({accountId,databaseId,body:body??null})).digest('hex');
     try{await accounting.reserve({id,requestSha256,units:{httpRequests:1,sqlStatements:count}});return id;}
-    catch{throw new Error('catalog_d1_budget_reservation_failed');}
+    catch(error){if(error instanceof Error&&/^run_workspace_[a-z_]+$/.test(error.message))throw error;
+      throw new Error('catalog_d1_accounting_reservation_failed');}
   }
   async function settle(id:string|undefined,usage:{rowsRead:number;rowsWritten:number}|null){
     if(!accounting||!id)return;

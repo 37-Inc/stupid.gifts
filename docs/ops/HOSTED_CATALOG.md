@@ -23,6 +23,15 @@ run a local publisher while hosted care or a saved hosted publication is active.
 - A fresh runner also recreates private temporary publication parents when a
   build stopped before its package was sealed. This reuses the original
   registration and deadlines; it does not fetch again or renew content.
+- Journal length and total journal bytes are not publication quotas. Keep the
+  original history and charges across retries; do not reset or prune them to
+  finish a run. Individual records remain size-bounded and every sequence,
+  parent hash, source, owner and atomic head transition is still verified.
+  Accounting errors retain safe workspace codes rather than describing every
+  storage failure as an exhausted provider budget.
+- Restored R2 bytes are a hash-verified local cache, not a second durable copy.
+  Avoid per-record disk flushes during restore; original remote ACKs and all new
+  reservations/appends retain their durable-before-dispatch ordering.
 - Routine background publishing keeps its original build token and attempt
   history under the unchanged, non-expiring mutation-owner fence. Saving a large
   package does not require another timed build claim. The original source cutoff,
