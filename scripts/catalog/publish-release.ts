@@ -901,7 +901,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         const receipts=(await db.prepare('SELECT * FROM publication_receipts WHERE release_id=?').bind(config.releaseId).all()).results;
         if(receipts.length!==1||receipts[0].manifest_json!==encodePublicationIntent(control.intent!)
           ||receipts[0].catalog_revision!==control.intent!.catalogRevision||receipts[0].code_sha!==control.intent!.codeSha)throw new Error('publication_receipt_mismatch');
-        if(routineReceiptOnly)verifyUploadedVersion(await api.version(control.versionReference!),config,control.versionReference!,control);
+        if(routineReceiptOnly){verifyUploadedVersion(await api.version(control.versionReference!),config,control.versionReference!,control);await observed();}
         else{
           const sealed=await loadPackage(directory,config,control.packageSha256!,now(),control.permit);
           if(sealed.snapshot.products.some(p=>p.eligibleUntil!==null)
