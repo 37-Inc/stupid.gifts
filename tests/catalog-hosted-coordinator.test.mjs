@@ -240,6 +240,20 @@ test('visibility retries are finite and leave the same publication pending witho
   assert.equal(result.state,'attention');assert.equal(f.waits.length,8);assert.equal(f.calls.filter(a=>a[0]==='start').length,1);
   assert.equal(f.calls.filter(a=>a[0]==='review').length,1);assert.equal(f.calls.filter(a=>a[0]==='publish').length,9);assert.ok(JSON.parse(f.pointer()).pending);
 });
+test('a progressing finite native cohort is not cut off by aggregate visibility or transition counts',async()=>{
+  const f=fixture(),invoke=f.deps.invoke,owner={generation:76,epoch:1178};let delivered=0;
+  const result=await f.run({}, {inspect:async()=>({...await f.deps.inspect(),owner:{...owner}}),
+    invoke:async(directory,args)=>{
+      if(args[0]!=='publish')return invoke(directory,args);
+      f.calls.push(args);assert.equal(args[1],f.proposalSha);f.approvalPin=hash(canonicalJson(f.proposal));
+      if(delivered<17){delivered++;owner.epoch+=2;f.phase='draining';return{state:'pending',phase:f.phase,errorCode:'not_visible'};}
+      f.phase='finalized';return{state:'finalized'};
+    }});
+  assert.equal(result.state,'accepted');assert.equal(delivered,17);assert.equal(f.waits.length,17);
+  assert.equal(f.calls.filter(a=>a[0]==='publish').length,18,'all charged invocations remain recorded');
+  assert.equal(f.calls.filter(a=>a[0]==='prepare').length,1);assert.equal(f.calls.filter(a=>a[0]==='start').length,1);
+  assert.equal(f.calls.filter(a=>a[0]==='review').length,1);assert.equal(JSON.parse(f.pointer()).pending,null);
+});
 test('an accepted pending run is checked and cleared without running today\'s requested different operation',async()=>{
   const f=fixture();await assert.rejects(f.run({}, {invoke:async()=>{throw Error('lost runner');}}));
   f.prepared=true;f.phase='finalized';const result=await f.run({mode:'photos',source:NEW_SOURCE,day:'2026-11-07'});
