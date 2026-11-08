@@ -519,8 +519,9 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         ||finished.lease_token!==control.build.token||finished.run_reference!==control.runReference
         ||finished.release_id!==config.releaseId||finished.version_reference!==control.versionReference)throw Error('publication_serving_settlement_scope');
     }
+    const routineReceiptOnly=Boolean(options.routineCare&&control?.stage==='published'&&control.receiptSha256);
     if(options.acceptedReceiptOnly&&(revision!==null||!control?.permit||control.intent?.nextExpiry!==null
-      ||!options.finishAuthorization||!reviewed?.transport||await workspace.budgetRowsReadCeiling()===null))
+      ||!routineReceiptOnly&&(!options.finishAuthorization||!reviewed?.transport||await workspace.budgetRowsReadCeiling()===null)))
       throw new Error('publication_receipt_settlement_scope');
     if(!HASH.test(options.requestId)||!/^[a-zA-Z0-9._:/-]{1,200}$/.test(options.runReference))throw new Error('publication_input_invalid');
     if(control&&(control.configSha256!==configSha256||control.requestId!==options.requestId||control.runReference!==options.runReference))throw new Error('publication_checkpoint_mismatch');
@@ -876,6 +877,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
           {signal,published:options.published,permanent:options.permanent});
         signal?.throwIfAborted();
       };
+      let observedDeploymentId=control.deploymentId;
       const observed=async(signal?:AbortSignal):Promise<DeploymentObservation>=>{
         signal?.throwIfAborted();await workspace.assertHeld();signal?.throwIfAborted();const deployed=await api.deployed(signal);signal?.throwIfAborted();
         if(!deployed||deployed.version!==control!.versionReference||deployed.marker!==control!.deploymentMarker
@@ -890,23 +892,32 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         // Re-read deployment after independent identity/vector reads. Never infer
         // not-submitted from elapsed time or an observed prior deployment.
         const after=await api.deployed(signal);signal?.throwIfAborted();if(canonicalJson(after)!==canonicalJson(deployed))throw new Error('publication_activation_pending');
+        observedDeploymentId=deployed.id;
         return{environment:config.environment,settled:true,active:identity(control!.intent!,control!.versionReference!)};
       };
       const accepted=(await status()).state==='published';
       if(receiptOnly){
         if(!accepted)throw new Error('publication_fresh_evidence_required');
-        const sealed=await loadPackage(directory,config,control.packageSha256!,now(),control.permit);
         const receipts=(await db.prepare('SELECT * FROM publication_receipts WHERE release_id=?').bind(config.releaseId).all()).results;
         if(receipts.length!==1||receipts[0].manifest_json!==encodePublicationIntent(control.intent!)
-          ||receipts[0].catalog_revision!==control.intent!.catalogRevision||receipts[0].code_sha!==control.intent!.codeSha
-          ||sealed.snapshot.products.some(p=>p.eligibleUntil!==null)
-          ||canonicalJson(intentFrom(sealed.manifest,sealed.bytes))!==canonicalJson(control.intent))throw new Error('publication_receipt_mismatch');
+          ||receipts[0].catalog_revision!==control.intent!.catalogRevision||receipts[0].code_sha!==control.intent!.codeSha)throw new Error('publication_receipt_mismatch');
+        if(routineReceiptOnly)verifyUploadedVersion(await api.version(control.versionReference!),config,control.versionReference!,control);
+        else{
+          const sealed=await loadPackage(directory,config,control.packageSha256!,now(),control.permit);
+          if(sealed.snapshot.products.some(p=>p.eligibleUntil!==null)
+            ||canonicalJson(intentFrom(sealed.manifest,sealed.bytes))!==canonicalJson(control.intent))throw new Error('publication_receipt_mismatch');
+        }
       }
       if(!accepted){
         if(!revision)throw new Error('publication_fresh_evidence_required');
-        const sealed=await loadPackage(directory,config,control.packageSha256!,now(),control.permit);
-        if(canonicalJson(intentFrom(sealed.manifest,sealed.bytes))!==canonicalJson(control.intent)
-          ||canonicalJson(sealed.snapshot)!==canonicalJson(revision.snapshot))throw new Error('publication_package_changed');
+        if(options.routineCare&&control.intent!.nextExpiry===null){
+          verifyUploadedVersion(await api.version(control.versionReference!),config,control.versionReference!,control);
+          if(sha256(JSON.stringify(revision.snapshot)+'\n')!==control.intent!.catalogSnapshotSha256)throw Error('publication_package_changed');
+        }else{
+          const sealed=await loadPackage(directory,config,control.packageSha256!,now(),control.permit);
+          if(canonicalJson(intentFrom(sealed.manifest,sealed.bytes))!==canonicalJson(control.intent)
+            ||canonicalJson(sealed.snapshot)!==canonicalJson(revision.snapshot))throw new Error('publication_package_changed');
+        }
         const readDeployed=async()=>{
           // Approved persistent completion already checks all source/projection
           // rows on both sides of this callback. Retain one full private/held
@@ -920,7 +931,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
           if(options.permanent)await completeActivatedPermanentPublication(db,revision,control.publication!,control.permit,readDeployed,now);
           else if(options.approvedCatalog)await completeActivatedApprovedCatalogPublication(db,revision,control.publication!,control.permit,readDeployed,now);
           else await completeActivatedPublication(db,revision,control.publication!,control.permit,readDeployed,now,options.published);
-        else await completePublication(db,sealed.snapshot,config.releaseId,control.publication!.token,readDeployed,now,owner);
+        else await completePublication(db,revision.snapshot,config.releaseId,control.publication!.token,readDeployed,now,owner);
       }
       const proof=receipt();
       let ref={sha256:control.receiptSha256??sha256(canonicalJson(proof))};
@@ -930,7 +941,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
           // receipt is reconstructible entirely from immutable control; record
           // that digest in the protected control journal, never renew content.
         }}
-      await save({stage:'published',receiptSha256:ref.sha256});
+      await save({stage:'published',receiptSha256:ref.sha256,...(observedDeploymentId?{deploymentId:observedDeploymentId}:{})});
       // Ordinary permanent completion proves all source/projection rows here.
       // The explicitly admitted accepted receipt already commits those proofs;
       // it retains the bounded fresh native/deployment gate without rescanning.
