@@ -9,6 +9,7 @@ import {automationRuntime,CATALOG_SCOPE} from './automation-runtime.mjs';
 import {currentHostedInputs,restoreHostedInputs} from './hosted-inputs.ts';
 import {canonicalJson} from '../../lib/catalog/canonical-json.ts';
 import {checkCloudflareRunner} from './check-cloudflare-runner.ts';
+import {catalogD1FailureDetail} from './d1-write-rest.ts';
 
 const exec=promisify(execFile),HASH=/^[a-f0-9]{64}$/,SOURCE=/^[a-f0-9]{40}$/,ASIN=/^[A-Z0-9]{10}$/;
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url))),OPERATORS='/home/runner/stupid-gifts/operators';
@@ -157,7 +158,7 @@ function defaults(runtime,environment){
         codeSha:record.source,configSha256:operator.configSha256,scope:CATALOG_SCOPE,retention:config.retention,
         budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe',durable:runtime.durable});
       try{const checkpoint=await workspace.readCheckpoint({controlOnly:true});return{prepared:true,started:true,config,
-        phase:checkpoint?.checkpoint.phase??'created',owner:checkpoint?.checkpoint.owner??null,
+        phase:checkpoint?.checkpoint.phase??'created',owner:checkpoint?.checkpoint.owner??null,configSha256:operator.configSha256,
         approvalPin:checkpoint?.checkpoint.pins.approval?.sha256,publication:checkpoint?.checkpoint.control?.publication};}
       finally{await workspace.close();}
     },
@@ -245,7 +246,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
       const bytes=await runtime.state.bytes(runtime.care+'/runs/'+record.runKey+'/reviewed-proposal.json');
       const checked=validateHostedProposal({bytes,sha256:hash(bytes),runId:status.config.runId,catalogRevision:status.config.catalogRevision,approvalPin:status.approvalPin});
       result=await publish(status,checked.sha256);
-    }else if(['created','phases_running'].includes(status.phase))result=await invoke('resume');
+    }else if(['created','phases_running'].includes(status.phase))result=record.source!==source&&status.phase==='phases_running'
+      ?await deps.invoke(ROOT,['recover',status.configSha256,'--run',record.runKey]):await invoke('resume');
     else return{state:'attention',runKey:record.runKey,phase:status.phase,errorCode:'catalog_hosted_checkpoint_requires_attention'};
     if(result.state==='finalized')continue;
     if(result.reason==='awaiting_reviewed_approval')continue;
@@ -255,6 +257,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
       if(pending.approvalPin&&['draining','freezing','publishing'].includes(pending.phase)){await deps.wait(45000);continue;}
     }
     return{state:'attention',runKey:record.runKey,phase:result.phase??status.phase,errorCode:result.errorCode??result.reason??'catalog_hosted_run_pending',
+      ...(catalogD1FailureDetail(result.diagnostic)?{diagnostic:catalogD1FailureDetail(result.diagnostic)}:{}),
+      ...(result.budget?{budget:result.budget}:{}),
       ...(/^catalog_object_store_[a-z_]{1,80}$/.test(result.causeCode??'')?{causeCode:result.causeCode}:{})};
   }
   return{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_run_pending'};

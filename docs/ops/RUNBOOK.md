@@ -126,8 +126,12 @@ force locks/owners or blindly retry uncertain version/activation writes.
 Content-addressed asset retries reuse exact bytes; provider readback settles
 uncertainty. Allow bounded30–60-second same-publication index-visibility waits.
 For older saved post-provider work, `catalog:care recover <original-review-SHA>
---run <original-key>` verifies its frozen source/helper and refuses supplier/model
-phases. Historical execution adoption stays local-only. Completed special
+--run <original-key>` verifies its frozen source/helper. A reviewed descendant
+controller may also resume saved automated `phases_running` work using the
+original config SHA instead: the original writing owner and finite cohort must
+match, saved responses and committed receipts are reused, and only originally
+captured unattempted work can execute. No new batch or source/config relabeling.
+Historical execution adoption stays local-only. Completed special
 recovery helpers never replay. Post-acceptance output cleanup is advisory and
 holds source locks, not database/Worker deployment locks.
 

@@ -4,7 +4,7 @@ import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createCatalogD1Rest } from './d1-write-rest.ts';
+import { createCatalogD1Rest, catalogD1FailureDetail } from './d1-write-rest.ts';
 import { checkCloudflareRunner, resolveReadToken, resolveCatalogCredential, resolveCloudflareCredential, validateRunnerCheckConfig } from './check-cloudflare-runner.ts';
 import type { CloudflareCredentialReference } from './check-cloudflare-runner.ts';
 import {isCatalogCredentialReference} from './credential-reference.ts';
@@ -583,7 +583,8 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           const complete=await journal.read('provider-phases-complete') as {summary:Record<string,unknown>};
           const phaseComplete=await ws.putArtifact(finalization(complete.summary),{kind:'publication',observedAt:now()});
           await write({phase:'phases_complete',owner:cursor.current,phaseComplete,pins:{...cp.pins,automationJournal:state().automationJournal as ArtifactRef}});
-        }catch(error){return{state:'attention',phase:cp.phase,errorCode:safeCode(error),budget:await ws.budget()};}
+        }catch(error){return{state:'attention',phase:cp.phase,errorCode:safeCode(error),
+          ...(catalogD1FailureDetail(error)?{diagnostic:catalogD1FailureDetail(error)}:{}),budget:await ws.budget()};}
       }
       const complete=await journal.read('provider-phases-complete') as {merchandising:PublicationConfig['merchandising'];changedIds:string[];admittedIds:string[]}|undefined;
       if(complete){
@@ -797,6 +798,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
 /** Exit zero may mean waiting/reconciliation, not a publication receipt. */
 export function weeklyCommandSummary(result:Record<string,unknown>){
   const output:Record<string,unknown>={state:result.state??result.status};
+  const diagnostic=catalogD1FailureDetail(result.diagnostic);if(diagnostic)output.diagnostic=diagnostic;
   for(const key of ['runId','phase','reason','errorCode','releaseId','receiptSha256']){
     const value=result[key];if(typeof value==='string'&&/^[a-zA-Z0-9._-]{1,200}$/.test(value))output[key]=value;
   }

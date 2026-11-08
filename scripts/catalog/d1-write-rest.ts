@@ -29,6 +29,27 @@ type Limits = { [K in keyof typeof CATALOG_D1_REST_LIMITS]:number };
 type Param = string | number | null;
 type Query = { sql:string;params:readonly Param[] };
 type Result<T = Record<string,unknown>> = { success:true;results:T[];meta:Record<string,number|boolean> };
+type FailureDetail = { stage:'preflight'|'request'|'response';reason:string;dispatched:boolean;
+  statementCount:number;requestBytes:number;requestSha256:string;httpStatus?:number;providerCodes?:number[];
+  phase?:string;method?:string;productIds?:string[] };
+/** Numeric/request-identity evidence only. Never include SQL, values, tokens or provider messages. */
+export function catalogD1FailureDetail(value:unknown):FailureDetail|undefined {
+  const v=(value instanceof Error?(value as Error&{catalogDiagnostic?:unknown}).catalogDiagnostic:value) as FailureDetail;
+  if(!v||!['preflight','request','response'].includes(v.stage)
+    ||!['batch_statements','request_bytes','http_error','provider_error','invalid_response','timeout','cancelled','transport_error'].includes(v.reason)
+    ||typeof v.dispatched!=='boolean'||![v.statementCount,v.requestBytes].every(n=>Number.isSafeInteger(n)&&n>=0)
+    ||!/^[a-f0-9]{64}$/.test(v.requestSha256))return;
+  const detail:FailureDetail={stage:v.stage,reason:v.reason,dispatched:v.dispatched,statementCount:v.statementCount,requestBytes:v.requestBytes,requestSha256:v.requestSha256};
+  if(Number.isInteger(v.httpStatus)&&(v.httpStatus??0)>=100&&(v.httpStatus??0)<=599)detail.httpStatus=v.httpStatus;
+  if(Array.isArray(v.providerCodes)&&v.providerCodes.length<=8&&v.providerCodes.every(n=>Number.isSafeInteger(n)&&n>=0))detail.providerCodes=[...v.providerCodes];
+  if(typeof v.phase==='string'&&/^phase-\d+$/.test(v.phase))detail.phase=v.phase;
+  if(['upsertProduct','recordEditorialEvent','markConfirmedMissingUnavailable'].includes(v.method??''))detail.method=v.method;
+  if(Array.isArray(v.productIds)&&v.productIds.length<=50&&v.productIds.every(id=>/^[A-Z0-9]{10}$/.test(id)))detail.productIds=[...v.productIds];
+  return detail;
+}
+class CatalogD1RequestError extends Error {
+  constructor(code:string,readonly catalogDiagnostic:FailureDetail){super(code);}
+}
 export interface D1AccountingState {
   httpRequests:number;sqlStatements:number;knownRowsRead:number;knownRowsWritten:number;unconfirmedRequests:number;
 }
@@ -259,7 +280,7 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     catch{throw new Error('catalog_d1_accounting_unknown');}
   }
   const bindings=new WeakMap<D1Statement,Query>();
-  async function request(body?:string,signal?:AbortSignal):Promise<unknown> {
+  async function request(body?:string,signal?:AbortSignal,detail?:FailureDetail):Promise<unknown> {
     migrationAssert?.();
     if(enforceRequests&&requests>=limits.requests)throw new Error('catalog_d1_budget_exhausted');requests++;
     if(signal?.aborted)throw new Error('catalog_d1_result_unknown');
@@ -269,31 +290,47 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     const aborted=new Promise<never>((_,reject)=>{rejectAbort=reject;});
     const abort=()=>{controller.abort();cancellation??=reader?.cancel().catch(()=>{});rejectAbort(new Error('catalog_d1_result_unknown'));};
     signal?.addEventListener('abort',abort,{once:true});
+    let httpStatus:number|undefined;
     try{
       pending=(async()=>{
         const response=await send(body===undefined?base:`${base}/query`,{method:body===undefined?'GET':'POST',redirect:'error',
           signal:controller.signal,headers:{Authorization:`Bearer ${token}`,...(body===undefined?{}:{'Content-Type':'application/json'})},
           ...(body===undefined?{}:{body})});
-        if(controller.signal.aborted||!response.ok||!response.body){void response.body?.cancel().catch(()=>{});throw new Error();}
+        httpStatus=response.status;
+        if(controller.signal.aborted||!response.body){void response.body?.cancel().catch(()=>{});throw new Error();}
         reader=response.body.getReader();const chunks:Uint8Array[]=[];let size=0;
         try{for(;;){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;
           if(size>limits.responseBytes){await reader.cancel();throw new Error();}chunks.push(part.value);}}
         finally{reader.releaseLock();}
         const envelope:unknown=JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        if(!object(envelope)||envelope.success!==true||!Object.hasOwn(envelope,'result'))throw new Error();
+        if(!response.ok||!object(envelope)||envelope.success!==true||!Object.hasOwn(envelope,'result')){
+          const codes=object(envelope)&&Array.isArray(envelope.errors)?envelope.errors.slice(0,8).flatMap(e=>
+            object(e)&&Number.isSafeInteger(e.code)&&Number(e.code)>=0?[Number(e.code)]:[]):[];
+          if(detail)throw new CatalogD1RequestError('catalog_d1_result_unknown',{...detail,stage:'response',dispatched:true,
+            reason:response.ok?'provider_error':'http_error',httpStatus,providerCodes:codes});
+          throw new Error();
+        }
         return envelope.result;
       })();return await Promise.race([pending,aborted,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{abort();reject(new Error());},limits.timeoutMs);})]);
-    }catch{throw new Error(body===undefined?'catalog_d1_identity_unavailable':'catalog_d1_result_unknown');}
+    }catch(error){
+      if(error instanceof CatalogD1RequestError)throw error;
+      if(detail)throw new CatalogD1RequestError('catalog_d1_result_unknown',{...detail,stage:'request',dispatched:true,
+        reason:signal?.aborted?'cancelled':controller.signal.aborted?'timeout':httpStatus?'invalid_response':'transport_error',...(httpStatus?{httpStatus}:{})});
+      throw new Error(body===undefined?'catalog_d1_identity_unavailable':'catalog_d1_result_unknown');
+    }
     finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);
       if(signal&&controller.signal.aborted&&pending)await drainDeploymentObservation(Promise.allSettled([pending,cancellation]));}
   }
   async function query(batch:Query[],signal?:AbortSignal):Promise<Result[]> {
-    if(!batch.length||batch.length>limits.batchStatements)throw new Error('catalog_d1_batch_invalid');
+    const body=JSON.stringify({batch}),detail:FailureDetail={stage:'preflight',reason:'batch_statements',dispatched:false,
+      statementCount:batch.length,requestBytes:Buffer.byteLength(body),requestSha256:createHash('sha256').update(body).digest('hex')};
+    // Routine atomic transactions are bounded by their encoded payload, not the
+    // old 50-query allowance. Splitting a transaction would lose rollback/CAS.
+    if(!batch.length||enforceRequests&&batch.length>limits.batchStatements)throw new CatalogD1RequestError('catalog_d1_batch_invalid',detail);
     // No cancellable mutation transaction: observation SQL is SELECT-only.
     if(signal&&batch.some(value=>!/^\s*SELECT\b/i.test(value.sql)))throw new Error('catalog_d1_read_signal_invalid');
     signal?.throwIfAborted();
-    const body=JSON.stringify({batch});
-    if(Buffer.byteLength(body)>limits.requestBytes)throw new Error('catalog_d1_request_bound');
+    if(detail.requestBytes>limits.requestBytes)throw new CatalogD1RequestError('catalog_d1_request_bound',{...detail,reason:'request_bytes'});
     if(enforceRequests&&(statements+batch.length>limits.statements||requests>=limits.requests
       ||rowsRead>=limits.reportedRowsRead||rowsWritten>=limits.reportedRowsWritten))throw new Error('catalog_d1_budget_exhausted');
     beforeBatch?.(batch);
@@ -303,7 +340,7 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     statements+=batch.length;
     let results:Result[];
     try{
-      const raw=await request(body,signal);
+      const raw=await request(body,signal,detail);
       if(!Array.isArray(raw)||raw.length!==batch.length)throw new Error();
       results=raw.map(value=>{
         if(!object(value)||value.success!==true||!Array.isArray(value.results)||value.results.some(row=>!object(row))
@@ -315,7 +352,9 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
         }
         return {success:true as const,results:value.results,meta};
       });
-    }catch{unconfirmedRequests++;await settle(reservation,null);throw new Error('catalog_d1_result_unknown');}
+    }catch(error){unconfirmedRequests++;await settle(reservation,null);
+      if(error instanceof CatalogD1RequestError)throw error;
+      throw new CatalogD1RequestError('catalog_d1_result_unknown',{...detail,stage:'response',dispatched:true,reason:'invalid_response'});}
     const read=results.reduce((sum,result)=>sum+Number(result.meta.rows_read),rowsRead);
     const written=results.reduce((sum,result)=>sum+Number(result.meta.rows_written),rowsWritten);
     if(!Number.isSafeInteger(read)||!Number.isSafeInteger(written)){

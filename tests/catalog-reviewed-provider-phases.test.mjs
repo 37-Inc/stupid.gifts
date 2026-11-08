@@ -100,6 +100,19 @@ test('saved provider/model stages hydrate original evidence and aggregate actual
   assert.deepEqual((await journal.usage()).unknownDispatches.map(p => p.provider), ['openai', 'amazon']);
 });
 
+test('failed application durably records sanitized transaction context before returning the original error',async()=>{
+  const saved=memory(),journal=saved.journal(),diagnostic={stage:'preflight',reason:'batch_statements',dispatched:false,
+    statementCount:53,requestBytes:192780,requestSha256:'a'.repeat(64)},error=Object.assign(Error('catalog_d1_batch_invalid'),{catalogDiagnostic:diagnostic});
+  const prepared={mutations:[{method:'markConfirmedMissingUnavailable',args:[[product.id,'PRIVATE invalid value']],intent:{}}],items:[]};
+  await assert.rejects(applyReviewedPhase({key:'phase-11',journal,prepared,store:{async markConfirmedMissingUnavailable(){throw error;}},
+    telemetryStore:{},runId:'fixture',withIntent:(_i,action)=>action(),checkpoint:()=>{throw Error('must not checkpoint failure as success');}}),e=>e===error);
+  const key=Object.keys(saved.head.entries).find(k=>k.startsWith('failure-'));
+  assert.ok(key);const failure=await journal.read(key);
+  assert.equal(failure.diagnostic.statementCount,53);assert.equal(failure.diagnostic.phase,'phase-11');
+  assert.deepEqual(failure.productIds,[product.id]);assert.doesNotMatch(JSON.stringify(failure),/PRIVATE/);
+  assert.equal(saved.head.entries['phase-11-applied'],undefined);
+});
+
 test('different initial and confirmation calls keep separate saved omissions, even for identical IDs', async () => {
   const saved = memory(), journal = saved.journal(), stages = createEditorialStages({ read: key => journal.read(key), put: (key, value) => journal.put(key, value) }); let calls = 0;
   for (let call = 0; call < 2; call++) await stages.run('refresh-collect', { phase: 0, ids: [product.id], call }, async () => { calls++; return []; });

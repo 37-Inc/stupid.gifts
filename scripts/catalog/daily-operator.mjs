@@ -368,6 +368,17 @@ export function operatorInvocation(argv,calendar){
       ||new Set(admitAsins).size!==admitAsins.length||admitAsins.some(id=>! /^[A-Z0-9]{10}$/.test(id))))refuse('command');
   return{command,approvalSha,runKey,...(photosOnly?{photosOnly:true}:{}),...(admitAsins?{admitAsins}:{}),...(canaryId?{canaryId}:{})};
 }
+/** A reviewed descendant may resume the original finite cohort with its exact
+ * config digest. Saved provider/model stages are reused, never re-collected.
+ * Post-provider recovery still requires the original approval pin. */
+export function routineRecoveryPhase(cp,config,configSha256,digest){
+  if(cp?.phase==='phases_running'&&config.cadence?.automation&&HASH.test(configSha256??'')&&digest===configSha256
+    &&cp.owner?.phase==='writing'&&cp.owner.ownerReference===config.runId
+    &&cp.owner.operationKey===sha256(`weekly:${configSha256}`))return true;
+  if(!cp||!['freezing','publishing','attention','published','finalized'].includes(cp.phase)||!cp.pins?.approval)
+    refuse('provider_replay_forbidden');
+  return false;
+}
 export async function main(argv=process.argv.slice(2)){
 if(argv[0]==='code-only'){
   const operator=await import('./code-only-operator.mjs');operator.codeOnlyInvocation(argv.slice(1));
@@ -402,6 +413,7 @@ else{
   if(!recovering&&(record.helperSha256!==self||record.source!==SOURCE))refuse('operator_changed');
   const config=validateCloudflareWeeklyConfig(await json(record.configPath,record.configSha256)),entry=options(config,record.configPath,record.configSha256);
   await hydrateRoutineInputs(config);
+  let recoveringPhases=false;
   if(recovering){
     const old=config.publication.sourceRoot,git=(...args)=>execFileSync('git',args,{cwd:old,encoding:'utf8'}).trim();
     if(RUNTIME.hosted&&pending?.source!==record.source||config.codeSha!==record.source||git('rev-parse','HEAD')!==record.source||git('status','--porcelain','--untracked-files=all')
@@ -410,8 +422,7 @@ else{
     entry.workspace.repository=old;entry.workspace.codeSha=record.source;
     const w=await openRunWorkspace(entry.workspace);
     try{const cp=await w.readCheckpoint({controlOnly:true});
-      if(!cp||!['freezing','publishing','attention','published','finalized'].includes(cp.checkpoint.phase)||!cp.checkpoint.pins.approval)
-        refuse('provider_replay_forbidden');
+      recoveringPhases=routineRecoveryPhase(cp?.checkpoint,config,record.configSha256,approvalSha);
     }finally{await w.close();}
   }
   if(command==='review')await review(entry,config,directory);
@@ -423,7 +434,7 @@ else{
       const token=await RUNTIME.token();await observeHeadroom(token,spent,record.capacity,fetch,await currentD1Plan(token));
     }
     const result=await runCloudflareWeekly({...entry.driver,command:command==='publish'||recovering?'resume':command,
-      ...(approvalSha?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})},
+      ...(approvalSha&&!recoveringPhases?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})},
       recovering?{repository:config.publication.sourceRoot}:{});
     await remember(result,entry,config,directory);console.log(JSON.stringify(weeklyCommandSummary(result)));
     if(result.state==='finalized'){

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createRunItemCollector, createUsageLedger, finalizeUsageLedger, recordOpenAIUsage } from '../ops/catalog-telemetry.mjs';
 import { encodePgvectorSendBase64, decodePgvectorSendBase64 } from './pgvector-binary.ts';
 import { productPresentation } from '../../lib/catalog/presentation.ts';
+import {catalogD1FailureDetail} from './d1-write-rest.ts';
 
 const canonical = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().filter(key => item[key] !== undefined).map(key => [key, item[key]])) : item);
@@ -187,7 +188,19 @@ export async function applyReviewedPhase({ key, journal, prepared, store, teleme
     const args = copy(mutation.args);
     if (mutation.nativeBase64) args[0].embedding = decodePgvectorSendBase64(mutation.nativeBase64);
     if (!['upsertProduct', 'recordEditorialEvent', 'markConfirmedMissingUnavailable'].includes(mutation.method)) throw Error('reviewed_preparation_invalid');
-    await withIntent(mutation.intent, () => store[mutation.method](...args));
+    try{await withIntent(mutation.intent, () => store[mutation.method](...args));}
+    catch(error){
+      const detail=catalogD1FailureDetail(error),ids=mutation.method==='upsertProduct'?[args[0].id]
+        :mutation.method==='markConfirmedMissingUnavailable'?args[0]:[args[0].productId];
+      const productIds=ids.filter(id=>typeof id==='string'&&/^[A-Z0-9]{10}$/.test(id)).slice(0,50);
+      const diagnostic=detail&&catalogD1FailureDetail({...detail,phase:key,method:mutation.method,productIds});
+      if(diagnostic)error.catalogDiagnostic=diagnostic;
+      const failure={schemaVersion:1,phase:key,method:mutation.method,productIds,
+        errorCode:/^[a-z][a-z0-9_]{1,100}$/.test(error.message)?error.message:'maintenance_failed',...(diagnostic?{diagnostic}:{})};
+      console.error(JSON.stringify({state:'maintenance_failure',...failure}));
+      await journal.put('failure-'+hash(failure),failure);
+      throw error;
+    }
     await checkpoint();
   }
   for (let offset = 0; offset < prepared.items.length; offset += 20) {

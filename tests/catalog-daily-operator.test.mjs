@@ -2,9 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { headroom, observeHeadroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation, cleanupAcceptedPublication,
-  routineAutomationPolicy,materializeRoutinePreparation,routineFreshnessPool,hydrateRoutineInputs,routineHostedPending } from '../scripts/catalog/daily-operator.mjs';
+  routineAutomationPolicy,materializeRoutinePreparation,routineFreshnessPool,hydrateRoutineInputs,routineHostedPending,routineRecoveryPhase } from '../scripts/catalog/daily-operator.mjs';
 import {sha256,canonicalJson} from '../scripts/catalog/migration.ts';
 import {derivedFixture} from './helpers/derived-search-fixture.mjs';
+
+test('phase recovery binds the original finite config and writer; publication recovery still needs approval',()=>{
+  const hash='a'.repeat(64),config={runId:'original',cadence:{automation:{refreshIds:['B000000001'],discovery:false}}},
+    cp={phase:'phases_running',owner:{phase:'writing',ownerReference:'original',operationKey:sha256(`weekly:${hash}`)}};
+  assert.equal(routineRecoveryPhase(cp,config,hash,hash),true);
+  for(const changed of [{...cp,phase:'created'},{...cp,owner:{...cp.owner,ownerReference:'other'}},
+    {...cp,owner:{...cp.owner,operationKey:'b'.repeat(64)}}])assert.throws(()=>routineRecoveryPhase(changed,config,hash,hash),/provider_replay_forbidden/);
+  assert.throws(()=>routineRecoveryPhase(cp,config,hash,'b'.repeat(64)),/provider_replay_forbidden/);
+  assert.throws(()=>routineRecoveryPhase(cp,{...config,cadence:{}},hash,hash),/provider_replay_forbidden/);
+  assert.equal(routineRecoveryPhase({phase:'published',pins:{approval:{sha256:hash}}},config,hash,hash),false);
+});
 
 test('cleanup failures after acceptance are advisory, including open and close failures',async()=>{
   for(const failure of ['none','open','clean','close']){

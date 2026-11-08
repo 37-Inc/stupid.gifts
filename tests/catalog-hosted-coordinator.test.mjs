@@ -98,6 +98,34 @@ test('new reviewed controller uses recovery only for the original already-approv
   assert.equal(resumed.state,'accepted');assert.equal(f.calls.filter(args=>args[0]==='start').length,startCalls);
   assert.deepEqual(f.checkedOut,[SOURCE,SOURCE]);assert.deepEqual(f.restored,[ref,ref]);
 });
+
+test('reviewed controller resumes a saved provider phase with the original config digest, not another prepare or batch',async()=>{
+  const f=fixture(),invoke=f.deps.invoke;
+  await f.run({}, {invoke:async(directory,args)=>{
+    if(args[0]==='start'){f.phase='phases_running';return{state:'attention',errorCode:'catalog_d1_batch_invalid'};}
+    return invoke(directory,args);
+  }});
+  let repaired=0;
+  const result=await f.run({source:NEW_SOURCE},{inspect:async()=>({...await f.deps.inspect(),configSha256:HASH}),
+    invoke:async(directory,args)=>{
+      if(args[0]==='recover'){
+        repaired++;assert.equal(args[1],HASH);assert.equal(args.at(-1),'scheduled-'+DAY);
+        assert.notEqual(directory,'/operators/'+SOURCE);f.phase='phases_complete';
+        return{state:'pending',reason:'awaiting_reviewed_approval'};
+      }return invoke(directory,args);
+    }});
+  assert.equal(result.state,'accepted');assert.equal(repaired,1);
+  assert.equal(f.calls.filter(a=>a[0]==='prepare').length,1);
+});
+
+test('failure diagnostics and charged counters survive coordinator output without arbitrary fields',async()=>{
+  const f=fixture(),invoke=f.deps.invoke,diagnostic={stage:'preflight',reason:'batch_statements',dispatched:false,
+    statementCount:53,requestBytes:192780,requestSha256:HASH,phase:'phase-11',method:'markConfirmedMissingUnavailable',productIds:['B000000001'],sql:'PRIVATE'};
+  const result=await f.run({}, {invoke:async(directory,args)=>args[0]==='start'
+    ?{state:'attention',errorCode:'catalog_d1_batch_invalid',diagnostic,budget:{httpRequests:17,unconfirmedRequests:1}}:invoke(directory,args)});
+  assert.equal(result.diagnostic.statementCount,53);assert.equal(result.diagnostic.dispatched,false);
+  assert.equal(result.budget.unconfirmedRequests,1);assert.doesNotMatch(JSON.stringify(result),/PRIVATE/);
+});
 test('unpointed immutable intent is recovered after pointer ACK loss, not relabeled to newer code/inputs',async()=>{
   const f=fixture(),record={schemaVersion:1,runKey:'scheduled-'+DAY,source:SOURCE,day:DAY,kind:'full',inputsRef:ref};
   f.files.set(f.runtime.care+'/runs/'+record.runKey+'/hosted-run.json',bytes(record));
