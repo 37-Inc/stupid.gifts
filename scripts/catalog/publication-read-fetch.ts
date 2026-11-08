@@ -22,7 +22,7 @@ function ids(body:unknown):boolean {
 function derivedIds(body:unknown):boolean {
   const value=body as {ids?:unknown};
   return !!value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).join(',')==='ids'
-    &&Array.isArray(value.ids)&&value.ids.length>0&&value.ids.length<=30
+    &&Array.isArray(value.ids)&&value.ids.length>0&&value.ids.length<=20
     &&value.ids.every(id=>typeof id==='string'&&/^[a-f0-9]{64}$/.test(id))&&new Set(value.ids).size===value.ids.length;
 }
 function derivedVector(body:unknown):boolean {

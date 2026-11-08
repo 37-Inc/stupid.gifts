@@ -132,10 +132,19 @@ export async function syncDerivedSearchVectors(input:{accountId:string;indexName
       bytes+=part.value.length;if(bytes>1024*1024)throw Error('semantic_delta_response_too_large');chunks.push(part.value);}}
     finally{signal.removeEventListener('abort',cancel);void reader.cancel().catch(()=>{});try{reader.releaseLock();}catch{}}
     signal.throwIfAborted();const result=JSON.parse(Buffer.concat(chunks).toString());
-    if(!response.ok||result.success!==true)throw Error('semantic_delta_provider_failed');return result.result;
+    if(!response.ok||result.success!==true){
+      const codes:number[]=Array.isArray(result.errors)?result.errors.flatMap((e:{code?:unknown})=>typeof e?.code==='number'&&Number.isSafeInteger(e.code)&&e.code>=0?[e.code]:[]).slice(0,3):[];
+      throw Error(`semantic_delta_provider_failed_${path}_http_${response.status}${codes.map(code=>`_code_${code}`).join('')}`);
+    }return result.result;
   };
   const read=async()=>{
-    const result=await request('get_by_ids',JSON.stringify({ids:vectors.map(v=>v.id)}));
+    // Vectorize accepts at most20 IDs per lookup, independently of upsert batch
+    // size. This is a transport chunk, never a cap on the approved delta.
+    const result:Array<DerivedVector & {namespace?:string}>=[];
+    for(let offset=0;offset<vectors.length;offset+=20){
+      const page=await request('get_by_ids',JSON.stringify({ids:vectors.slice(offset,offset+20).map(v=>v.id)}));
+      if(!Array.isArray(page))throw Error('semantic_delta_provider_failed');result.push(...page);
+    }
     if(!Array.isArray(result)||result.length>vectors.length||new Set(result.map(v=>v.id)).size!==result.length)
       throw Error('semantic_delta_provider_failed');
     for(const returned of result){const expected=vectors.find(v=>v.id===returned.id);
@@ -154,7 +163,7 @@ export async function syncDerivedSearchVectors(input:{accountId:string;indexName
   }
   for(let attempt=0;attempt<6;attempt++){
     if((await read()).size===vectors.length)return {verified:vectors.length,upserted:missing.length};
-    if(attempt<5)await (input.wait??(ms=>new Promise(resolve=>setTimeout(resolve,ms))))(2000);
+    if(attempt<5)await (input.wait??(ms=>new Promise(resolve=>setTimeout(resolve,ms))))(30000);
   }
   throw Error('semantic_delta_pending');
 }

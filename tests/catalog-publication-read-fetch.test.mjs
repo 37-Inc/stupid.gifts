@@ -8,6 +8,16 @@ const scope={accountId:'a'.repeat(32),workerName:'fixture-worker',indexName:'fix
 const vector=`https://api.cloudflare.com/client/v4/accounts/${scope.accountId}/vectorize/v2/indexes/${scope.indexName}`;
 const init={method:'POST',redirect:'error',body:JSON.stringify({ids:[id]})};
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+test('derived lookups match the provider20-ID transport boundary before reservation',async()=>{
+  for(const factory of [accountedPublicationReadFetch,accountedPublicationFetch]){
+    let sent=0;const events=[],ws={async reserveBudget(e){events.push(e);},async settleBudget(_id,e){events.push(e);}};
+    const read=factory(ws,async()=>{sent++;return Response.json({success:true,result:[]});},{...scope,derivedIndexName:'derived'});
+    const ids=Array.from({length:21},(_,n)=>String(n).padStart(64,'0')),url=vector.replace(scope.indexName,'derived')+'/get_by_ids';
+    await read(url,{...init,body:JSON.stringify({ids:ids.slice(0,20)})});
+    await assert.rejects(read(url,{...init,body:JSON.stringify({ids})}),/scope_invalid/);
+    assert.equal(sent,1);assert.equal(events.length,2);
+  }
+});
 test('explicit derived index permits accounted identity metadata only, never vectors or mutations',async()=>{
   const derived=vector.replace(scope.indexName,'fixture-derived');
   for(const factory of [accountedPublicationReadFetch,accountedPublicationFetch]){
