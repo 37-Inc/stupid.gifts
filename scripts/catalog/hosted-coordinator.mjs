@@ -92,7 +92,10 @@ export function validateHostedProposal({bytes,sha256,runId,catalogRevision,summa
     if(!Array.isArray(summary)||summary.length!==ids.size)fail('review_summary');const seen=new Set();
     for(const product of summary){
       if(!product||!ids.has(product.publicId)||seen.has(product.publicId)||!ASIN.test(product.id)||typeof product.slug!=='string'
-        ||! /^[a-z0-9][a-z0-9-]*$/.test(product.slug)||!HASH.test(product.sourceFactsHash))fail('review_summary');seen.add(product.publicId);
+        ||! /^[a-z0-9][a-z0-9-]*$/.test(product.slug))fail('review_summary_identity');seen.add(product.publicId);
+      // Legacy facts may truthfully be unknown. The proposal already binds the
+      // complete current row; never invent facts merely to publish its update.
+      if(product.sourceFactsHash!==null&&!HASH.test(product.sourceFactsHash))fail('review_source_facts_hash');
       const publicFields=['publicTitle','description','imageUrl','publicAffiliateUrl'];
       if(publicFields.some(key=>product[key]!==undefined)){
         if(publicFields.some(key=>typeof product[key]!=='string'||!product[key].trim()))fail('review_copy');
