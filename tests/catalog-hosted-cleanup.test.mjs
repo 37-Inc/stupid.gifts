@@ -27,7 +27,8 @@ function fixture(){
   objects.set('runs/'+config.runId+'/manifest.json',{bytes:bytes({schemaVersion:1,runId:config.runId,codeSha:SOURCE,configSha256:hash(bytes(config)),retention:config.retention,
     scope,budgetCaps:{httpRequests:6000,sqlStatements:12000},createdAt:NOW})});
   const open=async options=>{opened++;assert.equal(options.repository,repository);assert.equal(options.runId,config.runId);assert.equal(options.codeSha,SOURCE);
-    return{readCheckpoint:async()=>({checkpoint:{phase:'finalized',owner:null}}),publicationSuccess:async()=>({original:true}),
+    return{readCheckpoint:async()=>({checkpoint:{phase:'finalized',owner:null}}),catalogSuccessor:async()=>({publication:{releaseId:config.runId}}),
+      publicationSuccess:async()=>{throw Error('Legacy migration marker is not routine acceptance');},
       purgeExpired:async()=>{purged++;return[{reference:'objects/registered-original.json'}];},retainedBodies:async()=>retained,close:async()=>{}};};
   return{runtime,record,repository,files,objects,open,pointer:()=>pointer,opened:()=>opened,purged:()=>purged,setRetained:v=>{retained=v;}};
 }
@@ -44,6 +45,14 @@ test('due housekeeping uses only original source/config; unexpired bodies retain
   assert.equal((await cleanupHostedRuns(f.runtime,checkout,{now:()=>DUE,open:f.open})).remaining,false);
   assert.equal(JSON.parse(f.pointer()).runs.length,0);assert.equal(f.purged(),2);
   assert.ok(f.files.has(f.runtime.care+'/runs/'+f.record.runKey+'/operator.json'));
+});
+
+test('routine housekeeping requires its accepted successor, not a legacy migration-only marker',async()=>{
+  const f=fixture();await registerHostedCleanup(f.runtime,f.record);
+  await assert.rejects(cleanupHostedRuns(f.runtime,async()=>f.repository,{now:()=>DUE,open:async options=>{
+    const w=await f.open(options);return{...w,catalogSuccessor:async()=>null};}}),/cleanup_identity/);
+  assert.equal(f.purged(),0);assert.equal(JSON.parse(f.pointer()).runs.length,1);
+  assert.equal((await cleanupHostedRuns(f.runtime,async()=>f.repository,{now:()=>DUE,open:f.open})).state,'cleaned');
 });
 test('failed or changed housekeeping leaves the exact registration available for retry, never substitutes source',async()=>{
   const f=fixture();await registerHostedCleanup(f.runtime,f.record);const before=f.pointer();

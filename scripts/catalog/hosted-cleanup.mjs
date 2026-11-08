@@ -63,7 +63,7 @@ export async function cleanupHostedRuns(runtime,checkout,{now=()=>new Date().toI
     if(editorial){
       if(editorial[2]!==ref.source.slice(0,8)||cp&&cp.checkpoint.owner!==null
         ||manifest.retention.reviewReference!=='catalog-automation-spec/homepage-v1')fail();
-    }else if(cp?.checkpoint.phase!=='finalized'||cp.checkpoint.owner!==null||!await workspace.publicationSuccess())fail();
+    }else if(cp?.checkpoint.phase!=='finalized'||cp.checkpoint.owner!==null||!await workspace.catalogSuccessor())fail();
     const purged=(await workspace.purgeExpired()).length,remaining=await workspace.retainedBodies();
     q.value.runs=q.value.runs.filter(r=>r.runId!==ref.runId);if(remaining)q.value.runs.push(ref);await save(runtime,q);
     return{state:'cleaned',runId:ref.runId,purged,remaining};
