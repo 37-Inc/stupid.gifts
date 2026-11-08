@@ -12,7 +12,7 @@ import {loadAutomationMerchandising,loadAutomationDiscoveryInputs} from './autom
 import {routineMerchandising} from './campaign-operator.mjs';
 import path from 'node:path';
 
-// Sole daily Codex operator; no hosted Cron or additional publisher. Normal reviewed driver owns every
+// Shared local/hosted operator; one active coordinator, never another publisher. The reviewed driver owns every
 // merchant phase, reservation, write, vector operation and publication.
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url)));
 const SOURCE=execFileSync('git',['rev-parse','HEAD'],{cwd:ROOT,encoding:'utf8'}).trim();

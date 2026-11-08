@@ -1,10 +1,16 @@
 # Stupid Gifts — Hosted catalog operations
 
 Implementation reference: [catalog automation specification](CATALOG_AUTOMATION_SPEC.md).
-Current rollout is manual-only. Committing this code does not move the active
-Codex timer, activate daily discovery, or authorize two production writers.
+After the accepted one-product canary and explicit policy activation, the single
+GitHub workflow owns daily care. The old Codex writing timer stays paused. Never
+run a local publisher while hosted care or a saved hosted publication is active.
 
 ## One application, one publisher
+
+The completed October24–25 editorial recovery/upload/finish CLIs and held-preview
+entrypoint are retired from maintained main. Their exact code remains in Git and
+the original frozen operators alongside the private receipts. They are not
+alternate daily commands; use the maintained same-run recovery path below.
 
 - `catalog:care` remains the maintained local/hosted operator. `code-only` is its
   owner-invoked serving-only route; it preserves the genuine catalog receipt and
@@ -53,6 +59,12 @@ Codex timer, activate daily discovery, or authorize two production writers.
   publication lease, exact dispatched version and atomic source/owner checks stay
   mandatory. Legacy dispatchers and explicit historical recoveries keep their
   existing timed-lease rules; uncertain uploads are never bypassed.
+- Completed hosted runs enter a small `cleanup-runs` housekeeping pointer before
+  their pending intent is cleared. Each existing wake revisits one due original
+  workspace using its immutable source/config and registered deadlines. Only
+  expired body/package bytes are purged; source bindings, controls and charges
+  remain. A cleanup failure retains its registration and alerts without blocking
+  a new catalog run. This is not another publisher or scheduled service.
 - Provider header/body timeouts exclude the coordinator's own durable journal
   reservation and settlement. Those writes retain their separate bounded R2
   transport and must finish before the caller releases ownership. A slow journal
@@ -70,8 +82,8 @@ Codex timer, activate daily discovery, or authorize two production writers.
   that observation. Core still rechecks the immutable policy, owner, full source,
   projection, prior receipt, watermark and cutoff before its atomic queue write.
   Arbitrary adapters retain their existing short observation deadlines.
-- Background work has a 330-minute process window within GitHub's six-hour job
-  ceiling, including cold restoration and full-catalog verification. This is not
+- Background work uses GitHub's six-hour job ceiling without a shorter child
+  process cutoff, including cold restoration and full-catalog verification. This is not
   an extra supplier/model allowance or a change to original content deadlines.
   Individual request timeouts and retries remain bounded. Track actual normal
   runtime and cold-restore overhead in the seven-cycle follow-up; slow runs need
@@ -123,12 +135,31 @@ when newer metadata is supplied.
 4. Verify its actual public identity, D1 receipt, resolved build, idle owner,
    successor, loaded photos/copy and representative QA-labelled flows. Resume an
    interrupted canary under the same identity; never replace its batch.
-5. Only after acceptance, activate the new policy and the same workflow's
+   A newer reviewed controller can use `catalog:care recover` only after the
+   original proposal is pinned and supplier phases are over. The original clean
+   ancestor source/config/owner and all reservations stay bound; no refetch.
+5. Only after acceptance and live QA, dispatch **activate** with that canary's
+   exact ASIN. This configuration-only action verifies its saved acceptance,
+   current public identity, D1 receipt, resolved build and idle owner, then
+   version-updates only the automation policy. It makes no product/provider
+   batch and never changes the accepted catalog pointer. Activate the same workflow's
    Pacific morning/evening wakes plus a bounded catch-up wake. Leave local writing
    off. If cutover fails, stop hosted writes, reconcile pending work, then restore
    local writing—not both. Seven unattended cycles belong to the observation Bead.
 
-The checked-in workflow currently has **no cron**. Do not claim it runs daily.
+For the initial API-editor quality check, manual **editorial** uses the same
+Luna/photo-backed optional homepage editor against the current accepted catalog.
+Inspect its actual saved edition before activation. It fetches no supplier batch,
+changes no products and does not publish or enable policy. It is not a recurring
+extra job; normal morning preparation reuses the same day's saved edition.
+
+The same workflow has Pacific-time wakes at 08:30 (full care), 20:30 (due photos)
+and 10:30 (one morning catch-up). GitHub's native IANA timezone setting handles
+daylight saving time, without duplicate seasonal wakes or application clock
+gates. Catch-up uses the same daily run key: completed work skips, pending work
+resumes, and a missed morning can start once. Schedules can be delayed; the
+independent first-week checkup is not a publisher.
+See [GitHub scheduling documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onschedule).
 Do not add another timer just to retry a pending publication. Usage estimates
 alert; actual provider throttling, timeouts, finite payloads and integrity checks
 remain. A missing usage report is unknown, not zero or a public-search cutoff.

@@ -14,7 +14,7 @@ const MAX_BYTES=32*1024*1024;
 const hash=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 const validEtag=(value:string)=>/^"[a-zA-Z0-9-]{1,128}"$/.test(value);
 const mutableKey=(key:string)=>/^runs\/[a-zA-Z0-9._-]+\/head\.json$/.test(key)
-  ||/^pointers\/(?:last-success|pending-run|operator-inputs)\.json$/.test(key);
+  ||/^pointers\/(?:last-success|pending-run|operator-inputs|cleanup-runs)\.json$/.test(key);
 const fail=(code:string):never=>{throw Error('catalog_object_store_'+code);};
 
 /** One private bucket/prefix; only scoped run-journal listing, no create-bucket, public URL or credential

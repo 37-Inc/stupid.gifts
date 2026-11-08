@@ -185,6 +185,8 @@ export interface RunWorkspace {
   /** Journal retention metadata BEFORE unlinking verified object bodies and
    * explicitly owned publication outputs; never imported history/other runs. */
   purgeExpired():Promise<WorkspaceStatus['expired']>;
+  /** Body-free housekeeping status; controls/history are never candidates. */
+  retainedBodies():Promise<boolean>;
 }
 const HASH=/^[a-f0-9]{64}$/;const KEY=/^[A-Za-z0-9._-]{1,100}$/;const REF=/^[A-Za-z0-9._:/-]{1,200}$/;
 const KINDS:Kind[]=['amazon-observation','embedding-response','phase','publication','checkpoint'];
@@ -1403,6 +1405,8 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       cleanPublicationBuild:(releaseId:string)=>serial(()=>cleanPublicationBuild(releaseId)),
       retainPublicationPackage:(releaseId:string,packageSha256:string)=>serial(()=>retainPublicationPackage(releaseId,packageSha256)),
       purgeExpired:()=>serial(purgeExpired),
+      retainedBodies:()=>serial(async()=>[...state.refs.keys(),...state.bodyRegistrations.keys()].some(digest=>!state.purged.has(digest))
+        ||[...state.publications.values()].some(p=>!p.purged)),
       // A live durable handle may release ONLY its independently verified local
       // locks after failed mirroring. Reopen reconciles remote CAS first; this
       // neither clears D1 ownership nor changes the uncertain journal/charges.

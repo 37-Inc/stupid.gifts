@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,HOSTED_OPERATOR_TIMEOUT_MS} from '../scripts/catalog/hosted-coordinator.mjs';
+import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
 
@@ -20,6 +20,7 @@ test('operator failure reports only the final safe machine code, never raw outpu
   assert.deepEqual(hostedOperatorFailure({stderr:'secret URL https://example.invalid/private\nrun_workspace_durable_missing\n',
     stdout:'private supplier body',message:'command with secret'}),{state:'attention',errorCode:'run_workspace_durable_missing'});
   assert.deepEqual(hostedOperatorFailure({stderr:'semantic_delta_pending\n'}),{state:'pending',errorCode:'semantic_delta_pending'});
+  assert.deepEqual(hostedOperatorFailure({stderr:'catalog_d1_identity_unavailable\n'}),{state:'pending',errorCode:'catalog_d1_identity_unavailable'});
   assert.deepEqual(hostedOperatorFailure({stderr:'vector_provider_failed\n'}),{state:'attention',errorCode:'vector_provider_failed'});
   for(const errorCode of ['vector_plan_incomplete','cohort_revision_changed','prune_vectors_unconfirmed','search_delta_pending'])
     assert.deepEqual(hostedOperatorFailure({stderr:errorCode+'\n'}),{state:'attention',errorCode});
@@ -46,6 +47,7 @@ function fixture(){
     checkout:async source=>{checkedOut.push(source);f.executingSource=source;return '/operators/'+source;},
     inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,config:f.config,approvalPin:f.approvalPin}),
     accepted:async()=>f.phase==='finalized'?f.accepted:null,
+    registerCleanup:async()=>{events.push('cleanup-register');},cleanup:async()=>{},
     invoke:async(directory,args)=>{
       calls.push(args);const command=args[0];events.push(command);
       if(command==='prepare'){assert.ok(events.indexOf('pending')<events.indexOf('prepare'));f.prepared=true;
@@ -63,6 +65,7 @@ test('one existing operator performs prepare/start/review/exact-SHA publish; poi
   const f=fixture(),result=await f.run();assert.equal(result.state,'accepted');
   assert.deepEqual(f.calls.map(args=>args[0]),['prepare','start','review','publish']);
   assert.deepEqual(f.events.filter(e=>['immutable','pending','clear'].includes(e)),['immutable','pending','clear']);
+  assert.ok(f.events.indexOf('cleanup-register')<f.events.indexOf('clear'));
   assert.deepEqual(JSON.parse(f.pointer()),{schemaVersion:1,pending:null});
   assert.deepEqual(JSON.parse(f.files.get(f.runtime.care+'/runs/scheduled-'+DAY+'/hosted-run.json')),
     {schemaVersion:1,runKey:'scheduled-'+DAY,source:SOURCE,day:DAY,kind:'full',inputsRef:ref});
@@ -75,6 +78,12 @@ test('pending intent survives interrupted prepare and resumes original source/da
   assert.deepEqual(f.checkedOut,[SOURCE,SOURCE]);assert.deepEqual(f.restored,[ref,ref]);
   assert.equal(f.events.filter(e=>e==='current-inputs').length,1);assert.ok(original);
   assert.ok(f.calls.every(args=>args.at(-1)==='scheduled-'+DAY));
+});
+test('old-run cleanup failure is advisory; lost cleanup registration preserves accepted pending work for bookkeeping-only retry',async()=>{
+  const f=fixture();
+  await assert.rejects(f.run({}, {cleanup:async()=>{throw Error('old cleanup unavailable');},registerCleanup:async()=>{throw Error('save unknown');}}),/save unknown/);
+  assert.equal(f.phase,'finalized');assert.ok(JSON.parse(f.pointer()).pending);const calls=f.calls.length;
+  assert.equal((await f.run()).state,'accepted');assert.equal(f.calls.length,calls);assert.equal(JSON.parse(f.pointer()).pending,null);
 });
 
 test('new reviewed controller uses recovery only for the original already-approved post-provider publication',async()=>{
@@ -129,7 +138,7 @@ test('provider credential failure or mismatched scope stops shadow without start
     assert.equal(f.pointer(),null);assert.equal(f.files.size,0);assert.deepEqual(f.calls,[]);
   }
 });
-for(const errorCode of ['semantic_delta_pending','publication_provider_unavailable'])test(`bounded ${errorCode} retry uses the same approved publication, never supplier/model phases again`,async()=>{
+for(const errorCode of ['semantic_delta_pending','publication_provider_unavailable','catalog_d1_identity_unavailable'])test(`bounded ${errorCode} retry uses the same approved publication, never supplier/model phases again`,async()=>{
   const f=fixture(),invoke=f.deps.invoke;let publishes=0;
   const result=await f.run({}, {invoke:async(directory,args)=>{
     if(args[0]==='publish'&&publishes++===0){f.calls.push(args);f.phase='publishing';f.approvalPin=hash(canonicalJson(f.proposal));return{state:'pending',errorCode};}
@@ -137,7 +146,7 @@ for(const errorCode of ['semantic_delta_pending','publication_provider_unavailab
   assert.equal(result.state,'accepted');assert.deepEqual(f.calls.map(args=>args[0]),['prepare','start','review','publish','publish']);
   assert.deepEqual(f.waits,[45000]);assert.equal(f.calls[3][1],f.calls[4][1]);
 });
-for(const errorCode of ['mutation_unknown','publication_activation_unknown','publication_upload_unknown','publication_read_scope_invalid'])test(`${errorCode} stays pending with no automatic retry, fresh run or acceptance claim`,async()=>{
+for(const errorCode of ['mutation_unknown','catalog_d1_result_unknown','publication_activation_unknown','publication_upload_unknown','publication_read_scope_invalid'])test(`${errorCode} stays pending with no automatic retry, fresh run or acceptance claim`,async()=>{
   const f=fixture(),invoke=f.deps.invoke,result=await f.run({}, {invoke:async(directory,args)=>{
     if(args[0]==='publish'){f.calls.push(args);return{state:'pending',errorCode};}return invoke(directory,args);}});
   assert.equal(result.state,'attention');assert.equal(result.errorCode,errorCode);assert.equal(f.waits.length,0);
@@ -203,11 +212,21 @@ test('dependency install has no credentials and application child receives only 
   const app=hostedCommandEnvironment(env);assert.equal(app.STUPID_GIFTS_CLOUDFLARE_API_TOKEN,'synthetic');assert.equal(app.STUPID_GIFTS_OPERATOR_MODE,'hosted');
   for(const key of ['STUPID_GIFTS_UNKNOWN_SECRET','OPENAI_API_KEY','AMAZON_KEY','GH_TOKEN','GITHUB_TOKEN','CATALOG_MODE'])assert.equal(app[key],undefined);
 });
-test('manual workflow is main-only, protected, serialized, pinned and has no cron/PR trigger',async()=>{
+test('editorial preview uses the same stable source checkout as routine care and cleanup',async()=>{
+  const code=await readFile(new URL('../scripts/catalog/hosted-coordinator.mjs',import.meta.url),'utf8');
+  assert.match(code,/const repository=await defaults\(runtime,process\.env\)\.checkout\(source\);\s*console\.log\(JSON\.stringify\(await previewHostedHomepage\(runtime,\{repository,source,day:/);
+  assert.doesNotMatch(code,/previewHostedHomepage\(runtime,\{repository:ROOT/);
+});
+test('one Pacific workflow remains main-only, protected, serialized and has no PR/push trigger',async()=>{
   const yaml=await readFile(new URL('../.github/workflows/catalog-manual.yml',import.meta.url),'utf8');
-  assert.match(yaml,/workflow_dispatch:/);assert.doesNotMatch(yaml,/\b(?:schedule|pull_request|push):/);
+  assert.match(yaml,/workflow_dispatch:/);assert.doesNotMatch(yaml,/\b(?:pull_request|push):/);
+  assert.match(yaml,/cron: '30 8 \* \* \*'/);assert.match(yaml,/cron: '30 20 \* \* \*'/);assert.match(yaml,/cron: '30 10 \* \* \*'/);
+  assert.equal((yaml.match(/timezone: America\/Los_Angeles/g)||[]).length,3);
+  assert.match(yaml,/inputs.mode \|\| \(github.event.schedule == '30 20 \* \* \*' && 'photos' \|\| 'full'\)/);
   assert.match(yaml,/group: catalog-production/);assert.match(yaml,/cancel-in-progress: false/);assert.match(yaml,/environment: Production/);
-  assert.match(yaml,/timeout-minutes: 360/);assert.equal(HOSTED_OPERATOR_TIMEOUT_MS,330*60_000);
+  assert.match(yaml,/timeout-minutes: 360/);
+  const source=await readFile(new URL('../scripts/catalog/hosted-coordinator.mjs',import.meta.url),'utf8');
+  assert.doesNotMatch(source.slice(source.indexOf('async invoke('),source.indexOf('async inspect(')),/\btimeout:/);
   assert.match(yaml,/if: github.ref == 'refs\/heads\/main'/);assert.match(yaml,/runs-on: ubuntu-24.04/);assert.match(yaml,/node-version: '22.23.1'/);
   assert.match(yaml,/persist-credentials: false/);assert.match(yaml,/apparmor_parser -r \.github\/catalog-bwrap.apparmor/);
   assert.doesNotMatch(yaml,/sysctl|--privileged|curl.*secret/i);assert.match(yaml,/npm ci --ignore-scripts/);

@@ -12,9 +12,6 @@ import {checkCloudflareRunner} from './check-cloudflare-runner.ts';
 
 const exec=promisify(execFile),HASH=/^[a-f0-9]{64}$/,SOURCE=/^[a-f0-9]{40}$/,ASIN=/^[A-Z0-9]{10}$/;
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url))),OPERATORS='/home/runner/stupid-gifts/operators';
-// Job-sized work may include a cold durable restore plus full catalog proofs.
-// Leave30min inside GitHub's six-hour ceiling for setup/acceptance/cleanup.
-export const HOSTED_OPERATOR_TIMEOUT_MS=330*60_000;
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===keys.split(',').sort().join(',');
 const fail=reason=>{throw Error('catalog_hosted_'+reason);};
@@ -77,6 +74,7 @@ export function hostedOperatorFailure(error){
   const codes=String(error.stderr??'').split('\n').map(line=>line.trim());
   if(codes.includes('semantic_delta_pending'))return{state:'pending',errorCode:'semantic_delta_pending'};
   const code=codes.findLast(value=>/^(?:routine|run_workspace|catalog_[a-z0-9]+|publication|weekly|vector_[a-z0-9]+|cohort|prune|owned_[a-z0-9]+|search_[a-z0-9]+)_[a-z0-9_]{1,100}$/.test(value));
+  if(code==='catalog_d1_identity_unavailable')return{state:'pending',errorCode:code}; // Initial GET only, before SQL dispatch.
   const causeCode=code==='run_workspace_journal_uncertain'?codes.findLast(value=>/^catalog_object_store_[a-z_]{1,80}$/.test(value)):null;
   return{state:'attention',errorCode:code??(error.killed?'catalog_hosted_operator_timeout':'catalog_hosted_operator_failed'),...(causeCode?{causeCode}:{})};
 }
@@ -116,6 +114,7 @@ function defaults(runtime,environment){
     currentInputs:()=>currentHostedInputs(runtime.durable),restoreInputs:ref=>restoreHostedInputs(runtime.durable,runtime.base,ref),
     shadowCheck:()=>checkHostedProviderShadow(runtime),
     async checkout(source){
+      console.log(JSON.stringify({state:'progress',step:'checkout',source}));
       const clean=hostedCommandEnvironment(environment,{credentials:false});
       await exec('git',['merge-base','--is-ancestor',source,environment.GITHUB_SHA],{cwd:ROOT,env:clean});
       const directory=path.join(OPERATORS,source);await mkdir(OPERATORS,{recursive:true,mode:0o700});
@@ -126,11 +125,13 @@ function defaults(runtime,environment){
       if(await git('status','--porcelain','--untracked-files=all'))fail('operator_source');return directory;
     },
     async invoke(directory,args){
+      console.log(JSON.stringify({state:'progress',step:'operator',command:args[0]}));
       try{const result=await exec(process.execPath,['--import','tsx','scripts/catalog/daily-operator.mjs',...args],{
-        cwd:directory,env:hostedCommandEnvironment(environment),timeout:HOSTED_OPERATOR_TIMEOUT_MS,maxBuffer:5*1024*1024});return parsedOutput(result.stdout);}
+        cwd:directory,env:hostedCommandEnvironment(environment),maxBuffer:5*1024*1024});return parsedOutput(result.stdout);}
       catch(error){return hostedOperatorFailure(error);}
     },
     async inspect(record,directory){
+      console.log(JSON.stringify({state:'progress',step:'inspect',runKey:record.runKey}));
       const operator=await optional(async()=>json(await runtime.state.bytes(stateFile(record.runKey)+'/operator.json')));
       if(!operator)return{prepared:false};
       if(operator.source!==record.source||operator.configPath!==stateFile(record.runKey)+'/config.json'||!HASH.test(operator.configSha256)
@@ -172,6 +173,8 @@ function defaults(runtime,environment){
       return{releaseId:p.intent.releaseId,receiptSha256:seal.publication.receiptSha256};
     },
     wait:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+    registerCleanup:async record=>(await import('./hosted-cleanup.mjs')).registerHostedCleanup(runtime,record),
+    cleanup:async checkout=>(await import('./hosted-cleanup.mjs')).cleanupHostedRuns(runtime,checkout),
   };
 }
 
@@ -194,6 +197,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
   if(!record){
     if(mode==='shadow'){const inputsRef=inputsReference(await deps.currentInputs());await deps.restoreInputs(inputsRef);await deps.checkout(source);
       return{state:'shadow',source,inputsVerified:true,workspace:'not_verified_readonly',pending:false,...shadowProviderFields(await deps.shadowCheck())};}
+    try{await deps.cleanup(deps.checkout);}catch{console.warn(JSON.stringify({notice:'catalog_hosted_cleanup_pending',catalogBlocked:false}));}
     const runKey=mode==='full'?'scheduled-'+capturedDay:mode==='photos'?'photos-'+capturedDay:'canary-'+capturedDay+'-'+canaryId;
     const file=runtime.care+'/runs/'+runKey+'/hosted-run.json';let bytes=await optional(()=>runtime.state.bytes(file));
     if(bytes){record=hostedRunRecord(json(bytes));if(record.runKey!==runKey)fail('run_record');resumed=true;}
@@ -204,7 +208,10 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
   await deps.restoreInputs(record.inputsRef);const directory=await deps.checkout(record.source);
   if(mode==='shadow')return{state:'shadow',source:record.source,runKey:record.runKey,inputsVerified:true,workspace:'not_verified_readonly',pending:true,
     ...shadowProviderFields(await deps.shadowCheck())};
-  const finish=async result=>{await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:null},pointerBytes);return{...result,runKey:record.runKey,kind:record.kind,resumed};};
+  const finish=async result=>{
+    if(result.state==='accepted')await deps.registerCleanup(record);
+    await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:null},pointerBytes);
+    return{...result,runKey:record.runKey,kind:record.kind,resumed};};
   const invoke=(command,extra=[])=>deps.invoke(directory,[command,...extra,'--run',record.runKey]);
   const publish=(status,sha)=>record.source!==source&&['freezing','publishing','attention','published'].includes(status.phase)
     ?deps.invoke(ROOT,['recover',sha,'--run',record.runKey]):invoke('publish',[sha]);
@@ -243,7 +250,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     if(result.state==='finalized')continue;
     if(result.reason==='awaiting_reviewed_approval')continue;
     // publication_provider_unavailable is GET-only; uncertain writes stay held.
-    if(result.state==='pending'&&['semantic_delta_pending','not_visible','publication_provider_unavailable'].includes(result.errorCode)&&visibilityRetries++<8){
+    if(result.state==='pending'&&['semantic_delta_pending','not_visible','publication_provider_unavailable','catalog_d1_identity_unavailable'].includes(result.errorCode)&&visibilityRetries++<8){
       const pending=await deps.inspect(record,directory);
       if(pending.approvalPin&&['draining','freezing','publishing'].includes(pending.phase)){await deps.wait(45000);continue;}
     }
@@ -260,10 +267,20 @@ async function main(){
   if((await exec('git',['rev-parse','HEAD'],{cwd:ROOT,env:hostedCommandEnvironment(process.env,{credentials:false})})).stdout.trim()!==source)fail('reviewed_source');
   const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit'})
     .formatToParts(new Date()).map(p=>[p.type,p.value]));
+  if(mode==='activate'){
+    const {activateHostedPolicy}=await import('./hosted-policy.mjs');
+    console.log(JSON.stringify(await activateHostedPolicy(runtime,canaryId)));return;
+  }
+  if(mode==='editorial'){
+    if(canaryId)fail('invocation');
+    const {previewHostedHomepage}=await import('./hosted-policy.mjs');
+    const repository=await defaults(runtime,process.env).checkout(source);
+    console.log(JSON.stringify(await previewHostedHomepage(runtime,{repository,source,day:`${parts.year}-${parts.month}-${parts.day}`})));return;
+  }
   const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),source,day:`${parts.year}-${parts.month}-${parts.day}`,runtime});
   console.log(JSON.stringify(result));if(result.state==='attention'){console.error('::warning::Catalog run remains pending; resume its existing identity.');process.exitCode=1;}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)main().catch(error=>{
-  const code=/^catalog_(?:hosted|operator_state|object_store)_[a-z_]{1,100}$/.test(error.message)?error.message:'catalog_hosted_coordinator_failed';
+  const code=/^(?:catalog_(?:hosted|operator_state|object_store)|run_workspace|routine|weekly|publication)_[a-z0-9_]{1,100}$/.test(error.message)?error.message:'catalog_hosted_coordinator_failed';
   console.error(JSON.stringify({state:'attention',errorCode:code,pendingPreserved:true}));process.exitCode=1;
 });
