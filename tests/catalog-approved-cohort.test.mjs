@@ -11,7 +11,7 @@ import { claimMutationOwnership, readMutationOwner, releaseMutationOwnership,mut
 import {permanentSourceRows,permanentSourceInventory} from '../lib/catalog/freeze-permanent-catalog.ts';
 import { createProjectionPacket, projectionQueries, getRevisionProductsByPublicIds } from '../lib/catalog/d1.ts';
 import { validateCatalogSnapshot } from '../lib/catalog/snapshot.ts';
-import { createSealedSnapshotEnvelope, reconstructD1Snapshot } from '../scripts/catalog/export-d1-snapshot.ts';
+import { createSealedSnapshotEnvelope, reconstructD1Snapshot,readAutomationOperationReceipts } from '../scripts/catalog/export-d1-snapshot.ts';
 import { canonicalJson, sha256 } from '../scripts/catalog/migration.ts';
 import { createD1CatalogMaintenanceStore, loadMaintenanceVectorPayload } from '../scripts/catalog/maintenance-d1.ts';
 import { maintenanceEmbeddingText } from '../scripts/catalog/maintenance-state.ts';
@@ -30,6 +30,17 @@ import { createVectorizeRestAdapters } from '../scripts/catalog/vectorize-rest.t
 import { accountedPublicationReadFetch } from '../scripts/catalog/publication-read-fetch.ts';
 
 const AT = Date.parse('2026-10-20T12:00:00.000Z');
+test('atomic multi-product receipt is read once when resuming automated catalog work',async t=>{
+  const f=await setup(t);
+  await f.markUnavailable([id(1),id(2)]);
+  const {owner,request}=await f.freeze([uuid(1),uuid(2)]),ids=request.approval.changes.map(c=>c.operationId);
+  assert.equal(ids.length,2);assert.equal(new Set(ids).size,1);
+  const before=f.sql.prepare('SELECT total_changes() n').get().n;
+  const rows=await readAutomationOperationReceipts(f.db,owner,ids,'weekly-run',true);
+  assert.equal(rows.length,1);assert.equal(rows[0].operation_id,ids[0]);assert.equal(JSON.parse(rows[0].changes_json).length,2);
+  assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);
+  await assert.rejects(readAutomationOperationReceipts(f.db,owner,[...ids,'invalid'],'weekly-run',true),/read_bounds/);
+});
 const at = ms => new Date(AT+ms).toISOString();
 const scope = { environment:'staging',indexName:'test-approved-cohort' };
 const id = n => `B${String(n).padStart(9,'0')}`;
