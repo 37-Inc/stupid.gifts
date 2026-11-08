@@ -854,6 +854,14 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         :storedRow?JSON.parse(storedRow.manifest_json):null;
       if(!stored||canonicalJson(stored)!==canonicalJson(control.intent)
         ||sha256(canonicalJson(receipt()))!==control.receiptSha256)throw new Error('publication_receipt_mismatch');
+      if(routineReceiptOnly){
+        verifyUploadedVersion(await api.version(control.versionReference!),config,control.versionReference!,control);
+        const deployed=await api.deployed();
+        if(!deployed||deployed.version!==control.versionReference||deployed.marker!==control.deploymentMarker
+          ||control.deploymentId!==null&&deployed.id!==control.deploymentId)throw Error('publication_activation_pending');
+        if(!matchesIdentity(await api.identity(),control.intent!))throw Error('publication_identity_mismatch');
+        if(canonicalJson(await api.deployed())!==canonicalJson(deployed))throw Error('publication_activation_pending');
+      }
       return{state:'published',owner:null,releaseId:config.releaseId,receiptSha256:control.receiptSha256,receipt:receipt()};
     }
     if(!reviewed&&!control.permit&&actual?.phase==='activating'&&buildRow?.state==='activating'&&buildRow.lease_token===control.build.token
