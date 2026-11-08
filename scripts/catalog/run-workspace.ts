@@ -876,6 +876,8 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
       if(loaded.count!==head.sequence+1)fail('durable_local_fork');
       const tail=await readJson(join(directory,'events',eventName(loaded.count,loaded.head!))) as RecordFile;
       if(tail.parent!==head.sha256)fail('durable_local_fork');await commit(tail);
+      const next={sequence:loaded.count,sha256:loaded.head};
+      if(!same(local,next))await replaceHead(directory,local,next);
     }
     const current=await get('head.json');
     if(!Buffer.from(current.bytes).equals(remote.bytes)||current.etag!==remote.etag)fail('durable_head_changed');
