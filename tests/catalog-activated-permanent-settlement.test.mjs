@@ -181,6 +181,15 @@ test('expired permanent telemetry completes once with real fence/receipt and dis
   assert.equal(again.state,'finalized');assert.deepEqual(f.scopeRow(),before);
 });
 
+test('routine completion finishes from permanent controls without a recovery-budget authorization',async t=>{
+  const f=await settlementFixture(t);delete f.options.finish;
+  f.config.cadence={day:'2026-10-26',featuredIds:[]};
+  const result=await settleActivatedPermanentWeekly(f.options);
+  assert.equal(result.state,'finalized');assert.deepEqual(result.budget,f.budget);assert.equal(f.scopeRow().phase,'idle');
+  const reads=[...f.reads],before=f.scopeRow();await settleActivatedPermanentWeekly(f.options);
+  assert.deepEqual(f.reads,reads);assert.deepEqual(f.scopeRow(),before);
+});
+
 test('telemetry commit and idle release lost local acknowledgments resume without another generation or write',async t=>{
   for(const checkpoint of [1,2,3])await t.test(`before checkpoint ${checkpoint}`,async sub=>{
     const f=await settlementFixture(sub);f.failBeforeCheckpoint(checkpoint);

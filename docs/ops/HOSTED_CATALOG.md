@@ -28,6 +28,12 @@ Codex timer, activate daily discovery, or authorize two production writers.
   parent hash, source, owner and atomic head transition is still verified.
   Accounting errors retain safe workspace codes rather than describing every
   storage failure as an exhausted provider budget.
+- An already-activated permanent catalog completes from its typed catalog/control
+  evidence and current provider state, not expired supplier payloads or a new
+  recovery-budget grant. Verify the immutable version/package marker, live release,
+  genuine D1 receipt/build and owner; do not rebuild, upload or activate again.
+  Finish first, then run the registered source-bound cleanup. A finalized retry
+  uses its accepted successor without reopening expired phase bodies.
 - Restored R2 bytes are a hash-verified local cache, not a second durable copy.
   Avoid per-record disk flushes during restore; original remote ACKs and all new
   reservations/appends retain their durable-before-dispatch ordering.
