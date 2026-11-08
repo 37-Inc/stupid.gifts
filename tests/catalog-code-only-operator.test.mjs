@@ -25,7 +25,8 @@ test('actual daily CLI reaches code-only argument validation without a top-level
   for(const command of ['status','recover']){
     const result=spawnSync(process.execPath,['--import','tsx','scripts/catalog/daily-operator.mjs','code-only',command],
       {cwd:root,env:{HOME:os.tmpdir(),PATH:process.env.PATH},encoding:'utf8',timeout:10000});
-    assert.equal(result.status,1);assert.match(result.stderr,/^code_only_arguments\s*$/);
+    assert.equal(result.status,1);assert.deepEqual(result.stderr.trim().split(/\r?\n/),[
+      JSON.stringify({state:'operator_error',errorCode:'code_only_arguments'}),'code_only_arguments']);
     assert.doesNotMatch(result.stderr,/unsettled top-level await/);assert.equal(result.stdout,'');}
 });
 

@@ -76,7 +76,7 @@ export function hostedOperatorFailure(error){
   // The maintained operator emits a typed, already-redacted record. Do not
   // maintain a second namespace allowlist which hides newly introduced errors.
   let tagged;for(const line of codes)try{const value=JSON.parse(line);
-    if(exact(value,'state,errorCode')&&value.state==='operator_error'&&/^[a-z][a-z0-9_]{0,149}$/.test(value.errorCode))tagged=value.errorCode;
+    if(exact(value,'state,errorCode')&&value.state==='operator_error'&&typeof value.errorCode==='string'&&/^[a-z][a-z0-9_]{0,149}$/.test(value.errorCode))tagged=value.errorCode;
   }catch{/* Never echo unstructured child output. */}
   const code=tagged??codes.findLast(value=>/^(?:routine|run_workspace|catalog_[a-z0-9]+|publication|weekly|vector_[a-z0-9]+|cohort|prune|owned_[a-z0-9]+|search_[a-z0-9]+|semantic_delta|permanent)_[a-z0-9_]{1,100}$/.test(value));
   if(code==='semantic_delta_pending')return{state:'pending',errorCode:code};
