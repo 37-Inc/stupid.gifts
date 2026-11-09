@@ -9,6 +9,7 @@ import {encodePublicationIntent} from '../lib/catalog/publication.ts';
 import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
 import {executePublication} from '../scripts/catalog/publish-release.ts';
 import {prunedVectorIds,prunedVectorPlan} from '../lib/catalog/prune-existing-revision.ts';
+import {activatedPermanentSummary} from '../scripts/catalog/activated-permanent-control.ts';
 
 // Local proof only: real telemetry/fence SQLite, purpose-limited expired-control
 // seam, and exact technical native/publication rows. No external provider calls.
@@ -160,11 +161,12 @@ async function settlementFixture(t){
   const permitOwner={...scope,token:'original-activation-owner',generation:17,epoch:441,phase:'activating',ownerReference:RUN,operationKey:HASH,capturedAt:OLD};
   const publication={stage:'published',intent:{releaseId:RELEASE},receiptSha256:HASH,permit:{mutationOwner:permitOwner}};
   let current={sha256:'3'.repeat(64),checkpoint:{phase:'published',owner:null,pins:{},phaseComplete:{},control:{publication}}};
-  const summary={counts:{refreshed:8},timingsMs:{maintenance:1},usage:{requests:1},warnings:[]};
+  const summary={counts:{refreshed:8},timingsMs:{maintenance:1},usage:{requests:1,
+    models:{'text-embedding-3-small':{operations:{embedding:5},tokens:128}}},warnings:[]};
   const seal={kind:'synthetic-existing-body-free-successor'},budget={httpRequests:400,sqlStatements:900,knownRowsRead:1841389,knownRowsWritten:14444,unconfirmedRequests:1};
   const reads=[];let writes=0,failBefore=0;
   const ws={async readCheckpoint(options){assert.equal(options.controlOnly,true);return structuredClone(current);},
-    async readPermanentFinalization(label){reads.push(label);assert.ok(['revision','summary'].includes(label));return label==='summary'?structuredClone(summary):{};},
+    async readPermanentFinalization(label){reads.push(label);assert.ok(['revision','summary'].includes(label));return label==='summary'?activatedPermanentSummary(structuredClone(summary)):{};},
     async writeControlCheckpoint(expected,patch){assert.equal(expected,current.sha256);writes++;
       if(failBefore===writes)throw Error('synthetic crash before local checkpoint');
       current={sha256:sha256(`checkpoint-${writes}`),checkpoint:{...current.checkpoint,...structuredClone(patch)}};return structuredClone(current);},
@@ -224,4 +226,13 @@ test('completed telemetry with drifted counts or foreign owner cannot be adopted
     await assert.rejects(settleActivatedPermanentWeekly(f.options),/weekly_finalization_mismatch|weekly_finalize_owner|weekly_release_uncertain/);
     assert.notEqual(f.cp().checkpoint.phase,'finalized');assert.equal(f.sqlite.prepare('SELECT count(*) n FROM catalog_maintenance_operations').get().n,1);
   });
+});
+
+test('permanent summary accepts only numeric embedding counters, never vector payloads or malformed counts',()=>{
+  const summary={counts:{},timingsMs:{},usage:{models:{'text-embedding-3-small':{operations:{embedding:5}}}},warnings:[]};
+  assert.deepEqual(activatedPermanentSummary(summary),summary);
+  for(const invalid of [[.1,.2],{values:[.1,.2]},'raw-vector',-1,1.5,NaN,Infinity,Number.MAX_SAFE_INTEGER+1]){
+    const changed=structuredClone(summary);changed.usage.models['text-embedding-3-small'].operations.embedding=invalid;
+    assert.throws(()=>activatedPermanentSummary(changed),/permanent_control/);
+  }
 });
