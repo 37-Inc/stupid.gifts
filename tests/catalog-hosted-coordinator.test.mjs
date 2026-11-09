@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure} from '../scripts/catalog/hosted-coordinator.mjs';
+import {PassThrough} from 'node:stream';
+import {once} from 'node:events';
+import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
 import {routineReviewProduct,routineRecoveryPhase} from '../scripts/catalog/daily-operator.mjs';
@@ -14,6 +16,18 @@ const missing=()=>{const e=Error('missing');e.code='ENOENT';throw e;};
 const providerReport=()=>({schemaVersion:1,kind:'cloudflare-runner-readiness',environment:CATALOG_SCOPE.environment,
   resources:{accountId:CATALOG_SCOPE.accountId,databaseId:CATALOG_SCOPE.databaseId,databaseName:CATALOG_SCOPE.databaseName,indexName:CATALOG_SCOPE.indexName},
   status:'checks_passed_execution_unavailable',executionAvailable:false,issues:[],metrics:{requests:5,reportedRowsRead:201,reportedRowsWritten:0}});
+
+test('publication progress streams split lines before exit and never echoes raw data or secrets',async()=>{
+  const value={state:'publication_progress',phase:'package',completedBytes:1024,completedFiles:1,totalFiles:4,blocks:1,elapsedMs:17};
+  const expected={state:'progress',step:'publication',phase:'package',completedBytes:1024,completedFiles:1,totalFiles:4,blocks:1,elapsedMs:17};
+  assert.deepEqual(hostedPublicationProgress(JSON.stringify(value)),expected);
+  for(const invalid of ['private supplier body',JSON.stringify({...value,token:'secret'}),JSON.stringify({...value,phase:'arbitrary'}),
+    JSON.stringify({...value,completedBytes:-1}),JSON.stringify({...value,completedFiles:5})])assert.equal(hostedPublicationProgress(invalid),undefined);
+  const input=new PassThrough(),seen=[],reader=hostedProgressReader(input,event=>seen.push(event)),closed=once(reader,'close'),line=JSON.stringify(value);
+  input.write(line.slice(0,20));assert.deepEqual(seen,[]);
+  input.write(line.slice(20)+'\nprivate output\n'+JSON.stringify({...value,token:'secret'})+'\n');
+  assert.deepEqual(seen,[expected]);input.end();await closed;
+});
 
 test('operator failure reports only the final safe machine code, never raw output or command arguments',()=>{
   assert.deepEqual(hostedOperatorFailure({stderr:'catalog_object_store_unavailable\nrun_workspace_journal_uncertain\n'}),

@@ -1,5 +1,6 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import {createInterface} from 'node:readline';
 import {createHash} from 'node:crypto';
 import {lstat,mkdir,readFile,realpath} from 'node:fs/promises';
 import path from 'node:path';
@@ -69,6 +70,19 @@ function parsedOutput(stdout){
     if(value&&(typeof value.state==='string'||SOURCE.test(value.source)&&HASH.test(value.configSha256)&&typeof value.runId==='string'))records.push(value);}catch{/* never echo raw child output */}
   if(!records.length)fail('operator_output');return records.at(-1);
 }
+/** Stream only typed numeric progress. Raw child output stays private. */
+export function hostedPublicationProgress(line){
+  if(typeof line!=='string'||line.length>1024)return;
+  let value;try{value=JSON.parse(line);}catch{return;}
+  const metrics=['completedBytes','completedFiles','totalFiles','blocks','elapsedMs'];
+  if(!exact(value,'state,phase,'+metrics.join(','))||value.state!=='publication_progress'||value.phase!=='package'
+    ||metrics.some(k=>!Number.isSafeInteger(value[k])||value[k]<0)||value.completedFiles>value.totalFiles)return;
+  return{state:'progress',step:'publication',phase:'package',...Object.fromEntries(metrics.map(k=>[k,value[k]]))};
+}
+export function hostedProgressReader(stream,emit){
+  const reader=createInterface({input:stream,crlfDelay:Infinity});
+  reader.on('line',line=>{const value=hostedPublicationProgress(line);if(value)emit(value);});return reader;
+}
 /** Child diagnostics are machine codes only, never command lines, provider
  * bodies or raw output (which may contain credentials). */
 export function hostedOperatorFailure(error){
@@ -135,9 +149,13 @@ function defaults(runtime,environment){
     },
     async invoke(directory,args){
       console.log(JSON.stringify({state:'progress',step:'operator',command:args[0]}));
-      try{const result=await exec(process.execPath,['--import','tsx','scripts/catalog/daily-operator.mjs',...args],{
-        cwd:directory,env:hostedCommandEnvironment(environment),maxBuffer:5*1024*1024});return parsedOutput(result.stdout);}
+      let progress;
+      try{const child=exec(process.execPath,['--import','tsx','scripts/catalog/daily-operator.mjs',...args],{
+        cwd:directory,env:hostedCommandEnvironment(environment),maxBuffer:5*1024*1024});
+        progress=hostedProgressReader(child.child.stdout,value=>console.log(JSON.stringify(value)));
+        const result=await child;return parsedOutput(result.stdout);}
       catch(error){return hostedOperatorFailure(error);}
+      finally{progress?.close();}
     },
     async inspect(record,directory){
       console.log(JSON.stringify({state:'progress',step:'inspect',runKey:record.runKey}));

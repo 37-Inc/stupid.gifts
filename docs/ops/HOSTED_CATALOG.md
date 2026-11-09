@@ -84,6 +84,15 @@ alternate daily commands; use the maintained same-run recovery path below.
 - Restored R2 bytes are a hash-verified local cache, not a second durable copy.
   Avoid per-record disk flushes during restore; original remote ACKs and all new
   reservations/appends retain their durable-before-dispatch ordering.
+- Blob/package transfers retain the original 256KiB chunks and hashes. A blob
+  registers its chunk retention in one journal record, transfers at most sixteen
+  immutable chunks concurrently, then attaches them in one record only after
+  every transfer ACK. Its manifest is still last. Old single-chunk records stay
+  readable; use the maintained compatible reader for new batched records.
+  Failed transfers join before returning, retain the original registrations and
+  resume the same bytes/deadlines, never a new supplier/model phase.
+  Numeric package bytes/files/block counts and elapsed time stream to the job
+  while it runs; raw child output, product bodies and credentials never do.
 - Routine background publishing keeps its original build token and attempt
   history under the unchanged, non-expiring mutation-owner fence. Saving a large
   package does not require another timed build claim. The original source cutoff,

@@ -108,6 +108,8 @@ type BlobChunk={schemaVersion:1;type:'run-workspace-chunk';blobSha256:string;blo
 type CheckpointView = {sha256:string;checkpoint:CheckpointControl};
 type Event = {type:'artifact';ref:ArtifactRef} | {type:'checkpoint';ref:ArtifactRef;previous:string|null;control:CheckpointControl}
   | {type:'body-registered';artifact:PurgedArtifact}
+  | {type:'blob-bodies';artifacts:PurgedArtifact[]}
+  | {type:'blob-parts';refs:ArtifactRef[]}
   | {type:'execution-adoption';adoption:ExecutionAdoption}
   | {type:'control';sha256:string;previous:string;control:CheckpointControl}
   | {type:'purge';artifact:PurgedArtifact;purgedAt:string}
@@ -521,6 +523,16 @@ function apply(state:State,event:Event,dry=false) {
       ||state.purged.size)fail('execution_adoption_binding');
     if(!dry){state.execution=structuredClone(a);state.refs.set(a.contexts.ref.sha256,structuredClone(a.contexts.ref));}
   }
+  else if(event.type==='blob-bodies'){
+    if(!exact(event,['type','artifacts'])||!Array.isArray(event.artifacts)||!event.artifacts.length
+      ||new Set(event.artifacts.map(a=>a?.ref?.sha256)).size!==event.artifacts.length)fail('body_registration');
+    for(const artifact of event.artifacts)apply(state,{type:'body-registered',artifact},dry);
+  }
+  else if(event.type==='blob-parts'){
+    if(!exact(event,['type','refs'])||!Array.isArray(event.refs)||!event.refs.length
+      ||new Set(event.refs.map(r=>r?.sha256)).size!==event.refs.length)fail('reference');
+    for(const ref of event.refs){if(!state.bodyRegistrations.has(ref?.sha256))fail('durable_body_unregistered');apply(state,{type:'artifact',ref},dry);}
+  }
   else if(event.type==='body-registered'){
     if(!exact(event,['type','artifact'])||state.bodyRegistrations.has(event.artifact.ref.sha256))fail('body_registration');
     purgeIdentity(event.artifact,state);if(!dry)state.bodyRegistrations.set(event.artifact.ref.sha256,event.artifact);
@@ -818,16 +830,22 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
   }
   async function commit(record:RecordFile) {
     const event=record.event,refs=event.type==='artifact'||event.type==='checkpoint'?[event.ref]
-      :event.type==='execution-adoption'?[event.adoption.contexts.ref]:[];
-    for(const ref of refs){artifactRef(ref);const registration=registrations.get(ref.sha256);
-      if(!registration)fail('durable_body_unregistered');
-      const body=await loadStored(directory,ref,(await readManifest(directory,input)).manifest);
-      if(registration.storedSha256!==sha256(canonicalJson(body)))fail('body_registration');
-      await put(ref.reference,await readBytes(join(directory,ref.reference)));}
+      :event.type==='blob-parts'?event.refs:event.type==='execution-adoption'?[event.adoption.contexts.ref]:[];
+    let cursor=0;const failures:unknown[]=[],manifest=refs.length?(await readManifest(directory,input)).manifest:null;
+    await Promise.all(Array.from({length:Math.min(16,refs.length)},async()=>{
+      while(cursor<refs.length&&!failures.length){const ref=refs[cursor++];try{artifactRef(ref);const registration=registrations.get(ref.sha256);
+          if(!registration)fail('durable_body_unregistered');
+          const body=await loadStored(directory,ref,manifest!);
+          if(registration.storedSha256!==sha256(canonicalJson(body)))fail('body_registration');
+          await put(ref.reference,await readBytes(join(directory,ref.reference)));
+        }catch(error){failures.push(error);}}
+    }));
+    if(failures.length)throw failures[0];
     const digest=sha256(canonicalJson(record));
     await put('events/'+eventName(record.sequence,digest),encoded(record));
     remote=await cas(remote.etag,{sequence:record.sequence,sha256:digest});
     if(event.type==='body-registered')registrations.set(event.artifact.ref.sha256,event.artifact);
+    if(event.type==='blob-bodies')for(const artifact of event.artifacts)registrations.set(artifact.ref.sha256,artifact);
   }
   if(create){
     await put('manifest.json',await readBytes(join(directory,'manifest.json')));
@@ -1050,7 +1068,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
         ||value.persistent?.request.codeSha!==(state.execution?.effective.codeSha??manifest.codeSha)
         ||value.persistent.request.environment!==manifest.scope.environment)fail('catalog_successor');return value;
     }
-    async function put(value:unknown,kind:Kind,observedAt:string,reuseOriginal=false,publication?:PublicationDirectories){
+    async function prepareBody(value:unknown,kind:Kind,observedAt:string,reuseOriginal=false,publication?:PublicationDirectories){
       if(state.success)fail('publication_completed');
       const ref=refFor(value);let sealed=stored(value,kind,observedAt,manifest,publication);
       if(reuseOriginal)try{const previous=await loadStored(directory,ref,manifest);if(previous.kind!==kind)fail('kind');sealed=previous;}
@@ -1058,12 +1076,29 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       boundPublicationBody(sealed,state);fresh(sealed,now());
       await immutable(join(directory,ref.reference),sealed);
       const readback=await loadStored(directory,ref,manifest);fresh(readback,now());
+      return{ref,sealed:readback,artifact:{ref,...retentionIdentity(readback),storedSha256:sha256(canonicalJson(readback))}};
+    }
+    async function put(value:unknown,kind:Kind,observedAt:string,reuseOriginal=false,publication?:PublicationDirectories){
+      const {ref,sealed,artifact}=await prepareBody(value,kind,observedAt,reuseOriginal,publication);
       if(durability){
-        const artifact={ref,...retentionIdentity(readback),storedSha256:sha256(canonicalJson(readback))},registration=state.bodyRegistrations.get(ref.sha256);
+        const registration=state.bodyRegistrations.get(ref.sha256);
         if(registration){if(!same(registration,artifact))fail('body_registration');}
         else await append({type:'body-registered',artifact});
       }
       if(!state.refs.has(ref.sha256))await append({type:'artifact',ref});usableUntil=Math.min(usableUntil,Date.parse(sealed.expiresAt));usableAfter=Math.max(usableAfter,Date.parse(sealed.observedAt));return structuredClone(ref);
+    }
+    /** One registration/activation per blob, not per 256KiB piece. Every
+     * original piece/hash/deadline is unchanged; the manifest is still last.
+     * The remote commit joins all body ACKs before advancing its one head. */
+    async function putBlobParts(parts:BlobChunk[],kind:Kind,observedAt:string,publication?:PublicationDirectories){
+      const artifacts:PurgedArtifact[]=[],refs:ArtifactRef[]=[];
+      for(const part of parts){const {ref,sealed,artifact}=await prepareBody(part,kind,observedAt,true,publication),registered=state.bodyRegistrations.get(ref.sha256);
+        if(registered){if(!same(registered,artifact))fail('body_registration');}else artifacts.push(artifact);
+        if(!state.refs.has(ref.sha256))refs.push(ref);
+        usableUntil=Math.min(usableUntil,Date.parse(sealed.expiresAt));usableAfter=Math.max(usableAfter,Date.parse(sealed.observedAt));
+      }
+      if(artifacts.length)await append({type:'blob-bodies',artifacts});
+      if(refs.length)await append({type:'blob-parts',refs});
     }
     async function registered(ref:ArtifactRef){artifactRef(ref);if(!state.refs.has(ref.sha256))fail('unregistered_artifact');if(state.purged.has(ref.sha256))fail('expired');const v=await loadStored(directory,ref,manifest);boundPublicationBody(v,state);
       const r=state.bodyRegistrations.get(ref.sha256);if(r&&r.storedSha256!==sha256(canonicalJson(v)))fail('body_registration');return v;}
@@ -1187,13 +1222,22 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       // retention before continuing; never refresh their age on a later retry.
       for(const digest of descriptor.parts){let previous:Stored;
         try{previous=await loadStored(directory,blobRef(digest),manifest);}
-        catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;if(complete)fail('blob_missing');continue;}
+        catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;if(complete)fail('blob_missing');
+          // Even a transfer with no body ACK already registered its ORIGINAL
+          // retention. Reconstruct those clocks, never the retry's timestamp.
+          const registration=state.bodyRegistrations.get(digest);
+          if(registration){const retained=stored(descriptor,registration.kind,registration.observedAt,manifest,publication);
+            if(!same(retentionIdentity(retained),retentionIdentity(registration))
+              ||original&&!same(retentionIdentity(retained),retentionIdentity(original)))fail('blob_retention');
+            fresh(retained,now());original??=retained;}
+          continue;}
         if(!original)original=previous;
         if(!same(retentionIdentity(previous),retentionIdentity(original)))fail('blob_retention');fresh(previous,now());
       }
       original??=stored(descriptor,o.kind,o.observedAt,manifest,publication);
       if(original.kind!==o.kind)fail('kind');fresh(original,now());
-      for(const part of parts)await put(part,o.kind,original.observedAt,true,publication);
+      if(durability)await putBlobParts(parts,o.kind,original.observedAt,publication);
+      else for(const part of parts)await put(part,o.kind,original.observedAt,true,publication);
       await put(descriptor,o.kind,original.observedAt,true,publication);
       // A manifest is published LAST, after every part has durable independent
       // readback. Re-read the aggregate before acknowledging a usable blob.
@@ -1222,12 +1266,17 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       await usable();
       const {inventoryPublicationPackage}=await import('./publish-release.ts'),root=packagePath(releaseId),inventory=await inventoryPublicationPackage(root);
       if(sha256(canonicalJson(inventory))!==packageSha256)fail('publication_package');
-      const parts:ArtifactRef[]=[],files:RetainedPackage['files']=[];let segments:Buffer[]=[],length=0,offset=0;
+      const parts:ArtifactRef[]=[],files:RetainedPackage['files']=[],names=Object.keys(inventory).sort(),started=Date.now();
+      let segments:Buffer[]=[],length=0,offset=0,retained=0;
+      const progress=()=>console.info(JSON.stringify({state:'publication_progress',phase:'package',completedBytes:retained,
+        completedFiles:files.filter(f=>f.offset+f.byteLength<=retained).length,totalFiles:names.length,blocks:parts.length,elapsedMs:Date.now()-started}));
+      progress();
       const capacity=WORKSPACE_BLOB_LIMITS.bytes-256;
       async function flush(){if(!length)return;
         const header=encoded({schemaVersion:1,releaseId,part:parts.length});if(header.length>256)fail('publication_package');
-        parts.push(await putBlob(Buffer.concat([header,...segments]),{kind:'publication',observedAt:p!.retention.observedAt},p!.retention));segments=[];length=0;}
-      for(const name of Object.keys(inventory).sort()){
+        parts.push(await putBlob(Buffer.concat([header,...segments]),{kind:'publication',observedAt:p!.retention.observedAt},p!.retention));
+        retained+=length;segments=[];length=0;progress();}
+      for(const name of names){
         if(!safePackagePath(name))fail('publication_package');const bytes=await readBytes(join(root,name),WORKSPACE_BLOB_LIMITS.bytes);
         if(byteHash(bytes)!==inventory[name])fail('publication_package');
         files.push({path:name,offset,byteLength:bytes.length,sha256:inventory[name]});offset+=bytes.length;

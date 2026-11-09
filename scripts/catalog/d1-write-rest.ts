@@ -48,7 +48,8 @@ export function catalogD1FailureDetail(value:unknown):FailureDetail|undefined {
   return detail;
 }
 class CatalogD1RequestError extends Error {
-  constructor(code:string,readonly catalogDiagnostic:FailureDetail){super(code);}
+  readonly catalogDiagnostic:FailureDetail;
+  constructor(code:string,catalogDiagnostic:FailureDetail){super(code);this.catalogDiagnostic=catalogDiagnostic;}
 }
 export interface D1AccountingState {
   httpRequests:number;sqlStatements:number;knownRowsRead:number;knownRowsWritten:number;unconfirmedRequests:number;
