@@ -57,7 +57,7 @@ function fixture(){
     async put(file,value){events.push('immutable');const body=bytes(value);if(files.has(file))assert.deepEqual(body,files.get(file));files.set(file,body);return body;},
     async pointer(name,file,value,expected){assert.equal(name,'pending-run');assert.deepEqual(pointer,expected);events.push(value.pending?'pending':'clear');pointer=bytes(value);return pointer;}}};
   const f={runtime,files,events,calls,waits,restored,checkedOut,prepared:false,phase:null,approvalPin:undefined,executingSource:null,
-    config:{runId:'exact-run',catalogRevision:'exact-run'},activeRef:ref,
+    config:{runId:'exact-run',catalogRevision:'exact-run',publication:{releaseId:'actual-release'}},activeRef:ref,
     accepted:{releaseId:'actual-release',receiptSha256:HASH},pointer:()=>pointer};
   const proposal={schemaVersion:1,runId:f.config.runId,catalogRevision:f.config.catalogRevision,
     changes:[{publicId:'public-gift',operationId:'actual-op',inputSha256:HASH,productSha256:HASH,displaySha256:HASH}]};
@@ -68,7 +68,7 @@ function fixture(){
   f.deps={currentInputs:async()=>{events.push('current-inputs');return f.activeRef;},restoreInputs:async input=>{restored.push(input);},
     shadowCheck:async()=>{events.push('provider-read-check');return providerReport();},
     checkout:async source=>{checkedOut.push(source);f.executingSource=source;return '/operators/'+source;},
-    inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,config:f.config,configSha256:HASH,approvalPin:f.approvalPin}),
+    inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,config:f.config,configSha256:HASH,approvalPin:f.approvalPin,publication:f.publication}),
     accepted:async()=>f.phase==='finalized'?f.accepted:null,
     registerCleanup:async()=>{events.push('cleanup-register');},cleanup:async()=>{},
     invoke:async(directory,args)=>{
@@ -253,6 +253,32 @@ for(const errorCode of ['mutation_unknown','catalog_d1_result_unknown','publicat
   assert.equal(result.state,'attention');assert.equal(result.errorCode,errorCode);assert.equal(f.waits.length,0);
   assert.ok(JSON.parse(f.pointer()).pending);assert.equal(f.calls.filter(a=>a[0]==='start').length,1);
   assert.equal(f.calls.filter(a=>a[0]==='publish').length,1);
+});
+test('lost terminal D1 response retries only existing permanent receipt bookkeeping once',async()=>{
+  const f=fixture(),invoke=f.deps.invoke;let attempts=0;
+  const result=await f.run({}, {invoke:async(directory,args)=>{
+    if(args[0]==='publish'&&attempts++===0){f.calls.push(args);f.phase='published';f.approvalPin=hash(canonicalJson(f.proposal));
+      f.publication={stage:'published',receiptSha256:HASH,intent:{releaseId:'actual-release',nextExpiry:null}};
+      return{state:'attention',errorCode:'catalog_d1_result_unknown'};}
+    return invoke(directory,args);}});
+  assert.equal(result.state,'accepted');assert.deepEqual(f.waits,[45000]);
+  assert.deepEqual(f.calls.map(a=>a[0]),['prepare','start','review','publish','publish']);assert.equal(f.calls[3][1],f.calls[4][1]);
+});
+for(const condition of ['missing-receipt','wrong-release','finite','unconfirmed','repeated-unknown'])test(`terminal recovery does not broaden ${condition} authority`,async()=>{
+  const f=fixture();let attempts=0;
+  const result=await f.run({}, {invoke:async(_directory,args)=>{
+    if(args[0]!=='publish')return f.deps.invoke(_directory,args);
+    f.calls.push(args);attempts++;f.phase='published';f.approvalPin=hash(canonicalJson(f.proposal));
+    f.publication={stage:'published',receiptSha256:HASH,intent:{releaseId:'actual-release',nextExpiry:null}};
+    if(condition==='missing-receipt')delete f.publication.receiptSha256;
+    if(condition==='wrong-release')f.publication.intent.releaseId='another-release';
+    if(condition==='finite')f.publication.intent.nextExpiry='2026-11-06T14:00:00Z';
+    if(condition==='unconfirmed')f.publication.stage='activating';
+    return{state:'attention',errorCode:'catalog_d1_result_unknown'};
+  }});
+  assert.equal(result.state,'attention');assert.equal(result.phase,'published');assert.ok(JSON.parse(f.pointer()).pending);
+  assert.equal(attempts,condition==='repeated-unknown'?2:1);assert.equal(f.waits.length,condition==='repeated-unknown'?1:0);
+  assert.equal(f.calls.filter(a=>a[0]==='start').length,1);
 });
 test('visibility retries are finite and leave the same publication pending without a new provider run',async()=>{
   const f=fixture(),invoke=f.deps.invoke;

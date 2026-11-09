@@ -40,6 +40,10 @@ alternate daily commands; use the maintained same-run recovery path below.
   genuine D1 receipt/build and owner; do not rebuild, upload or activate again.
   Finish first, then run the registered source-bound cleanup. A finalized retry
   uses its accepted successor without reopening expired phase bodies.
+  A lost D1 response after a published permanent receipt gets one same-run
+  bookkeeping retry. It first inspects the saved published receipt; the normal
+  finalizer then reads back the completed run and exact owner. Unconfirmed
+  uploads/activations and earlier unknown writes still stop for readback.
 - Routine completion uses the same automation authority and permanent-display
   rule as normal publishing: finite overlays may retain their original clocks
   above cleared permanent fallbacks. Never treat a photo deadline as catalog

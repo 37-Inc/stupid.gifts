@@ -249,7 +249,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     const bytes=await runtime.state.bytes(runtime.care+'/runs/'+record.runKey+'/reviewed-proposal.json');
     return validateHostedProposal({bytes,sha256:hash(bytes),runId:status.config.runId,catalogRevision:status.config.catalogRevision,approvalPin:status.approvalPin});
   };
-  let visibilityRetries=0,transitions=0,lastProgress;
+  let visibilityRetries=0,transitions=0,lastProgress,terminalRecoveryRetried=false;
   const observeProgress=status=>{
     const key=JSON.stringify([status.prepared,status.started,status.phase,status.owner?.generation,status.owner?.epoch]);
     // Bound a stalled operation, not the number of gifts in the saved cohort.
@@ -292,6 +292,17 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     else return{state:'attention',runKey:record.runKey,phase:status.phase,errorCode:'catalog_hosted_checkpoint_requires_attention'};
     if(result.state==='finalized')continue;
     if(result.reason==='awaiting_reviewed_approval')continue;
+    if(result.errorCode==='catalog_d1_result_unknown'&&!terminalRecoveryRetried){
+      const terminal=await deps.inspect(record,directory),p=terminal.publication;
+      if(terminal.phase)result={...result,phase:terminal.phase};
+      // Only an already-receipted permanent publication may retry bookkeeping.
+      // The normal finalizer independently reads back the completed run/owner;
+      // it cannot repeat upload, activation, suppliers or model work.
+      if(terminal.phase==='published'&&terminal.approvalPin&&p?.stage==='published'&&HASH.test(p.receiptSha256??'')
+        &&p.intent?.releaseId===terminal.config.publication.releaseId&&p.intent?.nextExpiry===null){
+        terminalRecoveryRetried=true;await deps.wait(45000);continue;
+      }
+    }
     // publication_provider_unavailable is GET-only; uncertain writes stay held.
     if(result.state==='pending'&&['semantic_delta_pending','not_visible','publication_provider_unavailable','catalog_d1_identity_unavailable'].includes(result.errorCode)){
       const pending=await deps.inspect(record,directory);
