@@ -35,7 +35,7 @@ jobs:
       - run: node --import tsx --test --test-name-pattern="acknowledged indexing waits in the same driver|prepared freezing revision reuses|atomic multi-product receipt" tests/catalog-cloudflare-weekly.test.mjs tests/catalog-approved-cohort.test.mjs
       - run: node --import tsx --test tests/catalog-d1-write-rest.test.mjs tests/catalog-maintenance-d1.test.mjs tests/catalog-daily-operator.test.mjs tests/catalog-publication-recovery-budget.test.mjs
       - run: node --import tsx --test --test-name-pattern="run enumeration|killed process" tests/catalog-purge-workspaces.test.mjs tests/catalog-run-workspace.test.mjs
-      - run: node --import tsx --test --test-name-pattern="routine activated permanent|routine metadata completion|routine permanent completion|routine completion finishes|routine permanent successor" tests/catalog-run-workspace.test.mjs tests/catalog-permanent-freeze.test.mjs tests/catalog-activated-permanent-settlement.test.mjs
+      - run: node --import tsx --test --test-name-pattern="routine activated permanent|routine metadata completion|routine permanent completion|routine completion finishes|routine completion retains|routine permanent successor|telemetry commit and idle|completed telemetry with drifted|permanent summary accepts" tests/catalog-run-workspace.test.mjs tests/catalog-permanent-freeze.test.mjs tests/catalog-activated-permanent-settlement.test.mjs
       - run: node --import tsx --test --test-name-pattern="routine background publication|background activation requires" tests/catalog-publish-release.test.mjs
       - run: npm run test:catalog-availability
       - run: npm run test:homepage

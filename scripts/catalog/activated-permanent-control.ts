@@ -116,7 +116,11 @@ export function activatedPermanentSummary(value:unknown):Record<string,unknown>{
     if(typeof v==='string'&&/^[a-zA-Z0-9_.:/+-]{0,200}$/.test(v)&&!v.includes('://'))return;
     if(Array.isArray(v)){if(v.length>100)fail();v.forEach(item=>walk(item,depth+1));return;}
     if(v&&typeof v==='object'&&Object.keys(v).length<=100){for(const [key,entry]of Object.entries(v)){
-      if(!/^[a-zA-Z0-9_.:-]{1,100}$/.test(key)||/^(?:sourceFacts|source_facts|source_record_json|nativeBase64|embedding|title|description|products|candidates)$/.test(key))fail();
+      // Model telemetry counts embedding operations; it does not contain vector
+      // values. Keep raw objects/arrays/text excluded without rejecting a count.
+      const embeddingCount=key==='embedding'&&Number.isSafeInteger(entry)&&Number(entry)>=0;
+      if(!/^[a-zA-Z0-9_.:-]{1,100}$/.test(key)
+        ||/^(?:sourceFacts|source_facts|source_record_json|nativeBase64|embedding|title|description|products|candidates)$/.test(key)&&!embeddingCount)fail();
       walk(entry,depth+1);
     }return;}fail();
   };

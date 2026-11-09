@@ -331,6 +331,18 @@ test('routine activated permanent completion needs no budget grant and never rev
   assert.equal((await resumed.budget()).unconfirmedRequests,1);
 });
 
+test('routine completion retains numeric embedding operation telemetry through reopen without reviving provider bodies',async t=>{
+  const {w,f,summary,complete}=await permanentControlFixture(t,{routine:true,summaryMutate:s=>{
+    s.usage.models={'text-embedding-3-small':{operations:{embedding:5},tokens:128}};
+  }});
+  const before=await w.budget();
+  assert.deepEqual(await w.readPermanentFinalization('summary'),summary);
+  await assert.rejects(w.readArtifact(complete),/expired/);
+  await w.close();const resumed=await f.open({mode:'resume'});
+  assert.deepEqual(await resumed.readPermanentFinalization('summary'),summary);
+  assert.deepEqual(await resumed.budget(),before);
+});
+
 test('permanent preactivation control is tied to the unchanged freezing owner, not a fabricated activation permit',async t=>{
   const {value,current}=await permanentControlFixture(t),p=structuredClone(current.checkpoint.control.publication);
   const owner={...p.permit.mutationOwner,phase:'freezing'};p.permit=null;

@@ -44,6 +44,8 @@ alternate daily commands; use the maintained same-run recovery path below.
   bookkeeping retry. It first inspects the saved published receipt; the normal
   finalizer then reads back the completed run and exact owner. Unconfirmed
   uploads/activations and earlier unknown writes still stop for readback.
+  Numeric embedding-operation telemetry is a count, not an expired vector body;
+  permanent completion accepts that counter while rejecting raw vectors/text.
 - Routine completion uses the same automation authority and permanent-display
   rule as normal publishing: finite overlays may retain their original clocks
   above cleared permanent fallbacks. Never treat a photo deadline as catalog
