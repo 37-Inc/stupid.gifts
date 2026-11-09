@@ -254,6 +254,15 @@ for(const errorCode of ['mutation_unknown','catalog_d1_result_unknown','publicat
   assert.ok(JSON.parse(f.pointer()).pending);assert.equal(f.calls.filter(a=>a[0]==='start').length,1);
   assert.equal(f.calls.filter(a=>a[0]==='publish').length,1);
 });
+test('typed response-size diagnostics survive the child boundary without raw SQL or credentials',()=>{
+  const diagnostic={stage:'response',reason:'response_bytes',dispatched:true,statementCount:1,requestBytes:180,
+    requestSha256:HASH,httpStatus:200,responseBytes:638425,responseLimit:524288};
+  const result=hostedOperatorFailure({stderr:JSON.stringify({state:'operator_error',errorCode:'catalog_d1_result_unknown',
+    diagnostic:{...diagnostic,sql:'PRIVATE SQL',token:'PRIVATE TOKEN'}})});
+  assert.deepEqual(result,{state:'attention',errorCode:'catalog_d1_result_unknown',diagnostic});
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE|SQL|TOKEN/);
+});
+
 test('lost terminal D1 response retries only existing permanent receipt bookkeeping once',async()=>{
   const f=fixture(),invoke=f.deps.invoke;let attempts=0;
   const result=await f.run({}, {invoke:async(directory,args)=>{
@@ -274,7 +283,7 @@ test('a finalized checkpoint after a lost response is accepted without another p
   }});
   assert.equal(result.state,'accepted');assert.equal(f.calls.filter(a=>a[0]==='publish').length,1);assert.deepEqual(f.waits,[45000]);
 });
-for(const condition of ['missing-receipt','wrong-release','finite','unconfirmed','repeated-unknown'])test(`terminal recovery does not broaden ${condition} authority`,async()=>{
+for(const condition of ['missing-receipt','wrong-release','finite','unconfirmed','response-bound','repeated-unknown'])test(`terminal recovery does not broaden ${condition} authority`,async()=>{
   const f=fixture();let attempts=0;
   const result=await f.run({}, {invoke:async(_directory,args)=>{
     if(args[0]!=='publish')return f.deps.invoke(_directory,args);
@@ -284,7 +293,7 @@ for(const condition of ['missing-receipt','wrong-release','finite','unconfirmed'
     if(condition==='wrong-release')f.publication.intent.releaseId='another-release';
     if(condition==='finite')f.publication.intent.nextExpiry='2026-11-06T14:00:00Z';
     if(condition==='unconfirmed')f.publication.stage='activating';
-    return{state:'attention',errorCode:'catalog_d1_result_unknown'};
+    return{state:'attention',errorCode:'catalog_d1_result_unknown',...(condition==='response-bound'?{diagnostic:{reason:'response_bytes'}}:{})};
   }});
   assert.equal(result.state,'attention');assert.equal(result.phase,'published');assert.ok(JSON.parse(f.pointer()).pending);
   assert.equal(attempts,condition==='repeated-unknown'?2:1);assert.equal(f.waits.length,condition==='repeated-unknown'?1:0);

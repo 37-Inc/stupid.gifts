@@ -31,7 +31,7 @@ export function routineLimits(plan){
 const load=name=>import(pathToFileURL(ROOT+'/'+name).href);
 const {canonicalJson,sha256}=await load('scripts/catalog/migration.ts');
 const {runCloudflareWeekly,weeklyCommandSummary,validateCloudflareWeeklyConfig}=await load('scripts/catalog/run-cloudflare-weekly.ts');
-const {createCatalogD1ReadOnlyRest}=await load('scripts/catalog/d1-write-rest.ts');
+const {createCatalogD1ReadOnlyRest,catalogD1FailureDetail}=await load('scripts/catalog/d1-write-rest.ts');
 const {openRunWorkspace,openPublicationBuildCleanup}=await load('scripts/catalog/run-workspace.ts');
 const {verifyPublicationSemanticCatalog}=await load('scripts/catalog/publish-release.ts');
 const {mutationAssertion}=await load('lib/catalog/mutation-fence.ts');
@@ -458,7 +458,8 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1]
     if(/^catalog_object_store_[a-z_]{1,80}$/.test(cause.message))console.error(cause.message);
   const code=error instanceof Error?error.message:'';
   const errorCode=/^[a-z][a-z0-9_]{0,149}$/.test(code)?code:'catalog_care_failed';
-  console.error(JSON.stringify({state:'operator_error',errorCode}));
+  const diagnostic=catalogD1FailureDetail(error);
+  console.error(JSON.stringify({state:'operator_error',errorCode,...(diagnostic?{diagnostic}:{})}));
   console.error(errorCode);process.exitCode=1;
 });
 

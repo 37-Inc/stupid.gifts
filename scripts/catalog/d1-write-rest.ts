@@ -30,17 +30,18 @@ type Param = string | number | null;
 type Query = { sql:string;params:readonly Param[] };
 type Result<T = Record<string,unknown>> = { success:true;results:T[];meta:Record<string,number|boolean> };
 type FailureDetail = { stage:'preflight'|'request'|'response';reason:string;dispatched:boolean;
-  statementCount:number;requestBytes:number;requestSha256:string;httpStatus?:number;providerCodes?:number[];
+  statementCount:number;requestBytes:number;requestSha256:string;httpStatus?:number;providerCodes?:number[];responseBytes?:number;responseLimit?:number;
   phase?:string;method?:string;productIds?:string[] };
 /** Numeric/request-identity evidence only. Never include SQL, values, tokens or provider messages. */
 export function catalogD1FailureDetail(value:unknown):FailureDetail|undefined {
   const v=(value instanceof Error?(value as Error&{catalogDiagnostic?:unknown}).catalogDiagnostic:value) as FailureDetail;
   if(!v||!['preflight','request','response'].includes(v.stage)
-    ||!['batch_statements','request_bytes','accounting_reservation','http_error','provider_error','invalid_response','timeout','cancelled','transport_error'].includes(v.reason)
+    ||!['batch_statements','request_bytes','response_bytes','accounting_reservation','http_error','provider_error','invalid_response','timeout','cancelled','transport_error'].includes(v.reason)
     ||typeof v.dispatched!=='boolean'||![v.statementCount,v.requestBytes].every(n=>Number.isSafeInteger(n)&&n>=0)
     ||!/^[a-f0-9]{64}$/.test(v.requestSha256))return;
   const detail:FailureDetail={stage:v.stage,reason:v.reason,dispatched:v.dispatched,statementCount:v.statementCount,requestBytes:v.requestBytes,requestSha256:v.requestSha256};
   if(Number.isInteger(v.httpStatus)&&(v.httpStatus??0)>=100&&(v.httpStatus??0)<=599)detail.httpStatus=v.httpStatus;
+  for(const key of ['responseBytes','responseLimit'] as const)if(Number.isSafeInteger(v[key])&&Number(v[key])>=0)detail[key]=v[key];
   if(Array.isArray(v.providerCodes)&&v.providerCodes.length<=8&&v.providerCodes.every(n=>Number.isSafeInteger(n)&&n>=0))detail.providerCodes=[...v.providerCodes];
   if(typeof v.phase==='string'&&/^phase-\d+$/.test(v.phase))detail.phase=v.phase;
   if(['upsertProduct','recordEditorialEvent','markConfirmedMissingUnavailable'].includes(v.method??''))detail.method=v.method;
@@ -301,7 +302,10 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
         if(controller.signal.aborted||!response.body){void response.body?.cancel().catch(()=>{});throw new Error();}
         reader=response.body.getReader();const chunks:Uint8Array[]=[];let size=0;
         try{for(;;){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;
-          if(size>limits.responseBytes){await reader.cancel();throw new Error();}chunks.push(part.value);}}
+          if(size>limits.responseBytes){await reader.cancel();
+            if(detail)throw new CatalogD1RequestError('catalog_d1_result_unknown',{...detail,stage:'response',dispatched:true,
+              reason:'response_bytes',httpStatus,responseBytes:size,responseLimit:limits.responseBytes});
+            throw new Error();}chunks.push(part.value);}}
         finally{reader.releaseLock();}
         const envelope:unknown=JSON.parse(Buffer.concat(chunks).toString('utf8'));
         if(!response.ok||!object(envelope)||envelope.success!==true||!Object.hasOwn(envelope,'result')){
