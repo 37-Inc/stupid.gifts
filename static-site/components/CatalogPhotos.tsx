@@ -4,7 +4,6 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { ProductImage } from "@/components/ProductImage";
 import { PHOTO_PLACEHOLDER, photoVersion, validatePhotoIndex, validatePhotoShard } from "../lib/photo-shard";
 import { Icon } from "./Icon";
-import { shortProductName } from "../lib/product-presentation";
 
 const PhotoContext = createContext<{ indexPath: string | null; photoSlots: readonly string[];
   editorialDisclosures: Readonly<Record<string, string>>;
@@ -41,10 +40,6 @@ export function CatalogPhotos({ indexPath, photoSlots = [], editorialDisclosures
   children: React.ReactNode;
 }) {
   return <PhotoContext.Provider value={{ indexPath, photoSlots, editorialDisclosures }}>{children}</PhotoContext.Provider>;
-}
-
-export function CatalogTitle({ fallback }: { source: string; id: string; fallback: string }) {
-  return shortProductName(fallback);
 }
 
 export function CatalogDescription({ fallback, card = false }: {

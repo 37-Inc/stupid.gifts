@@ -18,9 +18,13 @@ test("merchant names get a concise, factual presentation without changing the so
   assert.equal(shortProductName("The Moon Ring®© | Prank ring box"), "The Moon Ring");
   assert.equal(shortProductName("Small mug, red ceramic coffee mug"), "Small mug, red ceramic coffee mug");
   const long = "A useful ceramic coffee mug with a very long retailer title and a whole assortment of search terms attached";
-  const name = shortProductName(long);
-  assert.ok(name.length <= 76);
-  assert.ok(name.endsWith("…"));
+  assert.equal(shortProductName(long), long);
+  for (const dots of ["...", "…"]) {
+    assert.equal(shortProductName("The Art of Drawing Optical Illusions: How to draw mind-bending " + dots), "The Art of Drawing Optical Illusions");
+    assert.equal(shortProductName("Funny Cooking Apron with " + dots), "Funny Cooking Apron");
+    assert.equal(shortProductName("A mysterious unfinished " + dots), "A mysterious unfinished " + dots);
+  }
+  assert.equal(shortProductName("Star Trek: The Next Generation"), "Star Trek: The Next Generation");
   assert.equal(shortProductName("Original fictional gift"), "Original fictional gift");
   assert.equal(shortProductName("21st Birthday Gifts for Her Him - Happy Prank Toilet Paper - Party Supplies"), "Happy Prank Toilet Paper");
   assert.equal(shortProductName("Gag Gifts - White Elephant Gag Gifts Calendar 2027, Nature Butts"), "White Elephant Gag Gifts Calendar 2027");

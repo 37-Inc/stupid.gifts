@@ -39,7 +39,7 @@ test("each published guide has an intentional, accessible line icon instead of a
 test("real gift cards have no repeated collection label or Unicode arrow; fixtures stay clearly labeled", () => {
   const { ProductCard } = load("components/ProductCard.tsx", {
     "./Icon": load("components/Icon.tsx"),
-    "./CatalogPhotos": { CatalogCardArt: () => null, CatalogDisclosure: () => null, CatalogDescription: () => null, CatalogTitle: ({ fallback }) => fallback },
+    "./CatalogPhotos": { CatalogCardArt: () => null, CatalogDisclosure: () => null, CatalogDescription: () => null },
     "../lib/selection": { isIllustrative: () => false },
   });
   const product = { id: "owned-test", slug: "owned-test", source: "amazon", title: "Owned test gift",
@@ -53,6 +53,10 @@ test("real gift cards have no repeated collection label or Unicode arrow; fixtur
   assert.doesNotMatch(html, /data-analytics-outbound/);
   assert.match(renderToStaticMarkup(ProductCard({ product: { ...product, illustrative: true } })),
     /Illustrative fixture · not for sale/);
+  const book = { ...product, title: "The Art of Drawing Optical Illusions: How to draw mind-bending ..." };
+  const spin = renderToStaticMarkup(ProductCard({ product: book, lead: true, context: "random_gift" }));
+  assert.match(spin, /<h2><a[^>]*>The Art of Drawing Optical Illusions<\/a><\/h2>/);
+  assert.doesNotMatch(spin, /mind-bending/);
 });
 
 test("every initial, load-more and search card renders its image, title and short description", () => {
@@ -146,12 +150,15 @@ test("new site-authored packaging disclosure matches only the exact Amazon ASIN,
   }
   for (const patch of [{ source: "etsy" }, { id: "B0757WW6KX" }, { id: "unknown", slug: product.slug }])
     assert.doesNotMatch(render(createElement(ProductCard, { product: { ...product, ...patch } })), /No fire kit included/);
+  const book = { ...product, id: "1633223558", slug: "draw-your-own-illusions",
+    title: "The Art of Drawing Optical Illusions: How to draw mind-bending ...",
+    affiliateUrl: "https://www.amazon.com/dp/1633223558?tag=goose-gifts-37-20" };
   const { default: Gift } = load("app/gifts/[slug]/page.product.tsx", {
     "../../../components/Icon": load("components/Icon.tsx"),
     "next/navigation": { notFound() { throw new Error("Unexpected notFound"); } },
     "../../../components/CatalogPhotos": photos,
     "@/lib/gift-page-schema": { buildGiftPageSchema: () => ({}) },
-    "../../../lib/catalog": { catalog: { products: [product], dataKind: "catalog" }, relatedGifts: () => [] },
+    "../../../lib/catalog": { catalog: { products: [product, book], dataKind: "catalog" }, relatedGifts: () => [] },
     "../../../lib/selection": { isIllustrative: () => false },
     "../../../lib/metadata": { previewMetadata: () => ({}), PREVIEW_ORIGIN: "https://stupid.gifts" },
     "../../../components/ProductCard": { ProductCard: () => null },
@@ -160,6 +167,11 @@ test("new site-authored packaging disclosure matches only the exact Amazon ASIN,
   const detail = render(await Gift({ params: Promise.resolve({ slug: product.slug }) }));
   assert.equal(detail.split(note).length - 1, 1);
   assert.match(detail, /<h1>Owned identity label<\/h1><p class="product-disclosure">/);
+  const bookDetail = render(await Gift({ params: Promise.resolve({ slug: book.slug }) }));
+  assert.match(bookDetail, /<h1>The Art of Drawing Optical Illusions<\/h1>/);
+  assert.doesNotMatch(bookDetail, /Retailer listing name|mind-bending/);
+  assert.ok(bookDetail.includes(book.affiliateUrl));
+  assert.match(bookDetail, /earn a commission/);
   assert.equal(hash(), before);
   assert.doesNotMatch(fs.readFileSync(new URL("../static-site/components/CatalogPhotos.tsx", import.meta.url), "utf8"), /B0757WW6KB|No fire kit/);
 });
@@ -173,11 +185,11 @@ test("home is the browse destination with the approved heading and no redundant 
   assert.match(read("components/CatalogFeed.tsx"), /Load more/);
 });
 
-test("clamped card titles draw the keyboard focus ring outside the clipping heading", () => {
+test("headings wrap without clipping titles or keyboard focus outlines", () => {
   const css = fs.readFileSync(new URL("../static-site/app/styles.css", import.meta.url), "utf8");
-  assert.match(css, /\.product-card h2\s*\{[^}]*overflow:\s*hidden/s);
-  assert.match(css, /\.product-card h2:has\(a:focus-visible\)\s*\{\s*outline:\s*2px solid var\(--accent\);\s*outline-offset:\s*5px;/);
-  assert.match(css, /\.product-card h2 a:focus-visible\s*\{\s*outline:\s*none;/);
+  assert.doesNotMatch(css, /-webkit-line-clamp|\.product-card h2 a:focus-visible\s*\{\s*outline:\s*none/);
+  assert.match(css, /\.product-card h2,\s*\.detail-copy h1\s*\{\s*overflow-wrap: anywhere/);
+  assert.match(css, /a:focus-visible,[^{]+\{\s*outline: 2px solid/);
 });
 
 test("Load more failure preserves visible gifts and the cursor for a successful retry", async () => {
