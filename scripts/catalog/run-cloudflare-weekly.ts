@@ -437,7 +437,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         send:dependencies.publication?.fetch??dependencies.fetch,command:dependencies.publication?.command}),
       observationFetch:accountedPublicationReadFetch(ws,observationSend,networkScope)};
     let saved=await ws.readCheckpoint({controlOnly:true});
-    const routineFinalization=Boolean(config.cadence&&saved?.checkpoint.control?.publication?.permit
+    const routineFinalization=Boolean(config.cadence&&saved?.checkpoint.phase!=='finalized'&&saved?.checkpoint.control?.publication?.permit
       &&saved.checkpoint.control.publication.intent?.nextExpiry===null&&resolving(saved.checkpoint));
     const permanentFinalization=routineFinalization||Boolean(finish&&(await ws.budgetRowsReadCeiling()!==null||!adoption));
     if(finish?.terminalReceiptOnly&&!permanentFinalization)throw Error('weekly_terminal_scope_required');
