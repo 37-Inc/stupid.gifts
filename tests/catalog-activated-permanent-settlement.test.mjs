@@ -189,6 +189,7 @@ test('expired permanent telemetry completes once with real fence/receipt and dis
   const finish=JSON.parse(f.sqlite.prepare('SELECT finish_json FROM catalog_run_telemetry').get().finish_json);
   assert.equal(finish.counts.publication.releaseId,RELEASE);assert.equal(finish.counts.refreshed,8);assert.equal(f.run().status,'completed');
   assert.equal(f.sqlite.prepare('SELECT count(*) n FROM catalog_maintenance_operations').get().n,1);
+  assert.equal(f.sql.some(query=>query.includes('FROM catalog_run_items')),false,'completion does not load per-item history');
   assert.deepEqual(result.budget,f.budget);assert.deepEqual(result.catalogSeal,f.seal);assert.deepEqual(f.reads,['revision','summary']);
   assert.equal(f.sql.some(query=>/\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+(?:products|catalog_public_products|vector_sync_outbox|catalog_build_requests|publication_outbox)\b/i.test(query)),false);
   const before=f.scopeRow(),again=await settleActivatedPermanentWeekly(f.options);

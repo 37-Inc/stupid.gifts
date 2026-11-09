@@ -92,14 +92,18 @@ export function hostedOperatorFailure(error){
   const codes=String(error.stderr??'').split('\n').map(line=>line.trim());
   // The maintained operator emits a typed, already-redacted record. Do not
   // maintain a second namespace allowlist which hides newly introduced errors.
-  let tagged;for(const line of codes)try{const value=JSON.parse(line);
-    if(exact(value,'state,errorCode')&&value.state==='operator_error'&&typeof value.errorCode==='string'&&/^[a-z][a-z0-9_]{0,149}$/.test(value.errorCode))tagged=value.errorCode;
+  let tagged,diagnostic;for(const line of codes)try{const value=JSON.parse(line);
+    if(exact(value,'state,errorCode'+(Object.hasOwn(value,'diagnostic')?',diagnostic':''))&&value.state==='operator_error'
+      &&typeof value.errorCode==='string'&&/^[a-z][a-z0-9_]{0,149}$/.test(value.errorCode)){
+      tagged=value.errorCode;diagnostic=catalogD1FailureDetail(value.diagnostic);
+    }
   }catch{/* Never echo unstructured child output. */}
   const code=tagged??codes.findLast(value=>/^(?:routine|run_workspace|catalog_[a-z0-9]+|publication|weekly|vector_[a-z0-9]+|cohort|prune|owned_[a-z0-9]+|search_[a-z0-9]+|semantic_delta|permanent)_[a-z0-9_]{1,100}$/.test(value));
   if(code==='semantic_delta_pending')return{state:'pending',errorCode:code};
   if(code==='catalog_d1_identity_unavailable')return{state:'pending',errorCode:code}; // Initial GET only, before SQL dispatch.
   const causeCode=code==='run_workspace_journal_uncertain'?codes.findLast(value=>/^catalog_object_store_[a-z_]{1,80}$/.test(value)):null;
-  return{state:'attention',errorCode:code??(error.killed?'catalog_hosted_operator_timeout':'catalog_hosted_operator_failed'),...(causeCode?{causeCode}:{})};
+  return{state:'attention',errorCode:code??(error.killed?'catalog_hosted_operator_timeout':'catalog_hosted_operator_failed'),
+    ...(diagnostic?{diagnostic}:{}),...(causeCode?{causeCode}:{})};
 }
 export function validateHostedProposal({bytes,sha256,runId,catalogRevision,summary,approvalPin}){
   if(!HASH.test(sha256)||hash(bytes)!==sha256)fail('proposal_digest');const value=json(bytes);
@@ -298,7 +302,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
       // Only an already-receipted permanent publication may retry bookkeeping.
       // The normal finalizer independently reads back the completed run/owner;
       // it cannot repeat upload, activation, suppliers or model work.
-      if(['published','finalized'].includes(terminal.phase)&&terminal.approvalPin&&p?.stage==='published'&&HASH.test(p.receiptSha256??'')
+      if(result.diagnostic?.reason!=='response_bytes'&&['published','finalized'].includes(terminal.phase)&&terminal.approvalPin&&p?.stage==='published'&&HASH.test(p.receiptSha256??'')
         &&p.intent?.releaseId===terminal.config.publication.releaseId&&p.intent?.nextExpiry===null){
         terminalRecoveryRetried=true;await deps.wait(45000);continue;
       }

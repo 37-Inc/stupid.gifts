@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFile,readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import amazonCreators from '../lib/amazon-creators.js';
 import { createD1CatalogTelemetryStore } from '../scripts/catalog/telemetry-d1.ts';
 import { createD1CatalogMaintenanceStore } from '../scripts/catalog/maintenance-d1.ts';
@@ -78,6 +79,29 @@ test('lost start/append/finish responses recover immutable IDs/time and stale in
     assert.equal(f.raw().started_at,NOW);assert.equal(f.raw().completed_at,NOW);assert.equal(f.cursor.current.epoch,3);
     await assert.rejects(stale.upsertProduct(product,null),/fenced/);
     assert.equal(f.sqlite.prepare('SELECT count(*) n FROM products').get().n,0);
+  }finally{f.close();}
+});
+
+test('completion reads only its run summary when retained item history exceeds the REST response bound',async()=>{
+  const f=await fixture();try{
+    await f.telemetry.startCatalogRun({id:RUN});
+    const insert=f.sqlite.prepare('INSERT INTO catalog_run_items(id,run_id,external_id,decision,requires_manual_review,created_at,source_record_json) VALUES(?,?,?,?,0,?,?)');
+    for(let index=0;index<711;index++){
+      const id=randomUUID();insert.run(id,RUN,product.id,'persisted',NOW,JSON.stringify({id,details:{note:'x'.repeat(900)}}));
+    }
+    const retained=()=>f.sqlite.prepare('SELECT count(*) n,sum(length(source_record_json)) bytes FROM catalog_run_items WHERE run_id=?').get(RUN);
+    assert.ok(retained().bytes>512*1024);
+    await f.telemetry.finishCatalogRun(RUN,{status:'completed',counts:{refreshed:291,admitted:17}});
+    const original=f.db.prepare.bind(f.db);let itemReads=0;
+    f.db.prepare=sql=>{
+      if(/FROM catalog_run_items/.test(sql)){itemReads++;return{bind(){return this;},async all(){throw Error('synthetic_response_bound');}};}
+      return original(sql);
+    };
+    const before=f.writes(),summary=await f.telemetry.loadCatalogRun(RUN,{items:false});
+    assert.equal(summary.run.status,'completed');assert.deepEqual(summary.run.counts,{refreshed:291,admitted:17});
+    assert.deepEqual(summary.items,[]);assert.equal(itemReads,0);assert.equal(f.writes(),before);
+    assert.equal(retained().n,711,'all immutable per-item history is retained');
+    await assert.rejects(f.telemetry.loadCatalogRun(RUN),/synthetic_response_bound/);
   }finally{f.close();}
 });
 

@@ -128,9 +128,9 @@ export function createD1CatalogTelemetryStore(options:{db:CatalogD1;owner:Mutati
         });
       }
     }),
-    loadCatalogRun:(id:string)=>serialize(async()=>{
+    loadCatalogRun:(id:string,options:{items?:boolean}={})=>serialize(async()=>{
       const current=(await rows(`${runQuery} WHERE r.id=?`,[id]))[0];if(!current)return null;
-      const items=await rows('SELECT * FROM catalog_run_items WHERE run_id=? ORDER BY sequence LIMIT 10001',[id]);
+      const items=options.items===false?[]:await rows('SELECT * FROM catalog_run_items WHERE run_id=? ORDER BY sequence LIMIT 10001',[id]);
       if(items.length>10000)throw new Error('telemetry_read_bound');
       return {run:decodeD1CatalogTelemetryRow(current),items:items.map(decodeD1CatalogTelemetryRow)};
     }),

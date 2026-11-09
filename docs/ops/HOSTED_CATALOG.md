@@ -46,6 +46,9 @@ alternate daily commands; use the maintained same-run recovery path below.
   uploads/activations and earlier unknown writes still stop for readback.
   Numeric embedding-operation telemetry is a count, not an expired vector body;
   permanent completion accepts that counter while rejecting raw vectors/text.
+  Completion reads the run-summary row, not its entire per-product log. Detailed
+  history remains retained for reporting. Response-size failures expose numeric
+  actual/limit diagnostics and are not retried as transient network loss.
 - Routine completion uses the same automation authority and permanent-display
   rule as normal publishing: finite overlays may retain their original clocks
   above cleared permanent fallbacks. Never treat a photo deadline as catalog

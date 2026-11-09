@@ -290,7 +290,12 @@ test('timeout covers fetch and body, oversize body cancels; all outcomes remain 
   }
   const f=await fixture(t);let cancelled=false;
   f.change(()=>new Response(new ReadableStream({pull(c){c.enqueue(new Uint8Array(256*1024));},cancel(){cancelled=true;}})));
-  await assert.rejects(f.db.prepare('SELECT 1').all(),/result_unknown/);assert.equal(cancelled,true);
+  await assert.rejects(f.db.prepare('SELECT 1').all(),error=>{
+    assert.match(error.message,/result_unknown/);const detail=catalogD1FailureDetail(error);
+    assert.equal(detail.reason,'response_bytes');assert.equal(detail.httpStatus,200);
+    assert.ok(detail.responseBytes>detail.responseLimit);assert.equal(detail.responseLimit,512*1024);
+    assert.doesNotMatch(JSON.stringify(detail),/SELECT|TEST_ONLY_TOKEN/);return true;
+  });assert.equal(cancelled,true);
   cancelled=false;f.change(()=>new Response(new ReadableStream({cancel(){cancelled=true;}}),{status:403}));
   await assert.rejects(f.db.prepare('SELECT 1').all(),/result_unknown/);assert.equal(cancelled,true);
 });

@@ -324,7 +324,7 @@ export async function settleActivatedPermanentWeekly(input:{db:CatalogD1 & {prov
   if(!owner){owner=await claimMutationOwnership(db,scope,{phase:'writing',ownerReference:config.runId+':finalize',
     operationKey:sha256(`finalize:${input.configSha256}`)});if(!owner)throw Error('weekly_finalize_owner');await save('published',owner);}
   const cursor={current:owner},telemetry=createD1CatalogTelemetryStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision});
-  const prior=await telemetry.loadCatalogRun(config.runId);
+  const prior=await telemetry.loadCatalogRun(config.runId,{items:false});
   if(prior?.run.status==='completed'){
     if(canonicalJson(prior.run.counts)!==canonicalJson(finish.counts))throw Error('weekly_finalization_mismatch');
     const actual=await readMutationOwner(db,scope);
@@ -334,7 +334,7 @@ export async function settleActivatedPermanentWeekly(input:{db:CatalogD1 & {prov
       cursor.current=actual;await save('published',actual);
     }
   }else{
-    await telemetry.finishCatalogRun(config.runId,finish);const actual=await telemetry.loadCatalogRun(config.runId);
+    await telemetry.finishCatalogRun(config.runId,finish);const actual=await telemetry.loadCatalogRun(config.runId,{items:false});
     if(actual?.run.status!=='completed'||canonicalJson(actual.run.counts)!==canonicalJson(finish.counts))throw Error('weekly_finalization_mismatch');
     await save('published',cursor.current);
   }
@@ -639,7 +639,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           async publish(input:{finalization:Record<string,unknown>}){
             const phaseComplete=await ws.putArtifact(finalization(input.finalization),{kind:'publication',observedAt:now()});
             await write({phase:'phases_complete',owner:cursor.current,phaseComplete});return{status:'pending'};
-          },async finalizeRun(id:string,input:Record<string,unknown>){await telemetry.finishCatalogRun(id,input);return telemetry.loadCatalogRun(id);}};
+          },async finalizeRun(id:string,input:Record<string,unknown>){await telemetry.finishCatalogRun(id,input);return telemetry.loadCatalogRun(id,{items:false});}};
         if(config.cadence)await runDailyCatalogWithBackend({...backend,cadence:dependencies.cadence!,featuredIds:config.cadence.featuredIds,
           photosOnly:config.cadence.photosOnly,admitAsins:config.cadence.admitAsins,preservePermanentListings:true});
         else await runWeeklyCatalogWithBackend(backend);
@@ -652,7 +652,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           &&['catalog_d1_budget_exhausted','catalog_d1_reported_usage_exceeded'].includes(value.message)) as Error|undefined;
         const errorCode=budgetError?.message??safeCode(error);
         if(cp.phase==='phases_running'){
-          const row=budgetError?null:await telemetry.loadCatalogRun(config.runId);
+          const row=budgetError?null:await telemetry.loadCatalogRun(config.runId,{items:false});
           await write({phase:row&&['partial','failed'].includes(String(row.run.status))?'phase_failed':'attention',owner:cursor.current,
             state:{errorCode}});
         }
@@ -796,7 +796,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       const cursor={current:owner};const telemetry=createD1CatalogTelemetryStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision});
       const summary=await ws.readArtifact(cp.phaseComplete!) as Record<string,unknown>;
       const input={...summary,status:'completed',counts:{...summary.counts as object,publication:{status:'published',releaseId:receipt.releaseId,receiptSha256:receipt.receiptSha256}}};
-      await telemetry.finishCatalogRun(config.runId,input);const actual=await telemetry.loadCatalogRun(config.runId);
+      await telemetry.finishCatalogRun(config.runId,input);const actual=await telemetry.loadCatalogRun(config.runId,{items:false});
       if(actual?.run.id!==config.runId||actual.run.status!=='completed'||canonicalJson(actual.run.counts)!==canonicalJson(input.counts))throw new Error('weekly_finalization_mismatch');
       await write({owner:cursor.current});await releaseExact(db,cursor.current);await write({phase:'finalized',owner:null});
       return{state:'finalized',runId:config.runId,releaseId:receipt.releaseId,receiptSha256:receipt.receiptSha256,
