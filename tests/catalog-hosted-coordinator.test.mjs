@@ -264,6 +264,16 @@ test('lost terminal D1 response retries only existing permanent receipt bookkeep
   assert.equal(result.state,'accepted');assert.deepEqual(f.waits,[45000]);
   assert.deepEqual(f.calls.map(a=>a[0]),['prepare','start','review','publish','publish']);assert.equal(f.calls[3][1],f.calls[4][1]);
 });
+test('a finalized checkpoint after a lost response is accepted without another publication invocation',async()=>{
+  const f=fixture(),invoke=f.deps.invoke;
+  const result=await f.run({}, {invoke:async(directory,args)=>{
+    if(args[0]!=='publish')return invoke(directory,args);
+    f.calls.push(args);f.phase='finalized';f.approvalPin=hash(canonicalJson(f.proposal));
+    f.publication={stage:'published',receiptSha256:HASH,intent:{releaseId:'actual-release',nextExpiry:null}};
+    return{state:'attention',errorCode:'catalog_d1_result_unknown'};
+  }});
+  assert.equal(result.state,'accepted');assert.equal(f.calls.filter(a=>a[0]==='publish').length,1);assert.deepEqual(f.waits,[45000]);
+});
 for(const condition of ['missing-receipt','wrong-release','finite','unconfirmed','repeated-unknown'])test(`terminal recovery does not broaden ${condition} authority`,async()=>{
   const f=fixture();let attempts=0;
   const result=await f.run({}, {invoke:async(_directory,args)=>{

@@ -298,7 +298,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
       // Only an already-receipted permanent publication may retry bookkeeping.
       // The normal finalizer independently reads back the completed run/owner;
       // it cannot repeat upload, activation, suppliers or model work.
-      if(terminal.phase==='published'&&terminal.approvalPin&&p?.stage==='published'&&HASH.test(p.receiptSha256??'')
+      if(['published','finalized'].includes(terminal.phase)&&terminal.approvalPin&&p?.stage==='published'&&HASH.test(p.receiptSha256??'')
         &&p.intent?.releaseId===terminal.config.publication.releaseId&&p.intent?.nextExpiry===null){
         terminalRecoveryRetried=true;await deps.wait(45000);continue;
       }
