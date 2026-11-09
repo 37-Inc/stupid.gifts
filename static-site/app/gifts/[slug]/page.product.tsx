@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { CatalogDescription, CatalogDisclosure, CatalogImage, CatalogTitle } from "../../../components/CatalogPhotos";
+import { CatalogDescription, CatalogDisclosure, CatalogImage } from "../../../components/CatalogPhotos";
 import { buildGiftPageSchema } from "@/lib/gift-page-schema";
 import { catalog, relatedGifts } from "../../../lib/catalog";
 import { isIllustrative } from "../../../lib/selection";
@@ -42,11 +42,12 @@ export default async function Gift({
   if (!product) notFound();
   const illustrative = isIllustrative(product);
   const related = relatedGifts(product);
+  const name = shortProductName(product.title);
   const retailer = product.source === "amazon" ? "Amazon" : "Etsy";
   const schema = buildGiftPageSchema(
     product,
     `${PREVIEW_ORIGIN}/gifts/${slug}`,
-    product.title,
+    name,
     product.description,
     PREVIEW_ORIGIN,
   );
@@ -71,7 +72,7 @@ export default async function Gift({
             alt={
               illustrative
                 ? `Original illustration of the fictional ${product.title}`
-                : shortProductName(product.title)
+                : name
             }
             className="object-contain"
             sizes="(max-width: 700px) 90vw, 55vw"
@@ -80,7 +81,7 @@ export default async function Gift({
         </div>
         <div className="detail-copy">
           {illustrative && <p className="eyebrow">Illustrative fixture · not for sale</p>}
-          <h1><CatalogTitle source={product.source} id={product.id} fallback={product.title} /></h1>
+          <h1>{name}</h1>
           {!illustrative && <CatalogDisclosure source={product.source} id={product.id} />}
           <CatalogDescription source={product.source} id={product.id} title={product.title} fallback={product.description} />
           {illustrative ? (
@@ -127,12 +128,6 @@ export default async function Gift({
                 .map((paragraph, index) => (
                   <p key={index}>{paragraph}</p>
                 ))}
-            </details>
-          )}
-          {!illustrative && (
-            <details className="listing-identity">
-              <summary>Retailer listing name</summary>
-              <p>{product.title}</p>
             </details>
           )}
         </div>

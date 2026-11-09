@@ -319,8 +319,7 @@ test(
         detail.replace(/<[^>]*>/g, ""),
         /Check price on Amazon|Check price on Etsy/,
       );
-      if (readyProduct.punnyTitle)
-        assert.match(detail, /Retailer listing name/);
+      assert.doesNotMatch(detail, /Retailer listing name/);
       assert.doesNotMatch(detail, /"@type":"Offer"|\$0\.00/);
       const pool=createBrowseRelease(exportSnapshot, exportGeneratedAt, exportHomepage).random;
       assert.ok(pool.poolSize>0&&pool.poolSize<=48);
