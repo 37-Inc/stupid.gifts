@@ -202,6 +202,9 @@ export function readPermanentCatalogPrior(options:Parameters<typeof readCatalogP
 /** Full private-source CAS outside short native/provider observations. */
 export async function assertApprovedCatalogInventory(db:CatalogD1,owner:MutationOwner,revision:ApprovedCohortRevision,signal?:AbortSignal){
   if(!revision.persistent)return;
+  const started=Date.now(),progress=(stage:'start'|'complete')=>console.info(JSON.stringify({state:'publication_progress',phase:'inventory',
+    stage,products:revision.sourceRows.length,elapsedMs:Date.now()-started}));
+  progress('start');
   signal?.throwIfAborted();
   if(owner.generation!==revision.persistent.generation||owner.operationKey!==revision.operationKey
     ||!same(revision.nativeHistory,revision.persistent.nativeHistory)
@@ -211,4 +214,5 @@ export async function assertApprovedCatalogInventory(db:CatalogD1,owner:Mutation
   if(!same(permanentSourceInventory(permanentSourceRows(actual)),revision.persistent.inventory))fail();
   const fence=pendingVectorReadFence(owner);
   await db.prepare(`SELECT json(CASE WHEN ${fence.sql} THEN 'true' ELSE 'mutation_fenced' END)`).bind(...fence.params).all({signal});
+  progress('complete');
 }

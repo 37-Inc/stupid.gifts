@@ -801,6 +801,15 @@ function journalHead(value:unknown):JournalHead {
     ||(v.sequence===0?v.sha256!==null:!hash(v.sha256)))fail('durable_head');return v;
 }
 const eventName=(sequence:number,digest:string)=>`${String(sequence).padStart(6,'0')}.${digest}.json`;
+/** Join every started transfer, including on failure. Never leave late writes
+ * running after the caller releases its original workspace/owner. */
+async function transferAll<T>(items:T[],action:(item:T)=>Promise<void>){
+  let cursor=0;const failures:unknown[]=[];
+  await Promise.all(Array.from({length:Math.min(16,items.length)},async()=>{
+    while(cursor<items.length&&!failures.length){const item=items[cursor++];try{await action(item);}catch(error){failures.push(error);}}
+  }));
+  if(failures.length)throw failures[0];
+}
 /** Remote durability uses this very journal and its hash chain. There is no
  * second workflow state, owner lease, saved config or host lock in the bucket. */
 async function durableJournal(input:RunWorkspaceOptions,directory:string,create:boolean) {
@@ -831,16 +840,12 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
   async function commit(record:RecordFile) {
     const event=record.event,refs=event.type==='artifact'||event.type==='checkpoint'?[event.ref]
       :event.type==='blob-parts'?event.refs:event.type==='execution-adoption'?[event.adoption.contexts.ref]:[];
-    let cursor=0;const failures:unknown[]=[],manifest=refs.length?(await readManifest(directory,input)).manifest:null;
-    await Promise.all(Array.from({length:Math.min(16,refs.length)},async()=>{
-      while(cursor<refs.length&&!failures.length){const ref=refs[cursor++];try{artifactRef(ref);const registration=registrations.get(ref.sha256);
-          if(!registration)fail('durable_body_unregistered');
-          const body=await loadStored(directory,ref,manifest!);
-          if(registration.storedSha256!==sha256(canonicalJson(body)))fail('body_registration');
-          await put(ref.reference,await readBytes(join(directory,ref.reference)));
-        }catch(error){failures.push(error);}}
-    }));
-    if(failures.length)throw failures[0];
+    const manifest=refs.length?(await readManifest(directory,input)).manifest:null;
+    await transferAll(refs,async ref=>{artifactRef(ref);const registration=registrations.get(ref.sha256);
+      if(!registration)fail('durable_body_unregistered');
+      const body=await loadStored(directory,ref,manifest!);
+      if(registration.storedSha256!==sha256(canonicalJson(body)))fail('body_registration');
+      await put(ref.reference,await readBytes(join(directory,ref.reference)));});
     const digest=sha256(canonicalJson(record));
     await put('events/'+eventName(record.sequence,digest),encoded(record));
     remote=await cas(remote.etag,{sequence:record.sequence,sha256:digest});
@@ -887,20 +892,20 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
     // New append/dispatch ACKs still use the fully synced default writer.
     await immutable(join(directory,'manifest.json'),manifest,false);
     for(const {name,record}of records)await immutable(join(directory,'events',name),record,false);
-    for(const ref of state.refs.values())if(!state.purged.has(ref.sha256)){
+    await transferAll([...state.refs.values()].filter(ref=>!state.purged.has(ref.sha256)),async ref=>{
       const registration=state.bodyRegistrations.get(ref.sha256);
       const body=remoteJson(await (registration?cached(ref.reference):get(ref.reference))) as Stored;validateStored(body,ref,manifest);boundPublicationBody(body,state);
       if(registration&&registration.storedSha256!==sha256(canonicalJson(body)))fail('body_registration');
       await immutable(join(directory,ref.reference),body,false);
-    }
+    });
     // A crash may land between original-expiry registration, object upload and
     // the referencing head. Only these NOT activated bodies may be absent.
-    for(const registration of state.bodyRegistrations.values())if(!state.refs.has(registration.ref.sha256)&&!state.purged.has(registration.ref.sha256)){
-      const object=await store.get(prefix+registration.ref.reference);if(!object)continue;
+    await transferAll([...state.bodyRegistrations.values()].filter(registration=>!state.refs.has(registration.ref.sha256)&&!state.purged.has(registration.ref.sha256)),async registration=>{
+      const object=await store.get(prefix+registration.ref.reference);if(!object)return;
       const body=remoteJson(object) as Stored;validateStored(body,registration.ref,manifest);boundPublicationBody(body,state);
       if(registration.storedSha256!==sha256(canonicalJson(body)))fail('body_registration');
       await immutable(join(directory,registration.ref.reference),body,false);
-    }
+    });
     let local:JournalHead;
     try{local=journalHead(await readJson(join(directory,'head.json')));}
     catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;

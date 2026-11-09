@@ -74,6 +74,9 @@ function parsedOutput(stdout){
 export function hostedPublicationProgress(line){
   if(typeof line!=='string'||line.length>1024)return;
   let value;try{value=JSON.parse(line);}catch{return;}
+  if(exact(value,'state,phase,stage,products,elapsedMs')&&value.state==='publication_progress'&&value.phase==='inventory'
+    &&['start','complete'].includes(value.stage)&&[value.products,value.elapsedMs].every(n=>Number.isSafeInteger(n)&&n>=0))
+    return{state:'progress',step:'publication',phase:'inventory',stage:value.stage,products:value.products,elapsedMs:value.elapsedMs};
   const metrics=['completedBytes','completedFiles','totalFiles','blocks','elapsedMs'];
   if(!exact(value,'state,phase,'+metrics.join(','))||value.state!=='publication_progress'||value.phase!=='package'
     ||metrics.some(k=>!Number.isSafeInteger(value[k])||value[k]<0)||value.completedFiles>value.totalFiles)return;

@@ -131,6 +131,24 @@ test('original single-part journal records remain readable and reusable without 
   assert.deepEqual(Buffer.from(f.objects.get('runs/test-run/head.json').bytes),head);
 });
 
+for(const corrupt of [false,true])test(`cold body restore is parallel, joined and read-only${corrupt?' on corruption':''}`,async t=>{
+  const f=await fixture(t),w=await f.open(),bytes=Buffer.alloc(8*1024*1024,11),ref=await w.putBlob(bytes,{kind:'phase',observedAt:NOW});
+  await w.reserveBudget(reservation);await w.close();const head=Buffer.from(f.objects.get('runs/test-run/head.json').bytes),get=f.store.get;
+  let active=0,peak=0;
+  if(corrupt){const descriptor=JSON.parse(Buffer.from(f.objects.get(`runs/test-run/${ref.reference}`).bytes)).value;
+    const key=`runs/test-run/objects/${descriptor.parts[0]}.json`,body=JSON.parse(Buffer.from(f.objects.get(key).bytes));
+    body.value.base64='invalid';f.objects.get(key).bytes=encode(body);}
+  f.store.get=async key=>{if(!key.includes('/objects/'))return get(key);active++;peak=Math.max(peak,active);
+    try{await new Promise(resolve=>setTimeout(resolve,2));return await get(key);}finally{active--;}};
+  f.calls.length=0;
+  if(corrupt)await assert.rejects(f.open({directory:join(f.parent,'body-corrupt-runner'),mode:'resume'}),/artifact_hash|body_registration/);
+  else{const restored=await f.open({directory:join(f.parent,'body-parallel-runner'),mode:'resume'});
+    assert.deepEqual(await restored.readBlob(ref),bytes);assert.equal((await restored.budget()).unconfirmedRequests,1);}
+  assert.ok(peak>1&&peak<=16);assert.equal(active,0);
+  assert.deepEqual(Buffer.from(f.objects.get('runs/test-run/head.json').bytes),head);
+  assert.ok(f.calls.every(([method])=>method==='get'));
+});
+
 test('cold journal reads are parallel but original hash chain, charges and write ordering stay authoritative',async t=>{
   const f=await fixture(t),w=await f.open({requestLimit:'observe'});
   for(let i=0;i<24;i++)await w.reserveBudget({...reservation,id:'original-'+i});await w.close();
