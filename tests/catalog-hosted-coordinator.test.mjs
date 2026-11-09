@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {PassThrough} from 'node:stream';
 import {once} from 'node:events';
-import {coordinateHostedCatalog,hostedRunRecord,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader} from '../scripts/catalog/hosted-coordinator.mjs';
+import {coordinateHostedCatalog,hostedRunRecord,hostedInvocationDay,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
 import {routineReviewProduct,routineRecoveryPhase} from '../scripts/catalog/daily-operator.mjs';
@@ -381,8 +381,10 @@ test('one Pacific workflow remains main-only, protected, serialized and has no P
   const yaml=await readFile(new URL('../.github/workflows/catalog-manual.yml',import.meta.url),'utf8');
   assert.match(yaml,/workflow_dispatch:/);assert.doesNotMatch(yaml,/\b(?:pull_request|push):/);
   assert.match(yaml,/cron: '30 8 \* \* \*'/);assert.match(yaml,/cron: '30 20 \* \* \*'/);assert.match(yaml,/cron: '30 10 \* \* \*'/);
-  assert.equal((yaml.match(/timezone: America\/Los_Angeles/g)||[]).length,3);
-  assert.match(yaml,/inputs.mode \|\| \(github.event.schedule == '30 20 \* \* \*' && 'photos' \|\| 'full'\)/);
+  assert.equal((yaml.match(/timezone: America\/Los_Angeles/g)||[]).length,4);
+  assert.match(yaml,/cron: '30 22 \* \* \*'/);
+  assert.match(yaml,/inputs.mode \|\| \(\(github.event.schedule == '30 20 \* \* \*' \|\| github.event.schedule == '30 22 \* \* \*'\) && 'photos' \|\| 'full'\)/);
+  assert.match(yaml,/CATALOG_SCHEDULE: \$\{\{ github.event.schedule \|\| '' \}\}/);
   assert.match(yaml,/group: catalog-production/);assert.match(yaml,/cancel-in-progress: false/);assert.match(yaml,/environment: Production/);
   assert.match(yaml,/timeout-minutes: 360/);
   const source=await readFile(new URL('../scripts/catalog/hosted-coordinator.mjs',import.meta.url),'utf8');
@@ -390,4 +392,14 @@ test('one Pacific workflow remains main-only, protected, serialized and has no P
   assert.match(yaml,/if: github.ref == 'refs\/heads\/main'/);assert.match(yaml,/runs-on: ubuntu-24.04/);assert.match(yaml,/node-version: '22.23.1'/);
   assert.match(yaml,/persist-credentials: false/);assert.match(yaml,/apparmor_parser -r \.github\/catalog-bwrap.apparmor/);
   assert.doesNotMatch(yaml,/sysctl|--privileged|curl.*secret/i);assert.match(yaml,/npm ci --ignore-scripts/);
+});
+
+test('evening photo retries and delayed-after-midnight dispatch share one UTC slot without consuming the next evening',()=>{
+  for(const time of ['2026-11-09T04:30:00Z','2026-11-09T06:30:00Z','2026-11-09T13:08:22Z'])
+    assert.equal(hostedInvocationDay('photos',new Date(time)),'2026-11-09');
+  assert.equal(hostedInvocationDay('photos',new Date('2026-11-10T04:30:00Z')),'2026-11-10');
+  // Full care and editorial keep Pacific calendar dates, including DST.
+  assert.equal(hostedInvocationDay('full',new Date('2026-11-09T04:30:00Z')),'2026-11-08');
+  assert.equal(hostedInvocationDay('editorial',new Date('2026-07-09T03:30:00Z')),'2026-07-08');
+  assert.equal(hostedInvocationDay('photos',new Date('2026-07-09T03:30:00Z')),'2026-07-09');
 });

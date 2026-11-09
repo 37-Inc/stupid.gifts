@@ -221,7 +221,7 @@ changes no products and does not publish or enable policy. It is not a recurring
 extra job; normal morning preparation reuses the same day's saved edition.
 
 The same workflow has Pacific-time wakes at 08:30 (full care), 20:30 (due photos)
-and 10:30 (one morning catch-up). GitHub's native IANA timezone setting handles
+and 10:30/22:30 (morning/evening catch-up). The two evening photo wakes share the UTC date of their evening slot; a dispatch delayed past Pacific midnight still resumes that slot, not the next evening. Full-care dates stay Pacific. Original pending identities always take precedence, without relabeling or provider replay. The coordinator logs the schedule expression and actual start time for delay diagnosis. GitHub's native IANA timezone setting handles
 daylight saving time, without duplicate seasonal wakes or application clock
 gates. Catch-up uses the same daily run key: completed work skips, pending work
 resumes, and a missed morning can start once. Schedules can be delayed; the

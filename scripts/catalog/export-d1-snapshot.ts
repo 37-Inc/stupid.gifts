@@ -46,7 +46,9 @@ const jsonColumns = (alias: string, columns: string[], extra: Record<string, str
   `json_object(${[...columns.map((key) => `'${key}',${alias}.${key}`), ...Object.entries(extra).map(([key, expression]) => `'${key}',${expression}`)].join(',')})`;
 // Carry private proof only for the small original-article equivalence lane,
 // never duplicate source/semantic bodies across the whole catalog capture.
-const EQUIVALENCE_NEEDED = `p.source_facts_hash IS NOT p.editorial_source_hash AND
+// A later response can restore the original hash without clearing the old
+// stale label. That lane still needs its original approval proof, not a hold.
+const EQUIVALENCE_NEEDED = `(p.source_facts_hash IS NOT p.editorial_source_hash OR p.editorial_status='stale') AND
   (json_extract(p.public_display_json,'$.indexable')=1 OR json_extract(p.public_display_json,'$.persistent.indexable')=1)`;
 const copyField=(camel:string,snake:string)=>`CASE WHEN m.product_id IS NULL THEN json_extract(p.source_record_json,'$.${snake}')
   ELSE json_extract(m.semantic_json,'$.${camel}') END`;

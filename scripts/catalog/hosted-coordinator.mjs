@@ -53,6 +53,15 @@ export function hostedRunRecord(value){
   const key=value.kind==='full'?'scheduled-'+value.day:value.kind==='photos'?'photos-'+value.day:'canary-'+value.day+'-'+value.canaryId;
   if(value.runKey!==key||value.kind==='canary'&&!ASIN.test(value.canaryId))fail('run_record');return value;
 }
+/** Evening Pacific photo wakes fall on the following UTC date. Use that stable
+ * slot for both evening retries and delayed-after-midnight dispatches, so a late
+ * prior-night run cannot reserve the following night's photo identity. Saved
+ * pending records remain authoritative and are never relabeled. */
+export function hostedInvocationDay(mode,now=new Date()){
+  if(mode==='photos')return now.toISOString().slice(0,10);
+  return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit'})
+    .format(now);
+}
 export function hostedCommandEnvironment(environment=process.env,{credentials=true}={}){
   const clean={HOME:'/home/runner',PATH:[path.dirname(process.execPath),'/usr/local/bin','/usr/bin','/bin'].join(':'),
     LANG:'C.UTF-8',TZ:'UTC',CI:'true'};
@@ -326,8 +335,8 @@ async function main(){
   const [mode='shadow',canaryId]=process.argv.slice(2);if(process.argv.length>4)fail('invocation');
   const runtime=automationRuntime(),source=process.env.GITHUB_SHA;
   if((await exec('git',['rev-parse','HEAD'],{cwd:ROOT,env:hostedCommandEnvironment(process.env,{credentials:false})})).stdout.trim()!==source)fail('reviewed_source');
-  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit'})
-    .formatToParts(new Date()).map(p=>[p.type,p.value]));
+  const now=new Date(),capturedDay=hostedInvocationDay(mode,now);
+  console.log(JSON.stringify({state:'started',mode,scheduledEvent:process.env.CATALOG_SCHEDULE||null,runDay:capturedDay,startedAt:now.toISOString()}));
   if(mode==='activate'){
     const {activateHostedPolicy}=await import('./hosted-policy.mjs');
     console.log(JSON.stringify(await activateHostedPolicy(runtime,canaryId)));return;
@@ -336,9 +345,9 @@ async function main(){
     if(canaryId)fail('invocation');
     const {previewHostedHomepage}=await import('./hosted-policy.mjs');
     const repository=await defaults(runtime,process.env).checkout(source);
-    console.log(JSON.stringify(await previewHostedHomepage(runtime,{repository,source,day:`${parts.year}-${parts.month}-${parts.day}`})));return;
+    console.log(JSON.stringify(await previewHostedHomepage(runtime,{repository,source,day:capturedDay})));return;
   }
-  const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),source,day:`${parts.year}-${parts.month}-${parts.day}`,runtime});
+  const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),source,day:capturedDay,runtime});
   console.log(JSON.stringify(result));if(result.state==='attention'){console.error('::warning::Catalog run remains pending; resume its existing identity.');process.exitCode=1;}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)main().catch(error=>{

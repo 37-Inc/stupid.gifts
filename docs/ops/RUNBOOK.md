@@ -11,7 +11,7 @@ site with an old checkout or modify a source while its run is active.
 ## Current mode
 
 The single GitHub catalog workflow owns 08:30 Pacific full care, 20:30 due-photo
-care and one 10:30 morning catch-up using the same daily run identity. The old
+care, a 10:30 morning catch-up and a 22:30 evening catch-up using the same respective run identities. Photo-only keys use the evening slot's UTC date so a late overnight dispatch cannot reserve the following evening; full care retains Pacific dates. Saved pending records always keep their original day/source/config. The old
 `goose-gifts-daily-ops` Codex writing timer remains paused after cutover. Never
 enable both. The explicitly activated private automation policy enables scaled
 due-work, daily visual admission and API homepage editing; absence/disablement
