@@ -1,5 +1,6 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import {createInterface} from 'node:readline';
 import {createHash} from 'node:crypto';
 import {lstat,mkdir,readFile,realpath} from 'node:fs/promises';
 import path from 'node:path';
@@ -69,6 +70,22 @@ function parsedOutput(stdout){
     if(value&&(typeof value.state==='string'||SOURCE.test(value.source)&&HASH.test(value.configSha256)&&typeof value.runId==='string'))records.push(value);}catch{/* never echo raw child output */}
   if(!records.length)fail('operator_output');return records.at(-1);
 }
+/** Stream only typed numeric progress. Raw child output stays private. */
+export function hostedPublicationProgress(line){
+  if(typeof line!=='string'||line.length>1024)return;
+  let value;try{value=JSON.parse(line);}catch{return;}
+  if(exact(value,'state,phase,stage,products,elapsedMs')&&value.state==='publication_progress'&&value.phase==='inventory'
+    &&['start','complete'].includes(value.stage)&&[value.products,value.elapsedMs].every(n=>Number.isSafeInteger(n)&&n>=0))
+    return{state:'progress',step:'publication',phase:'inventory',stage:value.stage,products:value.products,elapsedMs:value.elapsedMs};
+  const metrics=['completedBytes','completedFiles','totalFiles','blocks','elapsedMs'];
+  if(!exact(value,'state,phase,'+metrics.join(','))||value.state!=='publication_progress'||value.phase!=='package'
+    ||metrics.some(k=>!Number.isSafeInteger(value[k])||value[k]<0)||value.completedFiles>value.totalFiles)return;
+  return{state:'progress',step:'publication',phase:'package',...Object.fromEntries(metrics.map(k=>[k,value[k]]))};
+}
+export function hostedProgressReader(stream,emit){
+  const reader=createInterface({input:stream,crlfDelay:Infinity});
+  reader.on('line',line=>{const value=hostedPublicationProgress(line);if(value)emit(value);});return reader;
+}
 /** Child diagnostics are machine codes only, never command lines, provider
  * bodies or raw output (which may contain credentials). */
 export function hostedOperatorFailure(error){
@@ -135,9 +152,13 @@ function defaults(runtime,environment){
     },
     async invoke(directory,args){
       console.log(JSON.stringify({state:'progress',step:'operator',command:args[0]}));
-      try{const result=await exec(process.execPath,['--import','tsx','scripts/catalog/daily-operator.mjs',...args],{
-        cwd:directory,env:hostedCommandEnvironment(environment),maxBuffer:5*1024*1024});return parsedOutput(result.stdout);}
+      let progress;
+      try{const child=exec(process.execPath,['--import','tsx','scripts/catalog/daily-operator.mjs',...args],{
+        cwd:directory,env:hostedCommandEnvironment(environment),maxBuffer:5*1024*1024});
+        progress=hostedProgressReader(child.child.stdout,value=>console.log(JSON.stringify(value)));
+        const result=await child;return parsedOutput(result.stdout);}
       catch(error){return hostedOperatorFailure(error);}
+      finally{progress?.close();}
     },
     async inspect(record,directory){
       console.log(JSON.stringify({state:'progress',step:'inspect',runKey:record.runKey}));
@@ -228,7 +249,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     const bytes=await runtime.state.bytes(runtime.care+'/runs/'+record.runKey+'/reviewed-proposal.json');
     return validateHostedProposal({bytes,sha256:hash(bytes),runId:status.config.runId,catalogRevision:status.config.catalogRevision,approvalPin:status.approvalPin});
   };
-  let visibilityRetries=0,transitions=0,lastProgress;
+  let visibilityRetries=0,transitions=0,lastProgress,terminalRecoveryRetried=false;
   const observeProgress=status=>{
     const key=JSON.stringify([status.prepared,status.started,status.phase,status.owner?.generation,status.owner?.epoch]);
     // Bound a stalled operation, not the number of gifts in the saved cohort.
@@ -271,6 +292,17 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
     else return{state:'attention',runKey:record.runKey,phase:status.phase,errorCode:'catalog_hosted_checkpoint_requires_attention'};
     if(result.state==='finalized')continue;
     if(result.reason==='awaiting_reviewed_approval')continue;
+    if(result.errorCode==='catalog_d1_result_unknown'&&!terminalRecoveryRetried){
+      const terminal=await deps.inspect(record,directory),p=terminal.publication;
+      if(terminal.phase)result={...result,phase:terminal.phase};
+      // Only an already-receipted permanent publication may retry bookkeeping.
+      // The normal finalizer independently reads back the completed run/owner;
+      // it cannot repeat upload, activation, suppliers or model work.
+      if(['published','finalized'].includes(terminal.phase)&&terminal.approvalPin&&p?.stage==='published'&&HASH.test(p.receiptSha256??'')
+        &&p.intent?.releaseId===terminal.config.publication.releaseId&&p.intent?.nextExpiry===null){
+        terminalRecoveryRetried=true;await deps.wait(45000);continue;
+      }
+    }
     // publication_provider_unavailable is GET-only; uncertain writes stay held.
     if(result.state==='pending'&&['semantic_delta_pending','not_visible','publication_provider_unavailable','catalog_d1_identity_unavailable'].includes(result.errorCode)){
       const pending=await deps.inspect(record,directory);

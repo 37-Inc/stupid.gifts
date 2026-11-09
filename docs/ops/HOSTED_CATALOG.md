@@ -40,6 +40,10 @@ alternate daily commands; use the maintained same-run recovery path below.
   genuine D1 receipt/build and owner; do not rebuild, upload or activate again.
   Finish first, then run the registered source-bound cleanup. A finalized retry
   uses its accepted successor without reopening expired phase bodies.
+  A lost D1 response after a published permanent receipt gets one same-run
+  bookkeeping retry. It first inspects the saved published receipt; the normal
+  finalizer then reads back the completed run and exact owner. Unconfirmed
+  uploads/activations and earlier unknown writes still stop for readback.
 - Routine completion uses the same automation authority and permanent-display
   rule as normal publishing: finite overlays may retain their original clocks
   above cleared permanent fallbacks. Never treat a photo deadline as catalog
@@ -84,6 +88,19 @@ alternate daily commands; use the maintained same-run recovery path below.
 - Restored R2 bytes are a hash-verified local cache, not a second durable copy.
   Avoid per-record disk flushes during restore; original remote ACKs and all new
   reservations/appends retain their durable-before-dispatch ordering.
+  Body restoration uses the same joined sixteen-transfer pool as blob uploads;
+  every hash/registration is still verified before the workspace becomes usable.
+- Blob/package transfers retain the original 256KiB chunks and hashes. A blob
+  registers its chunk retention in one journal record, transfers at most sixteen
+  immutable chunks concurrently, then attaches them in one record only after
+  every transfer ACK. Its manifest is still last. Old single-chunk records stay
+  readable; use the maintained compatible reader for new batched records.
+  Failed transfers join before returning, retain the original registrations and
+  resume the same bytes/deadlines, never a new supplier/model phase.
+  Numeric package bytes/files/block counts and elapsed time stream to the job
+  while it runs; raw child output, product bodies and credentials never do.
+  Full inventory checks likewise emit start/completion, row count and duration,
+  so repeated scans are visible instead of looking like a hung child process.
 - Routine background publishing keeps its original build token and attempt
   history under the unchanged, non-expiring mutation-owner fence. Saving a large
   package does not require another timed build claim. The original source cutoff,

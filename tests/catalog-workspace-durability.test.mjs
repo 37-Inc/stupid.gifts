@@ -3,6 +3,7 @@ import test from 'node:test';
 import {mkdtemp,chmod,rm,realpath,readFile,readdir,lstat,mkdir,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
+import {createHash} from 'node:crypto';
 import {openRunWorkspace,readRunWorkspace} from '../scripts/catalog/run-workspace.ts';
 import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
 import {inventoryPublicationPackage} from '../scripts/catalog/publish-release.ts';
@@ -65,6 +66,87 @@ test('journal ACK precedes dispatch; fresh runner restores original bodies, owne
   assert.ok([...f.objects.keys()].every(key=>!key.includes('/locks/')&&!key.includes('.pending-')));
   const bodyIndex=f.calls.findIndex(([method,key])=>method==='put'&&key.includes('/objects/'));
   assert.ok(bodyIndex>=0&&f.calls.slice(bodyIndex+1).some(([method,key])=>method==='cas'&&key.endsWith('/head.json')));
+});
+
+test('blob transfer batches metadata without changing any chunk bytes, hash, deadline or final ACK',async t=>{
+  const f=await fixture(t),w=await f.open(),bytes=Buffer.alloc(8*1024*1024,7),count=32;
+  const put=f.store.putImmutable,cas=f.store.compareAndSwap;let active=0,peak=0,acknowledged=0;
+  f.calls.length=0;
+  f.store.putImmutable=async(key,body)=>{
+    const value=JSON.parse(Buffer.from(body));if(value.value?.type!=='run-workspace-chunk')return put(key,body);
+    const head=JSON.parse(Buffer.from(f.objects.get('runs/test-run/head.json').bytes));
+    const event=JSON.parse(Buffer.from(f.objects.get(`runs/test-run/events/${String(head.sequence).padStart(6,'0')}.${head.sha256}.json`).bytes)).event;
+    assert.equal(event.type,'blob-bodies');assert.equal(event.artifacts.length,count);
+    active++;peak=Math.max(peak,active);
+    try{await new Promise(resolve=>setTimeout(resolve,2));const result=await put(key,body);acknowledged++;return result;}finally{active--;}
+  };
+  f.store.compareAndSwap=async(key,expected,body)=>{
+    const head=JSON.parse(Buffer.from(body)),record=f.objects.get(`runs/test-run/events/${String(head.sequence).padStart(6,'0')}.${head.sha256}.json`);
+    if(record&&JSON.parse(Buffer.from(record.bytes)).event.type==='blob-parts'){
+      assert.equal(acknowledged,count);assert.equal(active,0);
+    }
+    return cas(key,expected,body);
+  };
+  const ref=await w.putBlob(bytes,{kind:'phase',observedAt:NOW});
+  assert.ok(peak>1&&peak<=16);assert.equal(acknowledged,count);
+  assert.equal(f.calls.filter(([method])=>method==='cas').length,4); // formerly 2*32+2
+  const descriptor=await w.readArtifact(ref);assert.equal(descriptor.chunkBytes,256*1024);assert.equal(descriptor.parts.length,count);
+  await w.close();const restored=await f.open({directory:join(f.parent,'batch-runner'),mode:'resume'});
+  assert.deepEqual(await restored.readBlob(ref),bytes);
+  const stored=JSON.parse(Buffer.from(f.objects.get(`runs/test-run/${ref.reference}`).bytes));
+  assert.equal(Date.parse(stored.observedAt),Date.parse(NOW));assert.equal(stored.expiresAt,'2026-11-06T13:00:00.000Z');
+});
+
+for(const all of [false,true])test(`${all?'Entire':'Partial'} parallel blob failure joins transfers and resumes original retention without activating missing parts`,async t=>{
+  const f=await fixture(t),w=await f.open(),bytes=Buffer.alloc(2*1024*1024,8),put=f.store.putImmutable;
+  await w.reserveBudget(reservation);let active=0;
+  f.store.putImmutable=async(key,body)=>{
+    const value=JSON.parse(Buffer.from(body));if(value.value?.type!=='run-workspace-chunk')return put(key,body);
+    active++;try{await new Promise(resolve=>setTimeout(resolve,2));if(all||value.value.index===2)throw Error('body_transfer_unknown');return await put(key,body);}finally{active--;}
+  };
+  await assert.rejects(w.putBlob(bytes,{kind:'phase',observedAt:NOW}),/body_transfer_unknown/);assert.equal(active,0);
+  const head=JSON.parse(Buffer.from(f.objects.get('runs/test-run/head.json').bytes));
+  assert.equal(JSON.parse(Buffer.from(f.objects.get(`runs/test-run/events/${String(head.sequence).padStart(6,'0')}.${head.sha256}.json`).bytes)).event.type,'blob-bodies');
+  await w.close();f.store.putImmutable=put;f.setNow('2026-11-06T12:05:00.000Z');
+  const restored=await f.open({directory:join(f.parent,'partial-batch-runner'),mode:'resume'});
+  assert.equal((await restored.budget()).unconfirmedRequests,1);
+  const ref=await restored.putBlob(bytes,{kind:'phase',observedAt:'2026-11-06T12:05:00.000Z'});
+  assert.deepEqual(await restored.readBlob(ref),bytes);
+  assert.equal(JSON.parse(Buffer.from(f.objects.get(`runs/test-run/${ref.reference}`).bytes)).expiresAt,'2026-11-06T13:00:00.000Z');
+});
+
+test('original single-part journal records remain readable and reusable without rewriting history',async t=>{
+  const f=await fixture(t),w=await f.open(),bytes=Buffer.alloc(300000,9),digest=b=>createHash('sha256').update(b).digest('hex');
+  const parts=[];
+  for(let index=0;index<2;index++){
+    const part=bytes.subarray(index*256*1024,(index+1)*256*1024);
+    parts.push((await w.putArtifact({schemaVersion:1,type:'run-workspace-chunk',blobSha256:digest(bytes),blobByteLength:bytes.length,
+      index,count:2,sha256:digest(part),byteLength:part.length,base64:part.toString('base64')},{kind:'phase',observedAt:NOW})).sha256);
+  }
+  const ref=await w.putArtifact({schemaVersion:1,type:'run-workspace-blob',sha256:digest(bytes),byteLength:bytes.length,chunkBytes:256*1024,parts},
+    {kind:'phase',observedAt:NOW});const head=Buffer.from(f.objects.get('runs/test-run/head.json').bytes);
+  await w.close();const restored=await f.open({directory:join(f.parent,'legacy-blob-runner'),mode:'resume'});
+  assert.deepEqual(await restored.readBlob(ref),bytes);
+  assert.deepEqual(await restored.putBlob(bytes,{kind:'phase',observedAt:'2026-11-06T12:05:00.000Z'}),ref);
+  assert.deepEqual(Buffer.from(f.objects.get('runs/test-run/head.json').bytes),head);
+});
+
+for(const corrupt of [false,true])test(`cold body restore is parallel, joined and read-only${corrupt?' on corruption':''}`,async t=>{
+  const f=await fixture(t),w=await f.open(),bytes=Buffer.alloc(8*1024*1024,11),ref=await w.putBlob(bytes,{kind:'phase',observedAt:NOW});
+  await w.reserveBudget(reservation);await w.close();const head=Buffer.from(f.objects.get('runs/test-run/head.json').bytes),get=f.store.get;
+  let active=0,peak=0;
+  if(corrupt){const descriptor=JSON.parse(Buffer.from(f.objects.get(`runs/test-run/${ref.reference}`).bytes)).value;
+    const key=`runs/test-run/objects/${descriptor.parts[0]}.json`,body=JSON.parse(Buffer.from(f.objects.get(key).bytes));
+    body.value.base64='invalid';f.objects.get(key).bytes=encode(body);}
+  f.store.get=async key=>{if(!key.includes('/objects/'))return get(key);active++;peak=Math.max(peak,active);
+    try{await new Promise(resolve=>setTimeout(resolve,2));return await get(key);}finally{active--;}};
+  f.calls.length=0;
+  if(corrupt)await assert.rejects(f.open({directory:join(f.parent,'body-corrupt-runner'),mode:'resume'}),/artifact_hash|body_registration/);
+  else{const restored=await f.open({directory:join(f.parent,'body-parallel-runner'),mode:'resume'});
+    assert.deepEqual(await restored.readBlob(ref),bytes);assert.equal((await restored.budget()).unconfirmedRequests,1);}
+  assert.ok(peak>1&&peak<=16);assert.equal(active,0);
+  assert.deepEqual(Buffer.from(f.objects.get('runs/test-run/head.json').bytes),head);
+  assert.ok(f.calls.every(([method])=>method==='get'));
 });
 
 test('cold journal reads are parallel but original hash chain, charges and write ordering stay authoritative',async t=>{
