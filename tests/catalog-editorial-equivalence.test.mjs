@@ -10,7 +10,7 @@ import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
 import {createPersistentCatalogProduct} from '../lib/catalog/snapshot.ts';
 import {createProjectionPacket,importPublicProjection,getListedRevisionProductsByPublicIds,getRevisionProductsByPublicIds,
   keywordSearchRevision,visibleRevisionCountQuery,rollbackPreflight} from '../lib/catalog/d1.ts';
-import {checkCurrent,readApprovedCurrentRows} from '../scripts/catalog/export-d1-snapshot.ts';
+import {checkCurrent,readApprovedCurrentRows,readApprovedRevisionSource} from '../scripts/catalog/export-d1-snapshot.ts';
 import {claimMutationOwnership} from '../lib/catalog/mutation-fence.ts';
 
 const NOW='2026-10-24T16:00:00.000Z';
@@ -122,8 +122,18 @@ test('review and curation scores require the same finite JSON numeric types and 
   }
 });
 
-test('real publication/listing/keyword SQL accepts only permanent equivalence; semantic freshness and holds stay gated',async t=>{
+for(const originalHashRestored of [false,true])test(`real publication/listing/keyword SQL accepts only permanent equivalence; semantic freshness and holds stay gated (original hash restored: ${originalHashRestored})`,async t=>{
   const f=fixture(),sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
+  // A later observation can match the original facts again while the writer
+  // correctly retains its old stale label. Export must still carry the proof.
+  if(originalHashRestored){
+    f.current.title=f.old.title;f.current.imageUrl=f.old.imageUrl;
+    f.current.sourceFacts=structuredClone(f.old.sourceFacts);
+    f.current.sourceFactsHash=editorialSourceHash(f.current);
+    f.row.source_facts_hash=f.current.sourceFactsHash;
+    assert.equal(f.current.sourceFactsHash,f.current.editorialSourceHash);
+    assert.equal(f.current.editorialStatus,'stale');
+  }
   for(const file of (await readdir(new URL('../migrations/d1/',import.meta.url))).filter(f=>/^00\d\d_.*\.sql$/.test(f)).sort())
     sql.exec(await readFile(new URL('../migrations/d1/'+file,import.meta.url),'utf8'));
   sql.function('strftime',()=>NOW);
@@ -147,6 +157,8 @@ test('real publication/listing/keyword SQL accepts only permanent equivalence; s
   const captured=await readApprovedCurrentRows(db,[f.base.publicId],owner);
   assert.equal(sha256(canonicalJson(captured.rows[0])),sha256(canonicalJson({...sql.prepare('SELECT * FROM products').get()})));
   assert.doesNotThrow(()=>checkCurrent(f.base,{source_facts_hash:f.current.sourceFactsHash},captured.current[0],new Date(NOW)));
+  const unchanged=await readApprovedRevisionSource(db,owner,[f.base.publicId],[]);
+  assert.doesNotThrow(()=>checkCurrent(f.base,{source_facts_hash:f.current.sourceFactsHash},unchanged[0],new Date(NOW)));
   assert.ok(Math.max(...querySizes)<100_000,`maximum SQL text ${Math.max(...querySizes)}`);
   for(const patch of [{editorial_status:'blocked'},{editorial_status:'needs_review'},{is_active:0},{duplicate_of_product_id:'another'},
     {rights_json:'{}'}]){
