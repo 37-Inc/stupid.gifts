@@ -52,6 +52,17 @@ test('first-party telemetry is reachable only on the real production catalog, ne
   assert.equal(batches, 1);
 });
 
+test('optional show preview dispatch is read-only, no-store and expires before bytes leave Worker',async()=>{
+  let clock=Date.parse('2026-11-10T20:27:10Z');
+  const f=setup({now:()=>clock});
+  const response=await f.request('/api/show-preview');
+  assert.equal(response.status,200);assert.equal(response.headers.get('X-Robots-Tag'),'noindex, nofollow');
+  assert.equal((await response.json()).products.length,2);assert.equal(f.calls.length,0);
+  clock=Date.parse('2026-11-11T20:20:00Z');
+  assert.deepEqual(await(await f.request('/api/show-preview')).json(),{products:[]});
+  assert.equal((await f.request('/api/show-preview',{method:'POST'})).status,405);
+});
+
 test('explicit persistent safe routes remain useful and indexable while legacy/photo fallbacks stay noindex',async()=>{
   const f=setup();f.manifest.routes['/gifts/fart-button'].persistentIndexable=true;
   f.manifest.routes['/gifts/fart-button.txt'].persistentIndexable=false;
