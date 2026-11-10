@@ -29,12 +29,17 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22.23.1'
+      - name: Install the reviewed isolated uploader runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap
+          sudo apparmor_parser -r .github/catalog-bwrap.apparmor
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run test:catalog-automation
       - run: node --import tsx --test tests/catalog-title-repairs.test.mjs tests/catalog-short-copy.test.mjs tests/catalog-provider-evidence.test.mjs
       - run: node --import tsx --test tests/catalog-semantic-delta.test.mjs tests/catalog-photo-vector-reuse.test.mjs tests/catalog-publication-read-fetch.test.mjs
       - run: node --import tsx --test tests/catalog-editorial-equivalence.test.mjs
-      - run: node --import tsx --test --test-name-pattern="acknowledged indexing waits in the same driver|prepared freezing revision reuses|atomic multi-product receipt" tests/catalog-cloudflare-weekly.test.mjs tests/catalog-approved-cohort.test.mjs
+      - run: node --import tsx --test --test-name-pattern="acknowledged indexing waits in the same driver|prepared freezing revision reuses|atomic multi-product receipt|Monday discovery publishes through a real permanent predecessor" tests/catalog-cloudflare-weekly.test.mjs tests/catalog-approved-cohort.test.mjs
       - run: node --import tsx --test tests/catalog-d1-write-rest.test.mjs tests/catalog-maintenance-d1.test.mjs tests/catalog-daily-operator.test.mjs tests/catalog-publication-recovery-budget.test.mjs tests/catalog-telemetry-d1.test.mjs
       - run: node --import tsx --test --test-name-pattern="run enumeration|killed process" tests/catalog-purge-workspaces.test.mjs tests/catalog-run-workspace.test.mjs
       - run: node --import tsx --test --test-name-pattern="routine activated permanent|routine metadata completion|routine permanent completion|routine completion finishes|routine completion retains|routine permanent successor|telemetry commit and idle|completed telemetry with drifted|permanent summary accepts" tests/catalog-run-workspace.test.mjs tests/catalog-permanent-freeze.test.mjs tests/catalog-activated-permanent-settlement.test.mjs
