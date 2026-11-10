@@ -18,9 +18,13 @@ on:
         description: Code-only release, shadow, care/canary, editorial preview, or post-canary activation
         type: choice
         default: shadow
-        options: [shadow, code, full, photos, canary, editorial, activate]
+        options: [shadow, code, full, photos, canary, editorial, activate, admit]
       canary_asin:
         description: Exact existing public ASIN; required for canary or explicit activation after its acceptance
+        type: string
+        default: ''
+      admit_asins:
+        description: Owner-picked comma-separated exact ASINs; admit mode only, no unrelated refresh or discovery
         type: string
         default: ''
 
@@ -59,6 +63,7 @@ jobs:
           CATALOG_MODE: ${{ inputs.mode || ((github.event.schedule == '30 20 * * *' || github.event.schedule == '30 22 * * *') && 'photos' || 'full') }}
           CATALOG_SCHEDULE: ${{ github.event.schedule || '' }}
           CATALOG_CANARY_ASIN: ${{ inputs.canary_asin }}
+          CATALOG_ADMIT_ASINS: ${{ inputs.admit_asins }}
           STUPID_GIFTS_OPERATOR_MODE: hosted
           STUPID_GIFTS_CLOUDFLARE_API_TOKEN: ${{ secrets.STUPID_GIFTS_CLOUDFLARE_API_TOKEN }}
           STUPID_GIFTS_AMAZON_CREDENTIAL_ID: ${{ secrets.STUPID_GIFTS_AMAZON_CREDENTIAL_ID }}
@@ -68,4 +73,4 @@ jobs:
           STUPID_GIFTS_R2_SECRET_ACCESS_KEY: ${{ secrets.STUPID_GIFTS_R2_SECRET_ACCESS_KEY }}
         run: |
           umask 077
-          node --import tsx scripts/catalog/hosted-coordinator.mjs "$CATALOG_MODE" "$CATALOG_CANARY_ASIN"
+          node --import tsx scripts/catalog/hosted-coordinator.mjs "$CATALOG_MODE" "$CATALOG_CANARY_ASIN" "$CATALOG_ADMIT_ASINS"

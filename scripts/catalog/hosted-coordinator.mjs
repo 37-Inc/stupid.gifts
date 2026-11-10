@@ -47,11 +47,19 @@ function shadowProviderFields(result){
       reportedRowsRead:result.metrics.reportedRowsRead,reportedRowsWritten:result.metrics.reportedRowsWritten}};
 }
 export function hostedRunRecord(value){
-  if(!exact(value,'schemaVersion,runKey,source,day,kind,inputsRef'+(value?.kind==='canary'?',canaryId':''))||value.schemaVersion!==1
-    ||!SOURCE.test(value.source)||!['full','photos','canary','code'].includes(value.kind))fail('run_record');
+  if(!exact(value,'schemaVersion,runKey,source,day,kind,inputsRef'+(value?.kind==='canary'?',canaryId':value?.kind==='admit'?',admitAsins':''))||value.schemaVersion!==1
+    ||!SOURCE.test(value.source)||!['full','photos','canary','code','admit'].includes(value.kind))fail('run_record');
   day(value.day);inputsReference(value.inputsRef);
-  const key=value.kind==='code'?'serving-'+value.source.slice(0,12):value.kind==='full'?'scheduled-'+value.day:value.kind==='photos'?'photos-'+value.day:'canary-'+value.day+'-'+value.canaryId;
+  if(value.kind==='admit'&&!validAdmissionAsins(value.admitAsins))fail('admission_asins');
+  const key=hostedRunKey(value.kind,value.day,value.source,value.canaryId,value.admitAsins);
   if(value.runKey!==key||value.kind==='canary'&&!ASIN.test(value.canaryId))fail('run_record');return value;
+}
+function validAdmissionAsins(ids){return Array.isArray(ids)&&ids.length>0&&ids.length<=10
+  &&ids.every(id=>typeof id==='string'&&ASIN.test(id))&&new Set(ids).size===ids.length
+  &&canonicalJson(ids)===canonicalJson([...ids].sort());}
+function hostedRunKey(kind,day,source,canaryId,admitAsins){
+  return kind==='code'?'serving-'+source.slice(0,12):kind==='full'?'scheduled-'+day:kind==='photos'?'photos-'+day
+    :kind==='admit'?'admit-'+day+'-'+hash(canonicalJson(admitAsins)).slice(0,12):'canary-'+day+'-'+canaryId;
 }
 /** Evening Pacific photo wakes fall on the following UTC date. Use that stable
  * slot for both evening retries and delayed-after-midnight dispatches, so a late
@@ -194,6 +202,8 @@ function defaults(runtime,environment){
         ||config.publication.codeSha!==record.source||config.publication.identityOrigin!=='https://stupid.gifts'||config.publication.sourceMode!=='stupid-production')fail('config_identity');
       if(record.kind==='canary'&&(canonicalJson(config.cadence.automation?.refreshIds??null)!==canonicalJson([record.canaryId])
         ||config.cadence.automation.discovery!==false||config.credentials.openai))fail('canary_config');
+      if(canonicalJson(config.cadence.admitAsins??null)!==canonicalJson(record.kind==='admit'?record.admitAsins:null)
+        ||record.kind==='admit'&&config.cadence.automation)fail('admission_config');
       for(const role of ['cloudflare','amazonId','amazonSecret','openai'])if(config.credentials[role]&&canonicalJson(config.credentials[role])!==canonicalJson(runtime.credentials[role]))fail('credential_reference');
       const remote=await Promise.all(['manifest.json','head.json'].map(name=>runtime.durable.get(`runs/${config.runId}/${name}`)));
       const local=await Promise.all(['manifest.json','head.json'].map(name=>optional(()=>lstat(path.join(runtime.workspace,'runs',config.runId,name)))));
@@ -241,9 +251,10 @@ function defaults(runtime,environment){
 
 /** One manual/scheduled invocation, one existing run. The ONLY mutable progress
  * pointer refers to immutable intent; actual phases/dispatches stay in RunWorkspace. */
-export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day:capturedDay,runtime,environment=process.env},injected={}){
-  if(!['shadow','full','photos','canary','code'].includes(mode)||!SOURCE.test(source)||!runtime.hosted||!runtime.durable)fail('invocation');
+export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins,source,day:capturedDay,runtime,environment=process.env},injected={}){
+  if(!['shadow','full','photos','canary','code','admit'].includes(mode)||!SOURCE.test(source)||!runtime.hosted||!runtime.durable)fail('invocation');
   day(capturedDay);if(mode==='canary'?!ASIN.test(canaryId):canaryId!==undefined)fail('canary');
+  if(mode==='admit'?!validAdmissionAsins(admitAsins):admitAsins!==undefined)fail('admission_asins');
   const deps={...defaults(runtime,environment),...injected},pointerFile=runtime.care+'/pending-run.json';
   let pointerBytes=await optional(()=>runtime.state.readPointer('pending-run',pointerFile)),record;
   if(pointerBytes){const pointer=json(pointerBytes);
@@ -257,13 +268,17 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
   let resumed=Boolean(record);
   // A requested code-only release must never resume supplier/model phases.
   if(mode==='code'&&record&&record.kind!=='code')return{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_catalog_pending'};
+  // Owner-picked admission never substitutes another cohort or resumes unrelated
+  // provider work. Scheduled wakes may still finish this saved exact intent.
+  if(mode==='admit'&&record&&(record.kind!=='admit'||canonicalJson(record.admitAsins)!==canonicalJson(admitAsins)))
+    return{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_catalog_pending'};
   if(!record){
     if(mode==='shadow'){const inputsRef=inputsReference(await deps.currentInputs());await deps.restoreInputs(inputsRef);await deps.checkout(source);
       return{state:'shadow',source,inputsVerified:true,workspace:'not_verified_readonly',pending:false,...shadowProviderFields(await deps.shadowCheck())};}
-    const runKey=mode==='code'?'serving-'+source.slice(0,12):mode==='full'?'scheduled-'+capturedDay:mode==='photos'?'photos-'+capturedDay:'canary-'+capturedDay+'-'+canaryId;
+    const runKey=hostedRunKey(mode,capturedDay,source,canaryId,admitAsins);
     const file=runtime.care+'/runs/'+runKey+'/hosted-run.json';let bytes=await optional(()=>runtime.state.bytes(file));
     if(bytes){record=hostedRunRecord(json(bytes));if(record.runKey!==runKey)fail('run_record');resumed=true;}
-    else{record=hostedRunRecord({schemaVersion:1,runKey,source,day:capturedDay,kind:mode,inputsRef:inputsReference(await deps.currentInputs()),...(mode==='canary'?{canaryId}:{})});
+    else{record=hostedRunRecord({schemaVersion:1,runKey,source,day:capturedDay,kind:mode,inputsRef:inputsReference(await deps.currentInputs()),...(mode==='canary'?{canaryId}:mode==='admit'?{admitAsins}:{})});
       bytes=await runtime.state.put(file,record);}
     pointerBytes=await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:{path:file,sha256:hash(bytes)}},pointerBytes);
   }
@@ -312,7 +327,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
       return repaired?finish({state:'accepted',...repaired}):{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_successor_pending'};
     }
     let result;
-    if(!status.prepared){result=await invoke('prepare',record.kind==='photos'?['--photos-only']:record.kind==='canary'?['--canary-id',record.canaryId]:[]);
+    if(!status.prepared){result=await invoke('prepare',record.kind==='photos'?['--photos-only']:record.kind==='canary'?['--canary-id',record.canaryId]
+      :record.kind==='admit'?['--admit-asins',record.admitAsins.join(',')]:[]);
       if(result.state==='skipped'&&['photos_current','run_already_completed'].includes(result.reason)){
         if(result.reason==='photos_current')return finish({state:'skipped',reason:result.reason});
         const checked=await deps.inspect(record,directory),accepted=await deps.accepted(record,checked);if(accepted)return finish({state:'accepted',...accepted});
@@ -363,7 +379,9 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
 async function main(){
   process.umask(0o077);
   if(process.platform!=='linux'||process.versions.node.split('.')[0]!=='22'||homedir()!=='/home/runner')fail('runner');
-  const [mode='shadow',canaryId]=process.argv.slice(2);if(process.argv.length>4)fail('invocation');
+  const [mode='shadow',canaryId,admissionList]=process.argv.slice(2);if(process.argv.length>5)fail('invocation');
+  if(admissionList&&mode!=='admit')fail('admission_asins');
+  const admitAsins=admissionList?.split(',').map(id=>id.trim()).sort();
   const runtime=automationRuntime(),source=process.env.GITHUB_SHA;
   if((await exec('git',['rev-parse','HEAD'],{cwd:ROOT,env:hostedCommandEnvironment(process.env,{credentials:false})})).stdout.trim()!==source)fail('reviewed_source');
   const now=new Date(),capturedDay=hostedInvocationDay(mode,now);
@@ -378,7 +396,7 @@ async function main(){
     const repository=await defaults(runtime,process.env).checkout(source);
     console.log(JSON.stringify(await previewHostedHomepage(runtime,{repository,source,day:capturedDay})));return;
   }
-  const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),source,day:capturedDay,runtime});
+  const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),...(admitAsins?{admitAsins}:{}),source,day:capturedDay,runtime});
   console.log(JSON.stringify(result));if(result.state==='attention'){console.error('::warning::Catalog run remains pending; resume its existing identity.');process.exitCode=1;}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)main().catch(error=>{

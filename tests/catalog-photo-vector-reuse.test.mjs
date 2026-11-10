@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {preservedPhotoVector} from '../scripts/catalog/photo-vector-reuse.ts';
+import {preservedPhotoVector,readPreservedPhotoVector} from '../scripts/catalog/photo-vector-reuse.ts';
 import {maintenanceEmbeddingText} from '../scripts/catalog/maintenance-state.ts';
 import {encodePgvectorSendBase64} from '../scripts/catalog/pgvector-binary.ts';
 import {sha256} from '../scripts/catalog/migration.ts';
@@ -28,6 +28,28 @@ test('saved verified binding remains exact when supplier availability produces n
   const f=fixture(),proof=JSON.parse(f.state.embedding_provenance_json);
   f.member.embeddingTextHash=f.product.embedding_text_hash=proof.embeddingTextHash;
   assert.equal(preservedPhotoVector(f.product,f.state,f.previous,f.member,'fresh-photo').embeddingTextHash,proof.embeddingTextHash);
+});
+test('returning held gift reuses only its last accepted projection and exact saved vector',async()=>{
+  const f=fixture();f.product.slug=f.previous.slug;let reads=0;
+  const db={prepare(sql){assert.match(sql,/JOIN publication_receipts/);assert.match(sql,/LIMIT 1/);
+    return{bind(id){assert.equal(id,f.product.id);return{async all(){reads++;return{results:[{public_display_json:JSON.stringify(f.previous)}]};}};}};}};
+  const previous={products:[],heldProducts:[{id:f.product.id,publicId:f.product.public_id,slug:f.product.slug}]};
+  const v=await readPreservedPhotoVector(db,f.product,f.state,previous,f.member,'returning');
+  assert.equal(reads,1);assert.equal(v.values[0],.125);assert.equal(v.embeddingTextHash,null);
+  const before=structuredClone(f);
+  for(const mismatch of [{id:'different'},{slug:'different'},{publicId:'different'}]){
+    await assert.rejects(readPreservedPhotoVector(db,f.product,f.state,
+      {products:[],heldProducts:[{...previous.heldProducts[0],...mismatch}]},f.member,'returning'),/vector_original_unproven/);
+  }
+  assert.equal(reads,1);assert.deepEqual(f,before);
+  const bad=structuredClone(f.previous);bad.persistent.description='Different copy';
+  const badDb={prepare(){return{bind(){return{async all(){return{results:[{public_display_json:JSON.stringify(bad)}]};}};}};}};
+  await assert.rejects(readPreservedPhotoVector(badDb,f.product,f.state,previous,f.member,'returning'),/vector_original_unproven/);
+});
+test('current public gift never reads older projections to evade a changed-copy failure',async()=>{
+  const f=fixture(),db={prepare(){throw Error('must_not_read_history');}};
+  const before=structuredClone(f.previous);before.persistent.description='Different previous copy';
+  await assert.rejects(readPreservedPhotoVector(db,f.product,f.state,{products:[before],heldProducts:[]},f.member,'next'),/vector_original_unproven/);
 });
 for(const mutation of ['text','copy','native','provenance','absent','permanent-photo','binding'])test(`photo-native reuse rejects changed or unproven ${mutation}`,()=>{
   const f=fixture();

@@ -97,6 +97,33 @@ test('one existing operator performs prepare/start/review/exact-SHA publish; poi
   assert.deepEqual(JSON.parse(f.files.get(f.runtime.care+'/runs/scheduled-'+DAY+'/hosted-run.json')),
     {schemaVersion:1,runKey:'scheduled-'+DAY,source:SOURCE,day:DAY,kind:'full',inputsRef:ref});
 });
+test('manual exact admission uses the existing operator and pins only sorted owner-picked ASINs',async()=>{
+  const admitAsins=['B0B3XCGVJB','B0FMXQJW2V','B0H2TW8LZ9','B0HDRTSB19'],f=fixture();
+  const result=await f.run({mode:'admit',admitAsins});
+  assert.equal(result.state,'accepted');assert.equal(result.kind,'admit');
+  const runKey='admit-'+DAY+'-'+hash(canonicalJson(admitAsins)).slice(0,12);
+  assert.deepEqual(f.calls[0],['prepare','--admit-asins',admitAsins.join(','),'--run',runKey]);
+  assert.deepEqual(hostedRunRecord(JSON.parse(f.files.get(f.runtime.care+'/runs/'+runKey+'/hosted-run.json'))).admitAsins,admitAsins);
+  assert.equal(f.calls.filter(args=>args[0]==='start').length,1);
+});
+test('manual admission rejects empty/duplicate/malformed cohorts and cannot replace unrelated pending work',async()=>{
+  for(const admitAsins of [undefined,[],['B0FMXQJW2V','B0FMXQJW2V'],['bad'],['B0HDRTSB19','B0FMXQJW2V']])
+    await assert.rejects(fixture().run({mode:'admit',admitAsins}),/admission_asins/);
+  await assert.rejects(fixture().run({mode:'full',admitAsins:['B0FMXQJW2V']}),/admission_asins/);
+  const f=fixture();await assert.rejects(f.run({}, {invoke:async()=>{throw Error('saved pending');}}));
+  const before=f.pointer(),result=await f.run({mode:'admit',admitAsins:['B0FMXQJW2V']});
+  assert.equal(result.errorCode,'catalog_hosted_catalog_pending');assert.deepEqual(f.pointer(),before);
+  assert.deepEqual(f.calls,[]);
+});
+test('scheduled retry resumes the original exact admission, never starts ordinary discovery',async()=>{
+  const f=fixture(),invoke=f.deps.invoke,admitAsins=['B0FMXQJW2V'];
+  const held=await f.run({mode:'admit',admitAsins},{invoke:async(dir,args)=>args[0]==='start'
+    ?{state:'attention',errorCode:'catalog_d1_identity_unavailable'}:invoke(dir,args)});
+  assert.equal(held.state,'attention');const before=f.calls.length;
+  const result=await f.run({mode:'photos'});assert.equal(result.state,'accepted');assert.equal(result.kind,'admit');
+  assert.equal(result.resumed,true);assert.equal(f.calls.slice(before).some(args=>args[0]==='prepare'),false);
+  assert.equal(f.calls.filter(args=>args[0]==='prepare').length,1);
+});
 test('historical cleanup runs only after publication acceptance and cleared pending pointer; failure does not undo acceptance',async()=>{
   const f=fixture();let cleanups=0;
   const result=await f.run({}, {cleanup:async()=>{

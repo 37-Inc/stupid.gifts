@@ -42,7 +42,7 @@ activation or finalization.
 - Every public card uses image, factual title and one canonical short description
   across home/search/guides/product pages. Articles are optional. Keep the white
   24-item gallery, disclosures, hybrid search, Random and guides.
-- Keep `/h` noindex, its eight immediate approved picks and real submit-only
+- Keep `/h` noindex, its saved approved picks and real submit-only
   search; Clear restores picks. No guest label or previously shown goat/pickle/
   vase. Follow [HOWIE_SHORTLIST.md](HOWIE_SHORTLIST.md). Directory `/gifts` and
   Weird Gift Index stay404; individual product URLs remain.
@@ -114,6 +114,9 @@ a listing or renew its deadline.
 Owner-picked admissions use `prepare --run <label> --admit-asins ASIN1,ASIN2`,
 then the same saved run. No unrelated fetch/search or automatic campaign joining;
 this does not change scheduled cadence.
+For hosted admission, dispatch manual `admit` with `admit_asins` in the existing
+GitHub workflow, after unrelated pending publication has accepted. This is the
+same publisher and exact-ASIN operator, not permission to run a local fallback.
 
 ## Publication, recovery and acceptance
 

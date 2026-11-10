@@ -6,7 +6,25 @@ import {nativeHash} from './vector-outbox.ts';
 import {persistentPublicProduct} from '../../lib/catalog/display.ts';
 import type {PublicCatalogProduct} from '../../lib/catalog/types.ts';
 import type {SemanticProduct} from './maintenance-state.ts';
+import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
+import type {CatalogSnapshot} from '../../lib/catalog/types.ts';
 type Row=Record<string,unknown>;
+
+/** A real positive stock observation may restore an existing held gift. Its
+ * previous accepted PUBLIC bytes then predate the immediately preceding
+ * snapshot. Read that last receipted projection, never manufacture a baseline
+ * from today's row or relax the exact copy/native checks below. */
+export async function readPreservedPhotoVector(db:CatalogD1,product:Row,state:Row,
+  previous:CatalogSnapshot,member:{publicId:string;sourceFactsHash:string;embeddingTextHash:string|null},revision:string){
+  let prior=previous.products.find(p=>p.publicId===member.publicId);
+  if(!prior&&previous.heldProducts.some(p=>p.publicId===member.publicId&&p.id===product.id&&p.slug===product.slug)){
+    const rows=(await db.prepare(`SELECT cp.public_display_json FROM catalog_public_products cp
+      JOIN publication_receipts r ON r.catalog_revision=cp.catalog_revision
+      WHERE cp.product_id=? ORDER BY r.rowid DESC LIMIT 1`).bind(product.id).all()).results;
+    if(rows.length===1)prior=JSON.parse(String(rows[0].public_display_json));
+  }
+  return preservedPhotoVector(product,state,prior,member,revision);
+}
 
 /** A new photo is not new embedding input. Reuse only independently saved,
  * verified exact text/float32s over the unchanged approved permanent copy.

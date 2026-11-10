@@ -17,6 +17,12 @@ alternate daily commands; use the maintained same-run recovery path below.
   accepted catalog pointer. See [CODE_ONLY_PUBLICATION.md](CODE_ONLY_PUBLICATION.md).
 - `catalog:hosted` coordinates that operator, not another ingestion engine.
   Full care, due photos and explicit one-product canary use the same run journal.
+- Manual `admit` with `admit_asins` accepts one owner-picked cohort (up to ten
+  exact ASINs, one merchant GetItems batch). It reuses normal all-identity
+  deduplication, short-copy review, embedding, delivery and acceptance. No
+  unrelated refresh/search, automatic campaign joining or cadence change.
+  Its sorted ASINs are pinned in the existing pending intent; retries resume that
+  same cohort. Finish unrelated pending work before dispatching it.
 - An immutable pending intent pins source, Pacific day, input version and run
   key. Resume it before new work. Its phases, reservations and publication state
   remain in `RunWorkspace` and the existing D1 controls.
@@ -80,6 +86,11 @@ alternate daily commands; use the maintained same-run recovery path below.
   cannot be relabeled as current semantic coverage.
   A legacy vector describing different public copy is omitted from new secondary
   coverage, not used to block the correct listing and working keyword fallback.
+- A previously held gift restored by a real positive stock observation may
+  reuse its last receipted public projection when it is absent from the
+  immediately preceding public snapshot. Exact identity, complete cleared base,
+  saved verified embedding text and native bytes must still match. This is not
+  permission to re-embed, invent provenance or use today's row as its own proof.
 - Secondary Vectorize readback splits IDs into provider-sized groups of20,
   independent of the approved cohort/upsert group. Every approved vector is
   still processed. After acknowledged writes, bounded30-second visibility waits

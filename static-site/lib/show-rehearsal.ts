@@ -23,6 +23,10 @@ export const SHOW_PRESETS = {
     "hey-you-dropped-this-your-iq",
     "emotional-support-chicken-nuggets-cuddle-crunch",
     "pizza-boss-3000-slice-of-humor-for-kitchen-heroes",
+    "wiener-switch-light-up-your-night-with-laughter",
+    "B0FMXQJW2V", // Solar peeing dog
+    "B0H2TW8LZ9", // Magnetic desk goose
+    "B0HDRTSB19", // Seagull reading print
   ],
 } as const;
 
@@ -36,7 +40,9 @@ export function isShowPreset(value: string): value is ShowPreset {
 
 export function selectShowPicks(snapshot: CatalogSnapshot, preset: ShowPreset = ACTIVE_SHOW_PRESET): PublicCatalogProduct[] {
   const products = readySnapshotProducts(snapshot);
-  const available = new Map(products.map((product) => [product.slug, product]));
+  // Exact ASINs let an approved upcoming admission appear under its generated
+  // canonical slug, without hard-coding or duplicating public product content.
+  const available = new Map(products.flatMap((product) => [[product.slug, product], [product.id, product]] as const));
   const slugs = SHOW_PRESETS[preset];
   const picks = slugs.flatMap((slug) => available.get(slug) || []);
   // Fixtures are illustrative. On a real catalog, never silently substitute
