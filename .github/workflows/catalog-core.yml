@@ -29,6 +29,11 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22.23.1'
+      - name: Install the reviewed isolated uploader runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap
+          sudo apparmor_parser -r .github/catalog-bwrap.apparmor
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run test:catalog-automation
       - run: node --import tsx --test tests/catalog-title-repairs.test.mjs tests/catalog-short-copy.test.mjs tests/catalog-provider-evidence.test.mjs
