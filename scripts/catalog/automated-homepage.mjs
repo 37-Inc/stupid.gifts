@@ -7,6 +7,7 @@ import {createCatalogEditorial,createEditorialStages} from './catalog-editorial.
 import {automatedHomepage} from './homepage-editor.mjs';
 import {CATALOG_SCOPE} from './automation-runtime.mjs';
 import {readHomepageEdition} from '../../lib/catalog/homepage-edition.ts';
+import {repairTitleQueue,INITIAL_TITLE_PRIORITY} from './title-repairs.mjs';
 
 /** Optional editor, using the SAME protected journal/storage implementation as
  * care. No catalog mutations, ownership takeovers, or extra publishing service.
@@ -14,8 +15,9 @@ import {readHomepageEdition} from '../../lib/catalog/homepage-edition.ts';
  */
 export async function curateAutomationHomepage({runtime,db,seal,prior,day,merchandising={},repository,source,complete}){
   const file=path.join(runtime.care,'homepage',day+'.json');
+  let existingEdition;
   try{const edition=readHomepageEdition(JSON.parse(await runtime.state.bytes(file)));
-    if(edition?.day===day)return{state:'already_curated',edition};
+    if(edition?.day===day)existingEdition=edition;
   }catch(error){if(error.code!=='ENOENT')return{state:'last_good',edition:prior,attention:'homepage_saved_edition_unavailable'};}
   const config={schemaVersion:1,kind:'homepage-editor',day,acceptedCatalogSha256:sha256(canonicalJson(seal)),source};
   const runId='homepage-'+day+'-'+source.slice(0,8),now=new Date().toISOString();
@@ -51,8 +53,14 @@ export async function curateAutomationHomepage({runtime,db,seal,prior,day,mercha
       const client=new OpenAI({apiKey:await resolveCatalogCredential(runtime.credentials.openai),maxRetries:0,timeout:90000});
       complete=request=>client.chat.completions.create(request);}
     const editor=createCatalogEditorial({complete,stages});
-    return await automatedHomepage({db,revision:seal.projectionReceipt.catalog_revision,prior,day,merchandising,editor,
-      save:edition=>runtime.state.put(file,edition)});
+    const result=existingEdition?{state:'already_curated',edition:existingEdition}:await automatedHomepage({
+      db,revision:seal.projectionReceipt.catalog_revision,prior,day,merchandising,editor,save:edition=>runtime.state.put(file,edition)});
+    try{
+      const titles=await repairTitleQueue({runtime,db,revision:seal.projectionReceipt.catalog_revision,day,editor,
+        exposedIds:[...result.edition.anchors,...result.edition.rotation],priorityIds:INITIAL_TITLE_PRIORITY});
+      return{...result,titleReviews:titles.state.reviews,titleRepair:{selected:titles.selected,approved:titles.approved,
+        remaining:titles.remaining,deferred:titles.deferred,attention:titles.attention}};
+    }catch{return{...result,titleRepair:{attention:'title_repair_unavailable'}};}
   }catch{return{state:'last_good',edition:prior,attention:'homepage_editor_unavailable'};}
   finally{try{await workspace?.close();}catch{console.warn(JSON.stringify({attention:'homepage_editor_close_pending'}));}}
 }

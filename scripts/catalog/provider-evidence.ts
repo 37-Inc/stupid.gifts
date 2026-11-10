@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { ProductRights } from '../../lib/catalog/types.ts';
-import { editorialSourceHash, normalizedSourceSnapshot, sourceFactCount, hasCurrentApprovedCopy } from '../ops/catalog-editorial-core.mjs';
+import { editorialSourceHash, normalizedSourceSnapshot, sourceFactCount, hasCurrentApprovedCopy,completeProductName,SHORT_COPY_PROMPT_VERSION } from '../ops/catalog-editorial-core.mjs';
 import { canonicalJson, EMBEDDING_MODEL, sha256 } from './migration.ts';
 import { explicitMaintenanceTime, maintenanceEmbeddingText } from './maintenance-state.ts';
 import { decodePgvectorSendBase64, encodePgvectorSendBase64 } from './pgvector-binary.ts';
@@ -172,7 +172,9 @@ export function createCatalogProviderEvidence(options: {
         ||affiliate.searchParams.getAll('tag').length!==1||affiliate.hash)return false;
       const reviewedAt=clock(),observedAt=new Date(observation.observedAt).toISOString(),expiresAt=new Date(Date.parse(observation.observedAt)+86400000).toISOString();
       if(Date.parse(reviewedAt)>=Date.parse(expiresAt))return false;
-      const saved=await options.saveReviewedShort({id:p.id,sourceFactsHash,title:p.title,description:p.wittyDescription,
+      const title=p.editorialPromptVersion===SHORT_COPY_PROMPT_VERSION&&typeof p.punnyTitle==='string'&&completeProductName(p.punnyTitle)?p.punnyTitle:p.title;
+      if(p.editorialPromptVersion===SHORT_COPY_PROMPT_VERSION&&!completeProductName(p.punnyTitle))return false;
+      const saved=await options.saveReviewedShort({id:p.id,sourceFactsHash,title,description:p.wittyDescription,
         observationReference:observation.reference,reviewedAt,quality:Number(review.qualityScore)});
       if(!saved||typeof saved.reference!=='string'||!REF.test(saved.reference))throw new Error('provider_evidence_storage_unconfirmed');
       const merchant=(value:string)=>({basis:'merchant' as const,reference:observation.reference,value,observedAt,expiresAt});
@@ -184,7 +186,7 @@ export function createCatalogProviderEvidence(options: {
         // photo overlay renders that photo only until its original deadline.
         // This never relabels supplier imagery as permanently licensed, nor
         // replaces an existing independently cleared product base.
-        persistent:{title:authored(p.title),description:authored(p.wittyDescription),affiliateUrl:authored(p.affiliateUrl),
+        persistent:{title:authored(title),description:authored(p.wittyDescription),affiliateUrl:authored(p.affiliateUrl),
           imageUrl:{basis:'owned',reference:'site/images/gift-placeholder.svg',value:'/images/gift-placeholder.svg'}}});
       return true;
     },

@@ -240,7 +240,6 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
   if(!record){
     if(mode==='shadow'){const inputsRef=inputsReference(await deps.currentInputs());await deps.restoreInputs(inputsRef);await deps.checkout(source);
       return{state:'shadow',source,inputsVerified:true,workspace:'not_verified_readonly',pending:false,...shadowProviderFields(await deps.shadowCheck())};}
-    try{await deps.cleanup(deps.checkout);}catch{console.warn(JSON.stringify({notice:'catalog_hosted_cleanup_pending',catalogBlocked:false}));}
     const runKey=mode==='full'?'scheduled-'+capturedDay:mode==='photos'?'photos-'+capturedDay:'canary-'+capturedDay+'-'+canaryId;
     const file=runtime.care+'/runs/'+runKey+'/hosted-run.json';let bytes=await optional(()=>runtime.state.bytes(file));
     if(bytes){record=hostedRunRecord(json(bytes));if(record.runKey!==runKey)fail('run_record');resumed=true;}
@@ -254,6 +253,10 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
   const finish=async result=>{
     if(result.state==='accepted')await deps.registerCleanup(record);
     await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:null},pointerBytes);
+    // Historical supplier-body housekeeping follows actual acceptance/skip.
+    // It retains the original source/lease/deadlines, but cannot delay a new
+    // catalog's supplier phases, activation, or accepted-successor handoff.
+    try{await deps.cleanup(deps.checkout);}catch{console.warn(JSON.stringify({notice:'catalog_hosted_cleanup_pending',catalogBlocked:false}));}
     return{...result,runKey:record.runKey,kind:record.kind,resumed};};
   const invoke=(command,extra=[])=>deps.invoke(directory,[command,...extra,'--run',record.runKey]);
   const publish=(status,sha)=>record.source!==source

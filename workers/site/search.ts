@@ -11,6 +11,7 @@ import { canonicalJson } from '../../lib/catalog/canonical-json.ts';
 import { productPresentation } from '../../lib/catalog/presentation.ts';
 import { rankHybridResults } from '../../lib/catalog/hybrid-ranking.ts';
 import type { Merchandising } from '../../lib/catalog/merchandising.ts';
+import { productTitleView } from '../../lib/catalog/merchandising.ts';
 
 export const EMBEDDING_MODEL = 'text-embedding-3-small';
 export const EMBEDDING_DIMENSIONS = 1536;
@@ -132,7 +133,8 @@ export function createSearchHandler<Env extends SiteEnv>(options: {
     const current=now();
     // Expired semantic proof must not swallow a valid same-ID lexical result
     // during identity merging. Filter each lane first, then fuse once.
-    const lexical=select(keywords,240,current),vectors=select(semantic,240,current,deadlines);
+    const lexical=select(keywords,240,current).map(p=>productTitleView(p,options.merchandising??{})),
+      vectors=select(semantic,240,current,deadlines).map(p=>productTitleView(p,options.merchandising??{}));
     return select(rankHybridResults(query,lexical,vectors,options.merchandising,current),limit,current,deadlines);
   };
 

@@ -122,7 +122,7 @@ export async function buildStaticRelease(root: string) {
   // Validate Next's complete export before selecting this native-anchor site's
   // document output. HTML includes its own hydration payload; standalone Flight
   // navigation files are deliberately not published. Safe/legal text remains.
-  const navigationRoutes = createStaticRoutes(snapshot, [...currentAssets.keys()], undefined, siteIdentityFor(context.sourceMode), context.generatedAt, context.homepage);
+  const navigationRoutes = createStaticRoutes(snapshot, [...currentAssets.keys()], undefined, siteIdentityFor(context.sourceMode), context.generatedAt, context.homepage,context.merchandising);
   const assembled = assembleReleaseAssets(snapshot, documentAssets(currentAssets, navigationRoutes), context, priorPackage);
   // Only generated outputs in this build are removed, never historical packages.
   for (const name of currentAssets.keys()) if (!assembled.assets.has(name))

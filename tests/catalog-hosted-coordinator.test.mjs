@@ -94,6 +94,14 @@ test('one existing operator performs prepare/start/review/exact-SHA publish; poi
   assert.deepEqual(JSON.parse(f.files.get(f.runtime.care+'/runs/scheduled-'+DAY+'/hosted-run.json')),
     {schemaVersion:1,runKey:'scheduled-'+DAY,source:SOURCE,day:DAY,kind:'full',inputsRef:ref});
 });
+test('historical cleanup runs only after publication acceptance and cleared pending pointer; failure does not undo acceptance',async()=>{
+  const f=fixture();let cleanups=0;
+  const result=await f.run({}, {cleanup:async()=>{
+    cleanups++;assert.equal(f.phase,'finalized');assert.ok(f.events.includes('publish'));
+    assert.deepEqual(JSON.parse(f.pointer()),{schemaVersion:1,pending:null});throw Error('historical cleanup unavailable');
+  }});
+  assert.equal(result.state,'accepted');assert.equal(cleanups,1);
+});
 
 test('actual review producer preserves nullable legacy facts through hosted review and publication without refetching',async()=>{
   const f=fixture(),row={id:'B000000001',public_id:'public-gift',slug:'retained-legacy-gift',editorial_status:'pending',

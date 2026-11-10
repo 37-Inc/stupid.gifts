@@ -5,6 +5,7 @@ import {productPresentation} from '../../lib/catalog/presentation.ts';
 import {resolvePublicProduct} from '../../lib/catalog/display.ts';
 import {searchDemandTopic} from '../../lib/search-demand.ts';
 import {searchDemandReportSql} from '../ops/search-demand-report.mjs';
+import {savedTitleRepairs} from './title-repairs.mjs';
 
 const optional=async(runtime,file,fallback)=>{
   try{return JSON.parse(await runtime.state.bytes(file));}catch(error){if(error.code==='ENOENT')return fallback;throw error;}
@@ -13,7 +14,7 @@ const optional=async(runtime,file,fallback)=>{
 /** Optional campaign facts use current accepted product fields, not a local
  * copy of a previous build. Missing/stale account evidence means neutral money.
  * No account login, automatic enrollment or external request exists here. */
-export async function loadAutomationMerchandising({runtime,db,seal,now=Date.now()}){
+async function campaignMerchandising({runtime,db,seal,now=Date.now()}){
   try{
     const directory=path.join(runtime.care,'campaigns');
     const saved=await optional(runtime,path.join(directory,'website-feed.json'),null),campaigns=saved?readCampaignFeed(saved).campaigns:[];
@@ -26,6 +27,16 @@ export async function loadAutomationMerchandising({runtime,db,seal,now=Date.now(
     }
     return compileMerchandising(products,reviews,campaigns,now);
   }catch{return{};}
+}
+export async function loadAutomationMerchandising(options){
+  const signals=await campaignMerchandising(options);
+  try{const {state}=await savedTitleRepairs(options.runtime);
+    for(const [id,review] of Object.entries(state.reviews)){
+      const old=signals[id];
+      signals[id]={...(old?.sourceTitle===review.sourceTitle&&old?.sourceDescription===review.sourceDescription?old:{}),...review};
+    }
+  }catch{/* Optional title metadata never gates catalog or campaign care. */}
+  return signals;
 }
 
 /** A finite input cohort, not an earnings forecast or a taste/acceptance gate.

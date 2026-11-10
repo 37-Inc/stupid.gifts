@@ -264,6 +264,11 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId){
     const {curateAutomationHomepage}=await import('./automated-homepage.mjs');
     const result=await curateAutomationHomepage({runtime:RUNTIME,db,seal,prior:homepageEdition,day:calendar.day,merchandising,repository:ROOT,source:SOURCE});
     if(readHomepageEdition(result.edition))homepageEdition=result.edition;
+    for(const [id,review] of Object.entries(result.titleReviews??{})){
+      const old=merchandising[id];
+      merchandising[id]={...(old?.sourceTitle===review.sourceTitle&&old?.sourceDescription===review.sourceDescription?old:{}),...review};
+    }
+    if(result.titleRepair)console.log(JSON.stringify({notice:'title_repair',...result.titleRepair,catalogBlocked:false}));
     if(result.attention)console.warn(JSON.stringify({notice:result.attention,catalogBlocked:false}));
   }catch{console.warn(JSON.stringify({notice:'homepage_editor_unavailable',catalogBlocked:false}));}}
   const pool=automation?await routineFreshnessPool(db,canaryId):null;

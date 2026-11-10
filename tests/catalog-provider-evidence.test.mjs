@@ -86,7 +86,7 @@ function providerMocks(remote=product,draft=writeup) {
     const content=JSON.stringify({products:[body.messages[0].content.includes('skeptical')
       ? {id:remote.id,approved:true,correctedEditorial:null,correctedDescription:null,qualityScore:.95,reasons:[]}
       : {id:remote.id,punnyTitle:remote.punnyTitle,wittyDescription:remote.wittyDescription,
-        shortDescription:`A ${remote.sourceFacts.material} ${remote.sourceFacts.shape} ${remote.sourceFacts.design || 'desk bell'} with a distinctive silhouette.`,
+        shortTitle: remote.title, shortDescription:`A ${remote.sourceFacts.material} ${remote.sourceFacts.shape} ${remote.sourceFacts.design || 'desk bell'} with a distinctive silhouette.`,
         humorTags:remote.humorTags,qualityScore:.85,isActive:true,editorialWriteup:draft}]});
     return Response.json({id:'test-only-completion',choices:[{message:{content},finish_reason:'stop'}],usage:{prompt_tokens:10,completion_tokens:10,total_tokens:20}});
   };return{calls,requests};

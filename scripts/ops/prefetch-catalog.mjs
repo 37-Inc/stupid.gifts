@@ -657,13 +657,14 @@ async function enrichCopyBatch(products, telemetry, operation = 'editorial_draft
           content: shortCopy ? `Write a factual short card description for each unusual gift.
 
 Rules:
+- shortTitle must be a complete concise factual object name, not a clipped merchant headline or a pun. Preserve essential identity/variant information. No ellipsis, invented facts or missing nouns.
 - shortDescription must be one plain-text paragraph, 6-35 words and no more than 220 characters.
 - Identify the actual object and a concrete listing-supported detail or function.
 - Do not invent materials, measurements, functions, contents, personalization, recipients, prices, availability, shipping, ratings, or reviews.
 - No generic marketing, forced puns, SEO text, purchase CTA or long article.
 - humorTags must be 2-5 lowercase kebab-case tags grounded in the actual object.
 - qualityScore is 0.05 to 0.98; isActive should be false for irrelevant, generic, unavailable, ambiguous or non-giftable products.
-Return only {"products":[{"id":"ASIN","shortDescription":"...","humorTags":["desk"],"qualityScore":0.8,"isActive":true}]}.
+Return only {"products":[{"id":"ASIN","shortTitle":"Complete factual product name","shortDescription":"...","humorTags":["desk"],"qualityScore":0.8,"isActive":true}]}.
 
 Products:
 ${JSON.stringify(productSummaries, null, 2)}` : `Enrich these products for a funny gift catalog.
@@ -737,7 +738,7 @@ async function reviewEditorialBatch(products, telemetry, operation = 'editorial_
     id: product.id,
     title: product.title,
     sourceFacts: product.sourceFacts || {},
-    ...(shortCopy ? { shortDescription: product.shortDescription } : { editorialWriteup: product.editorialWriteup }),
+    ...(shortCopy ? { shortDescription: product.shortDescription, shortTitle:product.shortTitle } : { editorialWriteup: product.editorialWriteup }),
   }));
   const model = process.env.CATALOG_EDITORIAL_REVIEW_MODEL
       || process.env.CATALOG_EDITORIAL_MODEL
@@ -756,9 +757,10 @@ async function reviewEditorialBatch(products, telemetry, operation = 'editorial_
         },
         {
           role: 'user',
-          content: shortCopy ? `Review each shortDescription against only its listing title and sourceFacts.
+          content: shortCopy ? `Review each shortTitle and shortDescription against only its listing title and sourceFacts.
+The shortTitle must identify the SAME actual object, preserve essential variant/compatibility/quantity information, and be complete without ellipsis. Reject invented or ambiguous identity. Return correctedTitle null if no correction is needed.
 Reject unsupported materials, measurements, contents, capabilities, personalization, recipients, prices, availability, ratings and generic/template marketing. A correction must remain 6-35 words and no more than 220 characters in one paragraph, identifying the actual object and a concrete supported detail or function. Never require or generate a long article. Set approved true only if the original or corrected description is factual and publishable. Return correctedDescription null if the original needs no correction.
-Return only {"products":[{"id":"ASIN","approved":true,"correctedDescription":null,"qualityScore":0.9,"reasons":[]}]}.
+Return only {"products":[{"id":"ASIN","approved":true,"correctedTitle":null,"correctedDescription":null,"qualityScore":0.9,"reasons":[]}]}.
 
 Drafts:
 ${JSON.stringify(reviewItems, null, 2)}` : `Review each draft against only its supplied listing title and sourceFacts.
@@ -994,6 +996,7 @@ async function enrichProducts(products, options, existingWriteups = [], telemetr
         qualityScore: normalizeQualityScore(copy.qualityScore, product.qualityScore || scoreCandidate(product)),
         isActive: product.isActive && copy.isActive !== false,
         attemptedEditorialWriteup,
+        ...(shortCopy?{attemptedShortTitle:String(copy.shortTitle||'').trim()}:{}),
         pipelineWarnings,
         editorialAttemptDiagnostics: {
           draft: draftResult.diagnosticsById.get(product.id),
@@ -1007,7 +1010,7 @@ async function enrichProducts(products, options, existingWriteups = [], telemetr
         && !editorialCandidateBlock(product)
     )).map((product) => ({
       ...product,
-      ...(shortCopy ? { shortDescription: product.attemptedEditorialWriteup } : { editorialWriteup: product.attemptedEditorialWriteup }),
+      ...(shortCopy ? { shortDescription: product.attemptedEditorialWriteup,shortTitle:product.attemptedShortTitle } : { editorialWriteup: product.attemptedEditorialWriteup }),
     }));
     const reviewResult = reviewCandidates.length > 0
       ? await requestEditorialWithRetries(
@@ -1056,6 +1059,7 @@ async function enrichProducts(products, options, existingWriteups = [], telemetr
         || DEFAULT_CATALOG_TEXT_MODEL;
       const outcome = shortCopy ? resolveShortDescriptionAttempt(batch.find(original => original.id === product.id), {
         draftDescription: product.attemptedEditorialWriteup,
+        draftTitle:product.attemptedShortTitle,
         review,
         reviewQuality,
         model,

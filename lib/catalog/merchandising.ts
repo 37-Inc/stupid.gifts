@@ -3,6 +3,8 @@ export type GagAppeal = 'standout' | 'giftable' | 'ordinary' | 'unreviewed';
 export interface MerchandisingSignal {
   sourceTitle?: string;
   sourceDescription?: string;
+  /** Reviewed cosmetic name; exact source binding, never a product identity rewrite. */
+  displayTitle?: string;
   appeal?: GagAppeal;
   variantGroup?: string;
   commissionPriority?: number;
@@ -14,9 +16,10 @@ export function readMerchandising(value: unknown): Merchandising | null {
   for (const [id,raw] of Object.entries(value)) {
     if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id) || !raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const item=raw as MerchandisingSignal;
-    if(Object.keys(item).some(key=>!['sourceTitle','sourceDescription','appeal','variantGroup','commissionPriority','commissionUntil'].includes(key))
+    if(Object.keys(item).some(key=>!['sourceTitle','sourceDescription','displayTitle','appeal','variantGroup','commissionPriority','commissionUntil'].includes(key))
       ||(item.sourceTitle===undefined)!==(item.sourceDescription===undefined)
       ||item.sourceTitle!==undefined&&(typeof item.sourceTitle!=='string'||typeof item.sourceDescription!=='string')
+      ||item.displayTitle!==undefined&&(!item.sourceTitle||!validDisplayTitle(item.displayTitle))
       || item.appeal!==undefined&&!['standout','giftable','ordinary','unreviewed'].includes(item.appeal)
       || item.variantGroup!==undefined&&!/^[a-zA-Z0-9._-]{1,100}$/.test(item.variantGroup)
       || item.commissionPriority!==undefined&&(!Number.isInteger(item.commissionPriority)||item.commissionPriority<1||item.commissionPriority>10000)
@@ -28,7 +31,15 @@ export function readMerchandising(value: unknown): Merchandising | null {
 }
 export function merchandisingForProduct(product:{id:string;title:string;description:string},input:Merchandising):MerchandisingSignal|undefined {
   const signal=input[product.id];
-  return signal&&(!signal.sourceTitle||signal.sourceTitle===product.title&&signal.sourceDescription===product.description)?signal:undefined;
+  return signal&&(!signal.sourceTitle||(signal.sourceTitle===product.title||signal.displayTitle===product.title)&&signal.sourceDescription===product.description)?signal:undefined;
+}
+export function validDisplayTitle(value:unknown):value is string {
+  return typeof value==='string'&&value===value.trim()&&value.length>=3&&value.length<=256
+    &&!/[\x00-\x1f<>]/.test(value)&&!/(?:\.{3}|…)\s*$/.test(value)&&!/https?:\/\//i.test(value);
+}
+export function productTitleView<T extends {id:string;title:string;description:string}>(product:T,input:Merchandising):T {
+  const signal=merchandisingForProduct(product,input);
+  return signal?.displayTitle?{...product,title:signal.displayTitle}:product;
 }
 export const appealPriority=(appeal: GagAppeal | undefined)=>appeal==='standout'?2:appeal==='ordinary'?0:1;
 export const usableCommissionPriority=(signal:MerchandisingSignal|undefined,now:number)=>

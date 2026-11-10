@@ -40,6 +40,10 @@ alternate daily commands; use the maintained same-run recovery path below.
   genuine D1 receipt/build and owner; do not rebuild, upload or activate again.
   Finish first, then run the registered source-bound cleanup. A finalized retry
   uses its accepted successor without reopening expired phase bodies.
+  The coordinator runs historical cleanup only after actual acceptance or a
+  healthy photo skip and after clearing the pending pointer. Restoring an old
+  journal must not hold up a new catalog release; original registrations,
+  source bindings and retention deadlines remain unchanged.
   A lost D1 response after a published permanent receipt gets one same-run
   bookkeeping retry. It first inspects the saved published receipt; the normal
   finalizer then reads back the completed run and exact owner. Unconfirmed

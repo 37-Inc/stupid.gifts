@@ -7,7 +7,7 @@ import type { RetentionInput } from '../../static-site/lib/retention.ts';
 import { siteIdentityFor } from '../../static-site/lib/site-identity.ts';
 import { compactRscAssets, expandRscAssets } from '../../static-site/lib/asset-compaction.ts';
 
-type Context = Pick<SiteAssetManifest, 'priorReleaseId' | 'generatedAt' | 'sourceMode' | 'homepage'> & { retainedManifestSha256: string | null };
+type Context = Pick<SiteAssetManifest, 'priorReleaseId' | 'generatedAt' | 'sourceMode' | 'homepage' | 'merchandising'> & { retainedManifestSha256: string | null };
 type Files = ReadonlyMap<string, Uint8Array>;
 export const CLOUDFLARE_ASSET_LIMIT = 100000;
 export function assertStaticAssetCapacity(assets: Files) {
@@ -74,7 +74,7 @@ export function assembleReleaseAssets(snapshot: CatalogSnapshot, current: Files,
   if (currentAssetPaths.length > 100000 || currentAssetPaths.some((name) => !safePath(name))) fail();
   assertPublicIdentitySafe(current);
   for (const [name, bytes] of current) if (/^\/_next\/static\/.*\.(?:js|css)$/.test(name)) assertOwnedCodeSafe(bytes, [snapshot]);
-  const currentRoutes = createStaticRoutes(snapshot, currentAssetPaths, undefined, siteIdentityFor(context.sourceMode), context.generatedAt, context.homepage);
+  const currentRoutes = createStaticRoutes(snapshot, currentAssetPaths, undefined, siteIdentityFor(context.sourceMode), context.generatedAt, context.homepage,context.merchandising);
   if (context.retainedManifestSha256 === null) {
     if (prior !== null) fail();
     const compacted = finish(current, currentRoutes);

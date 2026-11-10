@@ -32,6 +32,14 @@ test('permanent keyword results/cache preserve identities without supplier bytes
   assert.equal(after.searchId,null);assert.deepEqual(after.results,before.results);assert.equal(after.results[0].id,base.id);
   assert.doesNotMatch(JSON.stringify(after),/SUPPLIER|supplier\.jpg|persistent/);
 });
+test('both hybrid lanes display source-bound reviewed names and preserve descriptions and identity',async()=>{
+  const p=product('one',{title:'Funny Fart Button ...',eligibleUntil:null});
+  const f=setup({storage:{async byPublicIds(){return[p];},async keyword(){return[p];}},handler:{merchandising:{one:{
+    sourceTitle:p.title,sourceDescription:p.description,displayTitle:'Fart sound button'}}}});
+  const result=(await(await f.request('fart button')).json()).results[0];
+  assert.equal(result.title,'Fart sound button');assert.equal(result.description,p.description);assert.equal(result.id,p.id);
+  assert.equal(f.calls.embed,1);
+});
 
 test('keyword results preserve adapter relevance instead of re-sorting by optimistic copy and quality',async()=>{
   const f=setup({storage:{async keyword(){return[

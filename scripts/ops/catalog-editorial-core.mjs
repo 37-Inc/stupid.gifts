@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import {validDisplayTitle as completeProductName} from '../../lib/catalog/merchandising.ts';
+export {completeProductName};
 
 export const EDITORIAL_PROMPT_VERSION = 'catalog-editorial-v2';
-export const SHORT_COPY_PROMPT_VERSION = 'catalog-short-copy-v1';
+export const SHORT_COPY_PROMPT_VERSION = 'catalog-short-copy-v2-title';
 export const EDITORIAL_READY_STATUSES = new Set(['short_ready', 'generated_ready', 'manual_locked']);
 export const PURCHASABLE_AVAILABILITY = new Set([
   'IN_STOCK',
@@ -172,22 +174,25 @@ export function hasCurrentApprovedCopy(product) {
 }
 
 export function resolveShortDescriptionAttempt(product, {
-  draftDescription, review, reviewQuality = 0.05, model, generatedAt = new Date(),
+  draftDescription, draftTitle, review, reviewQuality = 0.05, model, generatedAt = new Date(),
 } = {}) {
   const draft = String(draftDescription || '').trim();
   const corrected = String(review?.correctedDescription || '').trim();
   const correction = corrected ? validateShortDescription(product, corrected) : null;
   const selected = correction?.approved ? corrected : draft;
+  const title=String(review?.correctedTitle||draftTitle||'').trim();
   const validation = validateShortDescription(product, selected);
   const currentHash = editorialSourceHash(product);
-  const approved = review?.approved === true && Number(reviewQuality) >= 0.8 && validation.approved;
+  const approved = review?.approved === true && Number(reviewQuality) >= 0.8 && validation.approved
+    &&(draftTitle===undefined||completeProductName(title));
   if (approved) return {
     wittyDescription: selected,
+    ...(draftTitle===undefined?{}:{punnyTitle:title}),
     editorialSourceHash: currentHash,
     editorialStatus: 'short_ready',
     editorialQualityScore: reviewQuality,
     editorialModel: model,
-    editorialPromptVersion: SHORT_COPY_PROMPT_VERSION,
+    editorialPromptVersion: draftTitle===undefined?'catalog-short-copy-v1':SHORT_COPY_PROMPT_VERSION,
     editorialGeneratedAt: generatedAt,
     editorialBlockReason: undefined,
     requiresManualReview: false,
