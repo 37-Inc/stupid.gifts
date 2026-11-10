@@ -10,6 +10,7 @@ import {PHOTO_EXPIRY_SQL} from './maintenance-d1.ts';
 import {planRoutineAutomation} from './automation-plan.ts';
 import {loadAutomationMerchandising,loadAutomationDiscoveryInputs} from './automation-inputs.mjs';
 import {routineMerchandising} from './campaign-operator.mjs';
+import {hostedRunRecord} from './hosted-run-record.mjs';
 import path from 'node:path';
 
 // Shared local/hosted operator; one active coordinator, never another publisher. The reviewed driver owns every
@@ -74,15 +75,15 @@ export async function routineHostedPending(runtime,source,runKey,{recovery=false
   const ref=pointer?.pending;
   if(pointer?.schemaVersion!==1||Object.keys(pointer).sort().join(',')!=='pending,schemaVersion'||!ref
     ||Object.keys(ref).sort().join(',')!=='path,sha256'||ref.path!==runtime.care+'/runs/'+runKey+'/hosted-run.json'||!HASH.test(ref.sha256))refuse('hosted_pending');
-  const body=await runtime.state.bytes(ref.path);if(digest(body)!==ref.sha256)refuse('hosted_pending');const record=JSON.parse(body),canary=record.kind==='canary';
-  if(Object.keys(record).sort().join(',')!==`${canary?'canaryId,':''}day,inputsRef,kind,runKey,schemaVersion,source`||record.schemaVersion!==1
-    ||record.source!==source&&!recovery||! /^[a-f0-9]{40}$/.test(source)||! /^[a-f0-9]{40}$/.test(record.source)||record.runKey!==runKey||!['full','photos','canary'].includes(record.kind)
-    ||typeof record.day!=='string'||! /^\d{4}-\d{2}-\d{2}$/.test(record.day)||pacificCatalogCalendar(record.day+'T12:00:00Z').day!==record.day
-    ||runKey!==(canary?'canary-'+record.day+'-'+record.canaryId:(record.kind==='photos'?'photos-':'scheduled-')+record.day)
-    ||canary&&! /^[A-Z0-9]{10}$/.test(record.canaryId??'')||!record.inputsRef
-    ||Object.keys(record.inputsRef).sort().join(',')!=='key,schemaVersion,sha256'||record.inputsRef.schemaVersion!==1||!HASH.test(record.inputsRef.sha256)
-    ||record.inputsRef.key!=='inputs/'+record.inputsRef.sha256+'.json')refuse('hosted_pending');
+  const body=await runtime.state.bytes(ref.path);if(digest(body)!==ref.sha256)refuse('hosted_pending');
+  let record;try{record=hostedRunRecord(JSON.parse(body));}catch{refuse('hosted_pending');}
+  if(record.source!==source&&!recovery||! /^[a-f0-9]{40}$/.test(source)||record.runKey!==runKey||record.kind==='code')refuse('hosted_pending');
   return record;
+}
+export function routineHostedPreparation(pending,{command,photosOnly,admitAsins,canaryId}){
+  if(canaryId&&(!pending||pending.kind!=='canary'||pending.canaryId!==canaryId)||pending?.kind==='canary'&&command==='prepare'&&!canaryId)refuse('canary_authority');
+  if(pending&&command==='prepare'&&(Boolean(photosOnly)!==(pending.kind==='photos')
+    ||canonicalJson(admitAsins??null)!==canonicalJson(pending.kind==='admit'?pending.admitAsins:null)))refuse('hosted_pending');
 }
 export function routineAutomationPolicy(value){
   if(value===null)return null;
@@ -405,8 +406,7 @@ let calendar=pacificCatalogCalendar();
 const rawRun=argv.indexOf('--run'),pending=RUNTIME.hosted?await routineHostedPending(RUNTIME,SOURCE,rawRun>=0?argv[rawRun+1]:'scheduled-'+calendar.day,{recovery:argv[0]==='recover'}):null;
 if(pending)calendar=pacificCatalogCalendar(pending.day+'T12:00:00Z');
 const {command,approvalSha,runKey,photosOnly,admitAsins,canaryId}=operatorInvocation(argv,calendar),directory=CARE+'/runs/'+runKey;
-if(canaryId&&(!pending||pending.kind!=='canary'||pending.canaryId!==canaryId)||pending?.kind==='canary'&&command==='prepare'&&!canaryId)refuse('canary_authority');
-if(pending&&command==='prepare'&&(Boolean(photosOnly)!==(pending.kind==='photos')||admitAsins))refuse('hosted_pending');
+routineHostedPreparation(pending,{command,photosOnly,admitAsins,canaryId});
 await source(command,runKey,pending);
 if(command==='prepare'||command==='reconcile-availability'){
   if(command==='reconcile-availability'&&(!argv.includes('--run')||photosOnly||admitAsins))refuse('availability_command');

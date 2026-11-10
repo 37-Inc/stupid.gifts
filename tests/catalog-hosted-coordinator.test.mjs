@@ -7,7 +7,7 @@ import {once} from 'node:events';
 import {coordinateHostedCatalog,hostedRunRecord,hostedInvocationDay,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader,hostedAdmissionAsins} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
-import {routineReviewProduct,routineRecoveryPhase} from '../scripts/catalog/daily-operator.mjs';
+import {routineReviewProduct,routineRecoveryPhase,operatorInvocation,routineHostedPending,routineHostedPreparation} from '../scripts/catalog/daily-operator.mjs';
 
 const SOURCE='a'.repeat(40),NEW_SOURCE='b'.repeat(40),HASH='c'.repeat(64),DAY='2026-11-06';
 const bytes=value=>Buffer.from(JSON.stringify(value)+'\n'),hash=value=>createHash('sha256').update(value).digest('hex');
@@ -105,6 +105,22 @@ test('manual exact admission uses the existing operator and pins only sorted own
   assert.deepEqual(f.calls[0],['prepare','--admit-asins',admitAsins.join(','),'--run',runKey]);
   assert.deepEqual(hostedRunRecord(JSON.parse(f.files.get(f.runtime.care+'/runs/'+runKey+'/hosted-run.json'))).admitAsins,admitAsins);
   assert.equal(f.calls.filter(args=>args[0]==='start').length,1);
+});
+test('real operator consumes the coordinator exact-admission intent and matches its actual CLI cohort',async()=>{
+  const f=fixture(),invoke=f.deps.invoke,admitAsins=['B0B3XCGVJB','B0FMXQJW2V','B0H2TW8LZ9','B0HDRTSB19'];
+  const result=await f.run({mode:'admit',admitAsins},{invoke:async(directory,args)=>{
+    const parsed=operatorInvocation(args,{day:DAY,monday:false});
+    const pending=await routineHostedPending(f.runtime,SOURCE,parsed.runKey);
+    routineHostedPreparation(pending,parsed);
+    if(parsed.command==='prepare'){
+      assert.deepEqual(pending.admitAsins,admitAsins);
+      for(const wrong of [undefined,['B0FMXQJW2V'],[...admitAsins].reverse()])
+        assert.throws(()=>routineHostedPreparation(pending,{...parsed,admitAsins:wrong}),/hosted_pending/);
+      assert.throws(()=>routineHostedPreparation(pending,{...parsed,photosOnly:true}),/hosted_pending/);
+    }
+    return invoke(directory,args);
+  }});
+  assert.equal(result.state,'accepted');assert.equal(f.calls.filter(a=>a[0]==='prepare').length,1);
 });
 test('workflow always passes an empty admission argument outside manual admit mode',async()=>{
   for(const mode of ['full','photos','shadow','canary','code','editorial','activate']){

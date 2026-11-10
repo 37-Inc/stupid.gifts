@@ -11,6 +11,8 @@ import {currentHostedInputs,restoreHostedInputs,syncHostedCampaignFeed} from './
 import {canonicalJson} from '../../lib/catalog/canonical-json.ts';
 import {checkCloudflareRunner} from './check-cloudflare-runner.ts';
 import {catalogD1FailureDetail} from './d1-write-rest.ts';
+import {hostedRunRecord,hostedRunKey,validAdmissionAsins} from './hosted-run-record.mjs';
+export {hostedRunRecord} from './hosted-run-record.mjs';
 
 const exec=promisify(execFile),HASH=/^[a-f0-9]{64}$/,SOURCE=/^[a-f0-9]{40}$/,ASIN=/^[A-Z0-9]{10}$/;
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url))),OPERATORS='/home/runner/stupid-gifts/operators';
@@ -45,21 +47,6 @@ function shadowProviderFields(result){
     providerChecksPassed:result.status==='checks_passed_execution_unavailable'&&result.issues.length===0,
     providerReadiness:result.status,providerIssues:[...result.issues],providerMetrics:{requests:result.metrics.requests,
       reportedRowsRead:result.metrics.reportedRowsRead,reportedRowsWritten:result.metrics.reportedRowsWritten}};
-}
-export function hostedRunRecord(value){
-  if(!exact(value,'schemaVersion,runKey,source,day,kind,inputsRef'+(value?.kind==='canary'?',canaryId':value?.kind==='admit'?',admitAsins':''))||value.schemaVersion!==1
-    ||!SOURCE.test(value.source)||!['full','photos','canary','code','admit'].includes(value.kind))fail('run_record');
-  day(value.day);inputsReference(value.inputsRef);
-  if(value.kind==='admit'&&!validAdmissionAsins(value.admitAsins))fail('admission_asins');
-  const key=hostedRunKey(value.kind,value.day,value.source,value.canaryId,value.admitAsins);
-  if(value.runKey!==key||value.kind==='canary'&&!ASIN.test(value.canaryId))fail('run_record');return value;
-}
-function validAdmissionAsins(ids){return Array.isArray(ids)&&ids.length>0&&ids.length<=10
-  &&ids.every(id=>typeof id==='string'&&ASIN.test(id))&&new Set(ids).size===ids.length
-  &&canonicalJson(ids)===canonicalJson([...ids].sort());}
-function hostedRunKey(kind,day,source,canaryId,admitAsins){
-  return kind==='code'?'serving-'+source.slice(0,12):kind==='full'?'scheduled-'+day:kind==='photos'?'photos-'+day
-    :kind==='admit'?'admit-'+day+'-'+hash(canonicalJson(admitAsins)).slice(0,12):'canary-'+day+'-'+canaryId;
 }
 export function hostedAdmissionAsins(mode,value){
   if(value&&mode!=='admit')fail('admission_asins');
