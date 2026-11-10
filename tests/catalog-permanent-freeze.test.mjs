@@ -31,7 +31,7 @@ import {assertApprovedCatalogInventory,readCatalogPredecessor} from '../scripts/
 import {maintenanceEmbeddingText} from '../scripts/catalog/maintenance-state.ts';
 import {editorialSourceHash} from '../scripts/ops/catalog-editorial-core.mjs';
 import {earliestDisplayExpiry} from '../lib/catalog/display.ts';
-import {openRunWorkspace} from '../scripts/catalog/run-workspace.ts';
+import {openRunWorkspace,readSavedAmazonObservation,readRunWorkspace} from '../scripts/catalog/run-workspace.ts';
 import {createWorkerdD1Meter} from './helpers/workerd-d1-meter.mjs';
 
 const accountId='a'.repeat(32),databaseId=uuid(9999),manifest='b'.repeat(64),asset='/images/gift-placeholder.svg';
@@ -323,6 +323,20 @@ test(`authentic permanent successor preserves mixed native history across expire
           .map(kind=>[kind,{maxAgeMs:3600000,notAfter}]))},budgetCaps:{httpRequests:10,sqlStatements:10},now:()=>f.now().toISOString()};
       oldWorkspace=await openRunWorkspace(oldOptions);await oldWorkspace.recordCatalogSuccessor(prior.seal);
       await oldWorkspace.recordCatalogSuccessor(prior.seal); // Exact replay emits no second control or charge.
+      if(count===12){
+        // Normal care uses its genuine body-free successor, not the historical
+        // migration publication-success marker. Rejected candidates still have
+        // reusable original observations, but only before their original expiry.
+        const options={...oldOptions,directory:join(root,'saved-routine'),runId:prior.seal.publication.releaseId},id='B0FMXQJW2V',
+          receipt={schemaVersion:1,kind:'amazon-observation',operation:'getItems',observedAt,requestedIds:[id],returnedIds:[id],
+            products:[{id,availabilityStatus:'IN_STOCK',sourceFactsHash:'c'.repeat(64),snapshot:{title:'TEST ONLY peeing dog',imageUrl:'https://example.invalid/dog.jpg',sourceFacts:{shape:'dog'}}}]};
+        const workspace=await openRunWorkspace(options);
+        await workspace.saveReceipt({sha256:sha256(canonicalJson(receipt)),receipt});
+        await workspace.recordCatalogSuccessor(prior.seal);
+        await workspace.writeCheckpoint(null,{phase:'finalized',owner:null,state:{},pins:{},phaseComplete:null});await workspace.close();
+        const status=await readRunWorkspace({...options,mode:'resume'});assert.equal(status.successfulPublication,null);
+        assert.deepEqual((await readSavedAmazonObservation({...options,mode:'resume'},[id])).receipt,receipt);
+      }
       await oldWorkspace.reserveBudget({id:'prior-unknown',requestSha256:'c'.repeat(64),units:{httpRequests:1,sqlStatements:2}});
       await oldWorkspace.settleBudget('prior-unknown',{status:'unknown',usage:null});
       oldBody=await oldWorkspace.putBlob(Buffer.from(JSON.stringify(revision)),{kind:'publication',observedAt});

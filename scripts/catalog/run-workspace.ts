@@ -964,6 +964,14 @@ async function readWorkspaceState(input:RunWorkspaceOptions) {
     if(!same(before,(await readdir(join(directory,'events'))).sort()))fail('concurrent_read');
   }};
 }
+async function readCatalogSuccessor(state:State){
+  const saved=state.successor;if(!saved)return null;if(saved.parts.length!==saved.count)fail('catalog_successor_incomplete');
+  const bytes=Buffer.concat(saved.parts.map(p=>Buffer.from(p,'base64'))),value=JSON.parse(bytes.toString('utf8')) as ApprovedCatalogSeal;
+  const encoded=(await import('./approved-catalog-seal.ts')).catalogSuccessorBytes(value);
+  if(byteHash(encoded)!==saved.sha256||!encoded.equals(bytes)
+    ||value.persistent?.request.codeSha!==(state.execution?.effective.codeSha??state.manifest.codeSha)
+    ||value.persistent.request.environment!==state.manifest.scope.environment)fail('catalog_successor');return value;
+}
 export async function readRunWorkspace(input:RunWorkspaceOptions):Promise<WorkspaceStatus> {
   const {directory,info,state,assertUnchanged}=await readWorkspaceState(input);
   const expiredRefs=await expired(directory,state,info.manifest,time((input.now||(()=>new Date().toISOString()))()));
@@ -987,7 +995,7 @@ export async function readSavedAmazonObservation(input:RunWorkspaceOptions,ids:s
     await durableJournal(input,await location({...input,mode:'resume'},false),false,true);
   }
   const {directory,info,state,assertUnchanged}=await readWorkspaceState(input);
-  if(!state.success||state.checkpoint?.checkpoint.phase!=='finalized'||state.checkpoint.checkpoint.owner!==null)
+  if(!(state.success||await readCatalogSuccessor(state))||state.checkpoint?.checkpoint.phase!=='finalized'||state.checkpoint.checkpoint.owner!==null)
     fail('saved_admission_not_accepted');
   let latest:{ref:ArtifactRef;receipt:ProviderReceipt;expiresAt:string;stored:Stored}|undefined;
   for(const ref of state.refs.values()){
@@ -1107,14 +1115,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       }catch(error){poisoned=true;poisonCause??=error;throw error;}
       apply(state,event);state.count=next.sequence;state.head=digest;
     }
-    async function catalogSuccessor(){
-      const saved=state.successor;if(!saved)return null;if(saved.parts.length!==saved.count)fail('catalog_successor_incomplete');
-      const bytes=Buffer.concat(saved.parts.map(p=>Buffer.from(p,'base64'))),value=JSON.parse(bytes.toString('utf8')) as ApprovedCatalogSeal;
-      const encoded=(await import('./approved-catalog-seal.ts')).catalogSuccessorBytes(value);
-      if(byteHash(encoded)!==saved.sha256||!encoded.equals(bytes)
-        ||value.persistent?.request.codeSha!==(state.execution?.effective.codeSha??manifest.codeSha)
-        ||value.persistent.request.environment!==manifest.scope.environment)fail('catalog_successor');return value;
-    }
+    const catalogSuccessor=()=>readCatalogSuccessor(state);
     async function prepareBody(value:unknown,kind:Kind,observedAt:string,reuseOriginal=false,publication?:PublicationDirectories){
       if(state.success)fail('publication_completed');
       const ref=refFor(value);let sealed=stored(value,kind,observedAt,manifest,publication);

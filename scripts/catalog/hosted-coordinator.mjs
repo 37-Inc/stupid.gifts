@@ -25,6 +25,12 @@ async function optional(read){try{return await read();}catch(error){if(error.cod
 function day(value){const time=new Date(value+'T00:00:00Z');if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)
   ||!Number.isFinite(time.getTime())||time.toISOString().slice(0,10)!==value)fail('day');return value;}
 function inputsReference(value){if(!exact(value,'schemaVersion,key,sha256')||value.schemaVersion!==1||!HASH.test(value.sha256)||value.key!==`inputs/${value.sha256}.json`)fail('inputs_reference');return value;}
+export async function assertUnpreparedHostedAdmission(runtime,record){
+  for(const file of ['operator.json','config.json','preparation.json','prepare-intent.json'])
+    if(await optional(()=>runtime.state.bytes(runtime.care+'/runs/'+record.runKey+'/'+file)))fail('preparation_already_exists');
+  const runId='daily-'+record.day+'-'+record.source.slice(0,8)+'-'+hash(record.runKey).slice(0,8);
+  for(const file of ['manifest.json','head.json'])if(await runtime.durable.get('runs/'+runId+'/'+file))fail('workspace_already_exists');
+}
 /** Fixed existing read-only inspector: resolves only the reviewed Cloudflare
  * environment reference, never merchant/model credentials or write authority. */
 export async function checkHostedProviderShadow(runtime,check=checkCloudflareRunner){
@@ -163,6 +169,7 @@ function defaults(runtime,environment){
     },restoreInputs:ref=>restoreHostedInputs(runtime.durable,runtime.base,ref),
     shadowCheck:()=>checkHostedProviderShadow(runtime),
     savedAdmission:record=>loadSavedAdmission(runtime,record.admitSavedRun,record.admitAsins),
+    assertUnprepared:record=>assertUnpreparedHostedAdmission(runtime,record),
     async checkout(source){
       console.log(JSON.stringify({state:'progress',step:'checkout',source}));
       const clean=hostedCommandEnvironment(environment,{credentials:false});
@@ -285,7 +292,19 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
       bytes=await runtime.state.put(file,record);}
     pointerBytes=await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:{path:file,sha256:hash(bytes)}},pointerBytes);
   }
-  await deps.restoreInputs(record.inputsRef);const directory=await deps.checkout(record.source);
+  await deps.restoreInputs(record.inputsRef);let directory=await deps.checkout(record.source);
+  if(mode!=='shadow'&&record.admitSavedRun&&record.source!==source&&!(await deps.inspect(record,directory)).prepared){
+    // No config, reservation or provider phase exists: retain the empty failed
+    // intent, then atomically hand off to the fixed source. Never rebase work.
+    await deps.assertUnprepared(record);
+    const next={...record,source,runKey:hostedRunKey(record.kind,record.day,source,undefined,record.admitAsins,record.admitSavedRun)},
+      file=runtime.care+'/runs/'+next.runKey+'/hosted-run.json';hostedRunRecord(next);
+    const bytes=await runtime.state.put(file,next);
+    await runtime.state.put(runtime.care+'/runs/'+record.runKey+'/abandoned-unprepared.json',
+      {schemaVersion:1,reason:'unprepared_source_upgrade',originalRunKey:record.runKey,successorRunKey:next.runKey,source});
+    pointerBytes=await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:{path:file,sha256:hash(bytes)}},pointerBytes);
+    record=next;directory=await deps.checkout(record.source);
+  }
   if(record.admitSavedRun){
     const original=hostedRunRecord(json(await runtime.state.bytes(runtime.care+'/runs/'+record.admitSavedRun+'/hosted-run.json')));
     if(original.kind!=='admit'||record.admitAsins.some(id=>!original.admitAsins.includes(id)))fail('admission_source');
