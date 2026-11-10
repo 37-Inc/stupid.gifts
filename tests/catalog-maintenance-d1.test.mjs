@@ -102,6 +102,15 @@ test('transport refusal is retained after exact receipt readback, not mislabeled
   }finally{f.close();}
 });
 
+test('confirmed atomic maintenance ACK advances its cursor without duplicate receipt/owner round trips',async()=>{
+  const f=await setup({products:[rawProduct(1)]});try{
+    let atCommit;f.hookAfter(()=>{atCommit=f.counts().queries;});
+    await f.store.updateAmazonAffiliateUrl(id(1),'https://www.amazon.com/dp/'+id(1)+'?tag=fixture-new-20');
+    assert.equal(f.counts().queries,atCommit);assert.equal(f.epoch(),f.owner.epoch+1);
+    assert.equal(f.sqlite.prepare('SELECT count(*) n FROM catalog_maintenance_operations').get().n,1);
+  }finally{f.close();}
+});
+
 // Local display-membership fixtures, not provider/publication evidence.
 function markPublic(f,products) {
   for(const p of products)f.sqlite.prepare('UPDATE products SET public_display_json=? WHERE id=?').run(canonicalJson({

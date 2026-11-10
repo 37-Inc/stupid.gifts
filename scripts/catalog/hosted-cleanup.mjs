@@ -63,6 +63,14 @@ export async function cleanupHostedRuns(runtime,checkout,{now=()=>new Date().toI
     if(editorial){
       if(editorial[2]!==ref.source.slice(0,8)||cp&&cp.checkpoint.owner!==null
         ||manifest.retention.reviewReference!=='catalog-automation-spec/homepage-v1')fail();
+    }else if(manifest.retention.reviewReference==='maintained/accepted-catalog-code-only'){
+      const suffix='-'+ref.source.slice(0,8);
+      if(!manifest.runId.startsWith('code-')||!manifest.runId.endsWith(suffix))fail();
+      const key=manifest.runId.slice(5,-suffix.length),success=json(await runtime.state.bytes(runtime.care+'/code-only/'+key+'/success.json'));
+      if(cp?.checkpoint.phase!=='published'||cp.checkpoint.owner!==null||success.kind!=='serving-only'
+        ||success.releaseId!==manifest.runId||success.source!==ref.source||success.configSha256!==manifest.configSha256
+        ||success.checkpointSha256!==cp.sha256||success.receiptSha256!==cp.checkpoint.control?.publication?.receiptSha256
+        ||success.idle?.phase!=='idle'||success.idle.externalPending!==0)fail();
     }else if(cp?.checkpoint.phase!=='finalized'||cp.checkpoint.owner!==null||!await workspace.catalogSuccessor())fail();
     const purged=(await workspace.purgeExpired()).length,remaining=await workspace.retainedBodies();
     q.value.runs=q.value.runs.filter(r=>r.runId!==ref.runId);if(remaining)q.value.runs.push(ref);await save(runtime,q);

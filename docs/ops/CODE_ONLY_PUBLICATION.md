@@ -1,7 +1,30 @@
 # Maintained code-only publication
 
-Use the clean reviewed Node22 checkout and the same scrubbed environment as
-catalog care. This is an owner-invoked command, not another scheduler.
+Small code/UI fixes use the **existing GitHub Catalog care workflow, manual
+mode `code`**, after merge. This uses the same `catalog-production` concurrency
+and protected pending pointer as catalog care, not another publisher/scheduler.
+It builds over the accepted catalog without product refresh, discovery, copy
+generation or embedding calls. A pending catalog publication must finish first;
+`code` never restarts its provider phases. A scheduled wake can finish an already
+pending code release before starting new maintenance.
+
+```sh
+gh workflow run catalog-manual.yml --ref main -f mode=code
+```
+
+The source-bound `serving-<commit12>` intent is idempotent. Hosted records and
+journals use the existing private R2 store, not a Mac's historical pointer.
+The code-only child receives Cloudflare/storage credentials only, not supplier
+or model keys. `code-only-serving` tracks serving configuration separately from
+the unchanged genuine catalog `last-success` pointer. Lost acknowledgements use
+the same saved package, owner and exact readback, never a replacement run.
+
+Normal maintenance streams phase start/completion and elapsed time into Actions
+logs. Confirmed atomic D1 writes use their acknowledged next-owner cursor;
+only uncertain responses trigger the extra immutable receipt/owner readback.
+
+For local operation/recovery, use a clean reviewed Node22 checkout and the same
+scrubbed environment as catalog care. These remain owner-invoked commands:
 
 ```sh
 npm run catalog:care -- code-only prepare --run descriptive-label
@@ -23,7 +46,7 @@ owner, deadlines and accounting. The controller identity is recorded separately;
 it cannot prepare a new run or call suppliers/models. Explicitly abandoned
 prebuild attempts are terminal, not recovery candidates.
 
-- Existing production scope, Wrangler OAuth, protected local workspace and
+- Existing production scope, reviewed Cloudflare credential, protected workspace and
   accounted uploader are reused. No merchant or model credentials/calls exist.
 - Preparation pins the genuine accepted persistent catalog seal, exact catalog
   pointer bytes, current D1 barriers and actual serving deployment. The serving
@@ -46,6 +69,6 @@ prebuild attempts are terminal, not recovery candidates.
   packages, original manifests, accounting and receipts are preserved.
 
 An existing successful label is a historical no-op, not proof it is still the
-current serving release. `status` reads local records only. Missing credentials,
+current serving release. `status` reads saved records only. Missing credentials,
 source/catalog drift or unresolved provider state requires attention; none
 authorizes another merchant batch, takeover, quota reset or blind POST retry.

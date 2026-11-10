@@ -25,6 +25,9 @@ test('publication progress streams split lines before exit and never echoes raw 
   assert.deepEqual(hostedPublicationProgress(JSON.stringify(inventory)),{state:'progress',step:'publication',phase:'inventory',stage:'start',products:3407,elapsedMs:0});
   assert.equal(hostedPublicationProgress(JSON.stringify({...inventory,token:'secret'})),undefined);
   assert.equal(hostedPublicationProgress(JSON.stringify({...inventory,stage:'secret'})),undefined);
+  const phase={state:'catalog_phase_progress',phase:3,totalPhases:14,stage:'complete',elapsedMs:123};
+  assert.deepEqual(hostedPublicationProgress(JSON.stringify(phase)),{...phase,state:'progress',step:'catalog'});
+  for(const changed of [{phase:15},{stage:'private'},{product:'private'}])assert.equal(hostedPublicationProgress(JSON.stringify({...phase,...changed})),undefined);
   for(const invalid of ['private supplier body',JSON.stringify({...value,token:'secret'}),JSON.stringify({...value,phase:'arbitrary'}),
     JSON.stringify({...value,completedBytes:-1}),JSON.stringify({...value,completedFiles:5})])assert.equal(hostedPublicationProgress(invalid),undefined);
   const input=new PassThrough(),seen=[],reader=hostedProgressReader(input,event=>seen.push(event)),closed=once(reader,'close'),line=JSON.stringify(value);
@@ -101,6 +104,44 @@ test('historical cleanup runs only after publication acceptance and cleared pend
     assert.deepEqual(JSON.parse(f.pointer()),{schemaVersion:1,pending:null});throw Error('historical cleanup unavailable');
   }});
   assert.equal(result.state,'accepted');assert.equal(cleanups,1);
+});
+
+test('code-only release uses the same pending pointer without invoking any catalog/provider phase',async()=>{
+  const f=fixture();let releases=0;
+  const codeOnly=async(record,directory)=>{releases++;assert.equal(record.kind,'code');assert.equal(record.runKey,'serving-'+SOURCE.slice(0,12));
+    assert.equal(directory,'/operators/'+SOURCE);assert.ok(JSON.parse(f.pointer()).pending);
+    return{state:'published',runId:'code-fixture',supplierCalls:0,modelCalls:0,catalogPointerChanged:false};};
+  const result=await f.run({mode:'code'},{codeOnly});
+  assert.equal(result.state,'accepted');assert.equal(result.codeOnly,true);assert.equal(result.catalogPointerChanged,false);
+  assert.equal(releases,1);assert.deepEqual(f.calls,[]);assert.equal(f.events.includes('cleanup-register'),false);
+  assert.equal(JSON.parse(f.pointer()).pending,null);
+});
+test('code-only request cannot restart or resume a saved product batch',async()=>{
+  const f=fixture();await assert.rejects(f.run({}, {invoke:async()=>{throw Error('saved catalog phase');}}));
+  const before=f.pointer(),result=await f.run({mode:'code',source:NEW_SOURCE},{codeOnly:async()=>{throw Error('must not publish');}});
+  assert.equal(result.errorCode,'catalog_hosted_catalog_pending');assert.deepEqual(f.pointer(),before);assert.deepEqual(f.calls,[]);
+});
+test('scheduled wakes finish the original pending code release before starting new maintenance',async()=>{
+  const f=fixture();const held=await f.run({mode:'code'},{codeOnly:async()=>({state:'pending',errorCode:'not_visible'})});
+  assert.equal(held.state,'attention');const original=f.pointer();
+  const result=await f.run({mode:'photos',source:NEW_SOURCE,day:'2026-11-07'},{codeOnly:async record=>{
+    assert.equal(record.source,SOURCE);assert.equal(record.day,DAY);assert.equal(record.kind,'code');assert.deepEqual(f.pointer(),original);
+    return{state:'already_completed',runId:'code-fixture',historicalAcceptance:true,supplierCalls:0,modelCalls:0};}});
+  assert.equal(result.state,'accepted');assert.equal(result.resumed,true);assert.deepEqual(f.calls,[]);
+});
+test('code-only acceptance requires zero supplier/model calls and unchanged genuine catalog authority',async()=>{
+  for(const changed of [{supplierCalls:1},{modelCalls:1},{catalogPointerChanged:true}]){
+    const f=fixture(),result=await f.run({mode:'code'},{codeOnly:async()=>({state:'published',runId:'code-fixture',
+      supplierCalls:0,modelCalls:0,catalogPointerChanged:false,...changed})});
+    assert.equal(result.state,'attention');assert.ok(JSON.parse(f.pointer()).pending);assert.deepEqual(f.calls,[]);
+  }
+});
+test('code-only child has Cloudflare/storage access but no supplier or model credentials',()=>{
+  const environment=Object.fromEntries(['CLOUDFLARE_API_TOKEN','R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','AMAZON_CREDENTIAL_ID',
+    'AMAZON_CREDENTIAL_SECRET','OPENAI_API_KEY'].map(name=>['STUPID_GIFTS_'+name,'test-only']));
+  const child=hostedCommandEnvironment(environment,{providers:false});
+  assert.equal(child.STUPID_GIFTS_CLOUDFLARE_API_TOKEN,'test-only');assert.equal(child.STUPID_GIFTS_R2_ACCESS_KEY_ID,'test-only');
+  assert.equal(Object.keys(child).some(name=>/AMAZON|OPENAI/.test(name)),false);
 });
 
 test('actual review producer preserves nullable legacy facts through hosted review and publication without refetching',async()=>{

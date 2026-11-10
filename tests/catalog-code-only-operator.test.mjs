@@ -8,6 +8,7 @@ import {codeOnlyInvocation,codeOnlyPublication,createCodeOnlyStore,codeOnlyTermi
 import {validatePublicationConfig} from '../scripts/catalog/publish-release.ts';
 import {accountedPublicationFetch,accountedPublicationReadFetch} from '../scripts/catalog/publication-read-fetch.ts';
 import {sha256} from '../scripts/catalog/migration.ts';
+import {createOperatorStateStore} from '../scripts/catalog/operator-state-store.ts';
 
 test('code-only route requires an explicit stable label and never accepts supplier/new-authority arguments',()=>{
   assert.deepEqual(codeOnlyInvocation(['--run','homepage-fix']),{command:'start',runKey:'homepage-fix'});
@@ -111,4 +112,18 @@ test('released unused code-only attempts stay terminal across future command sou
   await store.put(directory+'/success.json',{});await assert.rejects(codeOnlyTerminal(store,directory,record),/abandonment_changed/);
   const source=await fs.readFile(new URL('../scripts/catalog/code-only-operator.mjs',import.meta.url),'utf8');
   assert.ok(source.indexOf('const terminal=await codeOnlyTerminal')<source.indexOf('const execution=record?await codeOnlyExecution'));
+});
+
+test('hosted code-only metadata restores exact immutable records on a fresh runner',async t=>{
+  const first=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'code-only-remote-')));await fs.chmod(first,0o700);
+  t.after(()=>fs.rm(first,{recursive:true,force:true}));const objects=new Map();
+  const remote={async get(key){return objects.get(key)??null;},async putImmutable(key,body){
+    if(objects.has(key))assert.deepEqual(objects.get(key).bytes,body);else objects.set(key,{bytes:Buffer.from(body),etag:sha256(body)});}};
+  const state=createOperatorStateStore(first,remote),store=createCodeOnlyStore(first,state),file=first+'/code-only/example/operator.json',
+    value={kind:'serving-only',source:'a'.repeat(40)},digest=await store.put(file,value);
+  await fs.rm(first+'/code-only',{recursive:true});assert.deepEqual(await store.json(file,digest),value);
+  await assert.rejects(store.json(file,'b'.repeat(64)),/private_digest/);
+  await assert.rejects(store.put(file,{...value,source:'c'.repeat(40)}));
+  assert.deepEqual(JSON.parse(objects.get('operator/code-only/example/operator.json').bytes),value);
+  assert.equal(await store.optional(first+'/code-only/missing.json'),null);
 });

@@ -48,9 +48,9 @@ function shadowProviderFields(result){
 }
 export function hostedRunRecord(value){
   if(!exact(value,'schemaVersion,runKey,source,day,kind,inputsRef'+(value?.kind==='canary'?',canaryId':''))||value.schemaVersion!==1
-    ||!SOURCE.test(value.source)||!['full','photos','canary'].includes(value.kind))fail('run_record');
+    ||!SOURCE.test(value.source)||!['full','photos','canary','code'].includes(value.kind))fail('run_record');
   day(value.day);inputsReference(value.inputsRef);
-  const key=value.kind==='full'?'scheduled-'+value.day:value.kind==='photos'?'photos-'+value.day:'canary-'+value.day+'-'+value.canaryId;
+  const key=value.kind==='code'?'serving-'+value.source.slice(0,12):value.kind==='full'?'scheduled-'+value.day:value.kind==='photos'?'photos-'+value.day:'canary-'+value.day+'-'+value.canaryId;
   if(value.runKey!==key||value.kind==='canary'&&!ASIN.test(value.canaryId))fail('run_record');return value;
 }
 /** Evening Pacific photo wakes fall on the following UTC date. Use that stable
@@ -62,7 +62,7 @@ export function hostedInvocationDay(mode,now=new Date()){
   return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit'})
     .format(now);
 }
-export function hostedCommandEnvironment(environment=process.env,{credentials=true}={}){
+export function hostedCommandEnvironment(environment=process.env,{credentials=true,providers=true}={}){
   const clean={HOME:'/home/runner',PATH:[path.dirname(process.execPath),'/usr/local/bin','/usr/bin','/bin'].join(':'),
     LANG:'C.UTF-8',TZ:'UTC',CI:'true'};
   if(!credentials)return clean;
@@ -70,7 +70,7 @@ export function hostedCommandEnvironment(environment=process.env,{credentials=tr
   clean.STUPID_GIFTS_OPERATOR_MODE='hosted';
   for(const name of ['CLOUDFLARE_API_TOKEN','AMAZON_CREDENTIAL_ID','AMAZON_CREDENTIAL_SECRET','OPENAI_API_KEY',
     'R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY']){
-    const key='STUPID_GIFTS_'+name;if(environment[key]!==undefined)clean[key]=environment[key];
+    const key='STUPID_GIFTS_'+name;if(environment[key]!==undefined&&(providers||!/(?:AMAZON|OPENAI)/.test(name)))clean[key]=environment[key];
   }
   return clean;
 }
@@ -83,6 +83,10 @@ function parsedOutput(stdout){
 export function hostedPublicationProgress(line){
   if(typeof line!=='string'||line.length>1024)return;
   let value;try{value=JSON.parse(line);}catch{return;}
+  if(exact(value,'state,phase,totalPhases,stage,elapsedMs')&&value.state==='catalog_phase_progress'
+    &&['start','complete'].includes(value.stage)&&[value.phase,value.totalPhases,value.elapsedMs].every(n=>Number.isSafeInteger(n)&&n>=0)
+    &&value.phase>0&&value.phase<=value.totalPhases)
+    return{...value,state:'progress',step:'catalog'};
   if(exact(value,'state,phase,stage,products,elapsedMs')&&value.state==='publication_progress'&&value.phase==='inventory'
     &&['start','complete'].includes(value.stage)&&[value.products,value.elapsedMs].every(n=>Number.isSafeInteger(n)&&n>=0))
     return{state:'progress',step:'publication',phase:'inventory',stage:value.stage,products:value.products,elapsedMs:value.elapsedMs};
@@ -167,7 +171,7 @@ function defaults(runtime,environment){
       console.log(JSON.stringify({state:'progress',step:'operator',command:args[0]}));
       let progress;
       try{const child=exec(process.execPath,['--import','tsx','scripts/catalog/daily-operator.mjs',...args],{
-        cwd:directory,env:hostedCommandEnvironment(environment),maxBuffer:5*1024*1024});
+        cwd:directory,env:hostedCommandEnvironment(environment,{providers:args[0]!=='code-only'}),maxBuffer:5*1024*1024});
         progress=hostedProgressReader(child.child.stdout,value=>console.log(JSON.stringify(value)));
         const result=await child;return parsedOutput(result.stdout);}
       catch(error){return hostedOperatorFailure(error);}
@@ -216,6 +220,16 @@ function defaults(runtime,environment){
       return{releaseId:p.intent.releaseId,receiptSha256:seal.publication.receiptSha256};
     },
     wait:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+    async codeOnly(record,directory){
+      const saved=await optional(()=>runtime.state.bytes(runtime.care+'/code-only/'+record.runKey+'/operator.json'));
+      const recovering=record.source!==environment.GITHUB_SHA&&Boolean(saved);
+      const result=await this.invoke(recovering?ROOT:directory,['code-only',recovering?'recover':'start','--run',record.runKey]);
+      if(!['published','already_completed'].includes(result.state))return result;
+      const success=json(await runtime.state.bytes(runtime.care+'/code-only/'+record.runKey+'/success.json'));
+      if(success.kind!=='serving-only'||success.releaseId!==result.runId||success.source!==record.source
+        ||!HASH.test(success.receiptSha256)||success.idle?.phase!=='idle'||success.idle.externalPending!==0)fail('code_acceptance');
+      return result;
+    },
     registerCleanup:async record=>(await import('./hosted-cleanup.mjs')).registerHostedCleanup(runtime,record),
     cleanup:async checkout=>(await import('./hosted-cleanup.mjs')).cleanupHostedRuns(runtime,checkout),
   };
@@ -224,7 +238,7 @@ function defaults(runtime,environment){
 /** One manual/scheduled invocation, one existing run. The ONLY mutable progress
  * pointer refers to immutable intent; actual phases/dispatches stay in RunWorkspace. */
 export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day:capturedDay,runtime,environment=process.env},injected={}){
-  if(!['shadow','full','photos','canary'].includes(mode)||!SOURCE.test(source)||!runtime.hosted||!runtime.durable)fail('invocation');
+  if(!['shadow','full','photos','canary','code'].includes(mode)||!SOURCE.test(source)||!runtime.hosted||!runtime.durable)fail('invocation');
   day(capturedDay);if(mode==='canary'?!ASIN.test(canaryId):canaryId!==undefined)fail('canary');
   const deps={...defaults(runtime,environment),...injected},pointerFile=runtime.care+'/pending-run.json';
   let pointerBytes=await optional(()=>runtime.state.readPointer('pending-run',pointerFile)),record;
@@ -237,10 +251,12 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
       if(ref.path!==runtime.care+'/runs/'+record.runKey+'/hosted-run.json')fail('pending_path');}
   }
   let resumed=Boolean(record);
+  // A requested code-only release must never resume supplier/model phases.
+  if(mode==='code'&&record&&record.kind!=='code')return{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_catalog_pending'};
   if(!record){
     if(mode==='shadow'){const inputsRef=inputsReference(await deps.currentInputs());await deps.restoreInputs(inputsRef);await deps.checkout(source);
       return{state:'shadow',source,inputsVerified:true,workspace:'not_verified_readonly',pending:false,...shadowProviderFields(await deps.shadowCheck())};}
-    const runKey=mode==='full'?'scheduled-'+capturedDay:mode==='photos'?'photos-'+capturedDay:'canary-'+capturedDay+'-'+canaryId;
+    const runKey=mode==='code'?'serving-'+source.slice(0,12):mode==='full'?'scheduled-'+capturedDay:mode==='photos'?'photos-'+capturedDay:'canary-'+capturedDay+'-'+canaryId;
     const file=runtime.care+'/runs/'+runKey+'/hosted-run.json';let bytes=await optional(()=>runtime.state.bytes(file));
     if(bytes){record=hostedRunRecord(json(bytes));if(record.runKey!==runKey)fail('run_record');resumed=true;}
     else{record=hostedRunRecord({schemaVersion:1,runKey,source,day:capturedDay,kind:mode,inputsRef:inputsReference(await deps.currentInputs()),...(mode==='canary'?{canaryId}:{})});
@@ -251,13 +267,21 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,source,day
   if(mode==='shadow')return{state:'shadow',source:record.source,runKey:record.runKey,inputsVerified:true,workspace:'not_verified_readonly',pending:true,
     ...shadowProviderFields(await deps.shadowCheck())};
   const finish=async result=>{
-    if(result.state==='accepted')await deps.registerCleanup(record);
+    if(result.state==='accepted'&&record.kind!=='code')await deps.registerCleanup(record);
     await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:null},pointerBytes);
     // Historical supplier-body housekeeping follows actual acceptance/skip.
     // It retains the original source/lease/deadlines, but cannot delay a new
     // catalog's supplier phases, activation, or accepted-successor handoff.
     try{await deps.cleanup(deps.checkout);}catch{console.warn(JSON.stringify({notice:'catalog_hosted_cleanup_pending',catalogBlocked:false}));}
     return{...result,runKey:record.runKey,kind:record.kind,resumed};};
+  if(record.kind==='code'){
+    const result=await deps.codeOnly(record,directory);
+    if(['published','already_completed'].includes(result.state)&&result.supplierCalls===0&&result.modelCalls===0
+      &&(result.state==='already_completed'||result.catalogPointerChanged===false))
+      return finish({state:'accepted',releaseId:result.runId,codeOnly:true,historicalAcceptance:result.historicalAcceptance===true,
+        supplierCalls:0,modelCalls:0,catalogPointerChanged:false});
+    return{state:'attention',runKey:record.runKey,errorCode:result.errorCode??'catalog_hosted_code_pending'};
+  }
   const invoke=(command,extra=[])=>deps.invoke(directory,[command,...extra,'--run',record.runKey]);
   const publish=(status,sha)=>record.source!==source
     ?deps.invoke(ROOT,['recover',sha,'--run',record.runKey]):invoke('publish',[sha]);
