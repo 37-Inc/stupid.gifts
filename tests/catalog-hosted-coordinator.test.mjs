@@ -115,6 +115,15 @@ test('workflow always passes an empty admission argument outside manual admit mo
   assert.deepEqual(hostedAdmissionAsins('admit',' B0H2TW8LZ9, B0FMXQJW2V '),['B0FMXQJW2V','B0H2TW8LZ9']);
   const f=fixture();assert.equal((await f.run({admitAsins:hostedAdmissionAsins('full','')})).state,'accepted');
 });
+test('only a genuinely new intent may refresh optional protected campaign inputs; shadow and pending are read-only',async()=>{
+  const f=fixture();let options;
+  await f.run({mode:'shadow'},{currentInputs:async value=>{options=value;return ref;}});assert.equal(options,undefined);
+  await assert.rejects(f.run({}, {currentInputs:async value=>{options=value;return ref;},invoke:async()=>{throw Error('saved pending');}}));
+  assert.deepEqual(options,{refreshCampaigns:true});
+  const result=await f.run({}, {currentInputs:async()=>{throw Error('pending must not adopt new metadata');}});
+  assert.equal(result.state,'accepted');
+  assert.equal(Object.keys(hostedCommandEnvironment({STUPID_GIFTS_WEBSITE_CAMPAIGNS:'private-facts'})).includes('STUPID_GIFTS_WEBSITE_CAMPAIGNS'),false);
+});
 test('manual admission rejects empty/duplicate/malformed cohorts and cannot replace unrelated pending work',async()=>{
   for(const admitAsins of [undefined,[],['B0FMXQJW2V','B0FMXQJW2V'],['bad'],['B0HDRTSB19','B0FMXQJW2V']])
     await assert.rejects(fixture().run({mode:'admit',admitAsins}),/admission_asins/);
