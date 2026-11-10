@@ -26,10 +26,12 @@ test("Billy Ray's original eight picks stay intact and Matan becomes the distinc
   assert.equal(SHOW_PICK_SLUGS, SHOW_PRESETS.matan);
   assert.equal(SHOW_PICK_SLUGS[0], "bullshit-button-hit-for-instant-hilarity");
   for (const slugs of Object.values(SHOW_PRESETS)) {
-    assert.equal(slugs.length, 8);
     assert.equal(new Set(slugs).size, slugs.length);
-    for (const slug of slugs) assert.doesNotMatch(slug, /wiener|belly-fanny|farting-ring|screaming-goat|mystic-pickle|raw-chicken-vase/);
+    for (const slug of slugs) assert.doesNotMatch(slug, /belly-fanny|farting-ring|screaming-goat|mystic-pickle|raw-chicken-vase/);
   }
+  assert.equal(SHOW_PRESETS.matan.length, 12);
+  assert.deepEqual(SHOW_PRESETS.matan.slice(-4), ["wiener-switch-light-up-your-night-with-laughter", "B0FMXQJW2V", "B0H2TW8LZ9", "B0HDRTSB19"]);
+  assert.ok(!SHOW_PRESETS.matan.includes("B0B3XCGVJB")); // Duck is site-only.
   assert.ok(SHOW_PICK_SLUGS.every((slug) => !SHOW_PRESETS["billy-ray"].includes(slug)));
   for (const key of SHOW_PRESET_KEYS) assert.equal(isShowPreset(key), true);
   for (const key of ["unknown", "toString", "__proto__"]) assert.equal(isShowPreset(key), false);
@@ -46,6 +48,14 @@ test("show picks preserve fixed order and exact shared product copy", () => {
     assert.deepEqual(selected.map((p) => p.slug), [...SHOW_PRESETS[preset]]);
     assert.deepEqual(selected, products);
   }
+});
+
+test("new show picks resolve exact ASINs to current canonical products without duplicate admission or copy", () => {
+  const ids = ["B0FMXQJW2V", "B0H2TW8LZ9", "B0HDRTSB19"];
+  const products = ids.map((id, i) => product(`generated-canonical-slug-${i}`, id));
+  products.push(product("catnip-duck-site-only", "B0B3XCGVJB"));
+  assert.deepEqual(selectShowPicks(snapshot(products)), products.slice(0, 3));
+  assert.deepEqual(selectShowPicks(snapshot(products), "billy-ray"), []);
 });
 
 test("show page renders fresh picks immediately with ordinary storefront search and no guest label", () => {

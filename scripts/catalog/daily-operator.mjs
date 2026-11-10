@@ -250,7 +250,7 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId){
   const servingPrior=await routineServingPrior(token,seal);
   const preparationReceipt={capacity,metrics:db.metrics(),servingPrior,prior,source:SOURCE,helperSha256:self};
   if(!bundled)await put(directory+'/preparation-receipt.json',preparationReceipt);
-  const now=new Date().toISOString(),cutoff=new Date(Date.now()+(RUNTIME.hosted&&automation?24:2)*3600000).toISOString(),notAfter=new Date(Date.now()+86400000).toISOString();
+  const now=new Date().toISOString(),cutoff=new Date(Date.now()+(RUNTIME.hosted?24:2)*3600000).toISOString(),notAfter=new Date(Date.now()+86400000).toISOString();
   const context={envelopeSha256:sha256(seal.envelopeJson+'\n'),snapshotSha256:seal.snapshotSha256,projectionSha256:seal.projectionReceipt.projection_sha256,sourceExportSha256:seal.projectionReceipt.source_export_sha256,vectorSyncWatermark:rows[0].results[0].n,publicationReceiptWatermark:rows[1].results[0].n,cutoff,priorPublication:seal.publication};
   const inputValues={context,rights:{rightsById:{}}},inputs={previous:{path:prior.control.path,sha256:prior.control.sha256,observedAt:now}};
   for(const [name,value]of Object.entries(inputValues)){const file=directory+'/'+name+'.json';inputs[name]={path:file,

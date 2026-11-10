@@ -26,6 +26,13 @@ The Matan assortment, in order:
 - "Hey, you dropped this" brain pillow — an internet-debate prop.
 - Emotional-support chicken nuggets — a soft landing after the roast.
 - Circular-saw pizza cutter — an oversized-seriousness joke for ordinary pizza.
+- Wiener-switch lamp — an existing catalog identity, not a duplicate admission.
+- Solar peeing dog — the exact owner-approved campaign ASIN B0FMXQJW2V.
+- Magnetic desk goose — the exact owner-approved campaign ASIN B0H2TW8LZ9.
+- Seagull reading "Pooping on People" — exact 8×10 print B0HDRTSB19.
+
+These four additions bring Matan to twelve picks. The flapping catnip duck
+B0B3XCGVJB is approved for the main catalog only, not this filming lineup.
 
 The visual review used existing catalog photos/copy; no supplier or model batch
 was needed. Selection references Matan Even's public absurdist/prank persona
@@ -50,7 +57,7 @@ The goat, fortune-telling pickle and raw chicken vase were already shown and
 are intentionally absent from both editions. Previous picks remain in Git history.
 
 `static-site/lib/show-rehearsal.ts` owns the named `SHOW_PRESETS` (ordered
-canonical slugs only) and one `ACTIVE_SHOW_PRESET` for `/h`. To add a guest,
+canonical slugs or exact ASINs only) and one `ACTIVE_SHOW_PRESET` for `/h`. To add a guest,
 add a new named array, retain existing arrays, review it and change the active
 key if needed. The saved route is generated automatically; there is no CMS,
 database table, new scheduled job or copied product asset. Resolve
@@ -72,7 +79,7 @@ over the stronger existing visual jokes, and no campaign was joined. Higher
 commission is not a reason to weaken this on-camera selection. Potential new
 products still use the normal admission pipeline, not ad hoc public records.
 
-Verify eight visible cards before hydration, loaded photos, mobile layout,
+Verify twelve Matan/eight Billy Ray cards before hydration, loaded photos, mobile layout,
 product navigation, canonical tagged links and Back. Pinch zoom stays enabled.
 Owner review of the actual page precedes any message to Howie; this work does
 not send him a link automatically.

@@ -28,7 +28,7 @@ import type { ImmutableVectorPayload, SyncVector, VectorEvent } from './vector-o
 import { approvedBaseChangeLimit } from '../../lib/catalog/owner-base-review.ts';
 import type { OwnerBaseCatalogReview } from '../../lib/catalog/owner-base-review.ts';
 import {repairedSlugOriginalVector} from './new-product-slug-repair.ts';
-import {preservedPhotoVector} from './photo-vector-reuse.ts';
+import {readPreservedPhotoVector} from './photo-vector-reuse.ts';
 
 type Row = Record<string, unknown>;
 type Code = 'provider_failed' | 'not_visible' | 'mutation_unknown' | 'attempts_exhausted';
@@ -589,7 +589,7 @@ export function deliverOwnedApprovedCohortVector(options: Omit<Parameters<typeof
     if(rows.length===0){
       const state=(await options.db.prepare('SELECT * FROM catalog_maintenance_products WHERE product_id=?').bind(product.id).all()).results;
       if(state.length!==1)throw Error('vector_original_unproven');
-      const original=preservedPhotoVector(product,state[0],options.revision.request.previous.products.find(p=>p.publicId===options.publicId),
+      const original=await readPreservedPhotoVector(options.db,product,state[0],options.revision.request.previous,
         plan.products.find(p=>p.publicId===options.publicId)!,options.revision.snapshot.catalogRevision);
       return pruneDelivery({...options,original:{sha256:sha256(canonicalJson(original)),async load(){return original;}}},true,policy??undefined);
     }
