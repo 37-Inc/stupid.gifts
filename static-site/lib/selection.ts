@@ -2,8 +2,8 @@ import type {
   CatalogSnapshot,
   PublicCatalogProduct,
 } from "../../lib/catalog/types";
-import { catalogDeadline, persistentPublicProduct } from "../../lib/catalog/display";
-import { productPresentation } from '../../lib/catalog/presentation';
+import { catalogDeadline, persistentPublicProduct } from "../../lib/catalog/display.ts";
+import { productPresentation } from '../../lib/catalog/presentation.ts';
 
 export const RANDOM_POOL_LIMIT = 48;
 
