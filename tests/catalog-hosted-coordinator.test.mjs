@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {PassThrough} from 'node:stream';
 import {once} from 'node:events';
-import {coordinateHostedCatalog,hostedRunRecord,hostedInvocationDay,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader,hostedAdmissionAsins} from '../scripts/catalog/hosted-coordinator.mjs';
+import {coordinateHostedCatalog,hostedRunRecord,hostedInvocationDay,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader,hostedAdmissionAsins,assertUnpreparedHostedAdmission} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
 import {routineReviewProduct,routineRecoveryPhase,operatorInvocation,routineHostedPending,routineHostedPreparation} from '../scripts/catalog/daily-operator.mjs';
@@ -71,6 +71,7 @@ function fixture(){
   f.deps={currentInputs:async()=>{events.push('current-inputs');return f.activeRef;},restoreInputs:async input=>{restored.push(input);},
     shadowCheck:async()=>{events.push('provider-read-check');return providerReport();},
     savedAdmission:async()=>{events.push('saved-evidence-restored');},
+    assertUnprepared:async()=>{events.push('verified-unprepared');},
     checkout:async source=>{checkedOut.push(source);f.executingSource=source;return '/operators/'+source;},
     inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,config:f.config,configSha256:HASH,approvalPin:f.approvalPin,publication:f.publication}),
     accepted:async()=>f.phase==='finalized'?f.accepted:null,
@@ -144,6 +145,29 @@ test('saved admission carries the original source through the real coordinator/o
 test('preparation attention preserves its exact diagnostic instead of masking it as incomplete',async()=>{
   const f=fixture(),result=await f.run({}, {invoke:async()=>({state:'attention',errorCode:'run_workspace_durable_missing'})});
   assert.equal(result.errorCode,'run_workspace_durable_missing');assert.ok(JSON.parse(f.pointer()).pending);
+});
+test('only an entirely unprepared saved admission can move to a fixed source, retaining its empty original intent',async()=>{
+  const f=fixture(),admitAsins=['B0FMXQJW2V'],originalKey='admit-'+DAY+'-'+hash(canonicalJson(admitAsins)).slice(0,12);
+  f.files.set(f.runtime.care+'/runs/'+originalKey+'/hosted-run.json',bytes({schemaVersion:1,runKey:originalKey,source:SOURCE,day:DAY,kind:'admit',admitAsins,inputsRef:ref}));
+  const first=await f.run({mode:'admit',admitAsins,admitSavedRun:originalKey},{invoke:async()=>({state:'attention',errorCode:'saved_reader_defect'})});
+  const old=JSON.parse(f.pointer()),oldRecord=JSON.parse(f.files.get(old.pending.path));
+  const result=await f.run({mode:'admit',source:NEW_SOURCE,admitAsins,admitSavedRun:originalKey});
+  assert.equal(first.state,'attention');assert.equal(result.state,'accepted');assert.notEqual(result.runKey,oldRecord.runKey);
+  assert.deepEqual(JSON.parse(f.files.get(old.pending.path)),oldRecord);
+  assert.equal(JSON.parse(f.files.get(f.runtime.care+'/runs/'+oldRecord.runKey+'/abandoned-unprepared.json')).successorRunKey,result.runKey);
+  assert.equal(f.events.filter(e=>e==='verified-unprepared').length,1);
+  assert.equal(f.calls.filter(a=>a[0]==='start').length,1);
+});
+test('source handoff refuses any saved preparation or workspace, without deleting or rewriting it',async()=>{
+  const f=fixture(),record={runKey:'admit-'+DAY+'-aaaaaaaaaaaa',day:DAY,source:SOURCE};
+  f.runtime.durable.get=async()=>null;
+  await assertUnpreparedHostedAdmission(f.runtime,record);
+  for(const file of ['operator.json','config.json','preparation.json','prepare-intent.json']){
+    const path=f.runtime.care+'/runs/'+record.runKey+'/'+file;f.files.set(path,bytes({retained:true}));
+    await assert.rejects(assertUnpreparedHostedAdmission(f.runtime,record),/preparation_already_exists/);f.files.delete(path);
+  }
+  f.runtime.durable.get=async()=>({bytes:bytes({retained:true})});
+  await assert.rejects(assertUnpreparedHostedAdmission(f.runtime,record),/workspace_already_exists/);
 });
 test('workflow always passes an empty admission argument outside manual admit mode',async()=>{
   for(const mode of ['full','photos','shadow','canary','code','editorial','activate']){

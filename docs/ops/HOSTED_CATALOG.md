@@ -35,6 +35,11 @@ alternate daily commands; use the maintained same-run recovery path below.
   A later missing observation, unavailable item or expired evidence cannot be
   resurrected. Missing price stays unknown. Do not use a fresh normal admission
   or another supplier batch to bypass unavailable saved evidence.
+  A saved correction that failed before creating ANY preparation/config/workspace
+  may hand off atomically to a fixed descendant source. Its empty original intent
+  is retained with an abandonment/successor record; prepared or dispatched work
+  never rebases. Routine acceptance uses the genuine catalog-successor seal,
+  not the obsolete migration-only publication-success marker.
 - An immutable pending intent pins source, Pacific day, input version and run
   key. Resume it before new work. Its phases, reservations and publication state
   remain in `RunWorkspace` and the existing D1 controls.

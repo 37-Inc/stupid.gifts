@@ -10,7 +10,7 @@ export function validAdmissionAsins(ids){return Array.isArray(ids)&&ids.length>0
 export function validSavedAdmissionRun(value){return typeof value==='string'&&/^admit-\d{4}-\d{2}-\d{2}-[a-f0-9]{12}$/.test(value);}
 export function hostedRunKey(kind,day,source,canaryId,admitAsins,admitSavedRun){
   return kind==='code'?'serving-'+source.slice(0,12):kind==='full'?'scheduled-'+day:kind==='photos'?'photos-'+day
-    :kind==='admit'?'admit-'+day+'-'+hash(canonicalJson(admitSavedRun?{asins:admitAsins,from:admitSavedRun}:admitAsins)).slice(0,12):'canary-'+day+'-'+canaryId;
+    :kind==='admit'?'admit-'+day+'-'+hash(canonicalJson(admitSavedRun?{asins:admitAsins,from:admitSavedRun,source}:admitAsins)).slice(0,12):'canary-'+day+'-'+canaryId;
 }
 /** One immutable intent contract shared by the coordinator AND real operator. */
 export function hostedRunRecord(value){
@@ -22,6 +22,8 @@ export function hostedRunRecord(value){
   if(value.kind==='admit'&&!validAdmissionAsins(value.admitAsins))fail('admission_asins');
   if(Object.hasOwn(value,'admitSavedRun')&&!validSavedAdmissionRun(value.admitSavedRun))fail('admission_source');
   if(value.kind==='canary'&&!ASIN.test(value.canaryId))fail();
-  if(value.runKey!==hostedRunKey(value.kind,value.day,value.source,value.canaryId,value.admitAsins,value.admitSavedRun)||value.runKey===value.admitSavedRun)fail();
+  const legacySaved=value.admitSavedRun&&'admit-'+value.day+'-'+hash(canonicalJson({asins:value.admitAsins,from:value.admitSavedRun})).slice(0,12);
+  if(value.runKey!==hostedRunKey(value.kind,value.day,value.source,value.canaryId,value.admitAsins,value.admitSavedRun)
+    &&value.runKey!==legacySaved||value.runKey===value.admitSavedRun)fail();
   return value;
 }
