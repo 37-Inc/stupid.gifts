@@ -4,13 +4,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateCatalogSnapshot } from "../lib/catalog/snapshot.ts";
-import { earliestDisplayExpiry, persistentPublicProduct } from "../lib/catalog/display.ts";
+import { earliestDisplayExpiry, persistentPublicProduct,catalogDisplayView } from "../lib/catalog/display.ts";
 import { createStaticRoutes } from "../static-site/lib/asset-routes.ts";
 import { createBrowseRelease } from "../static-site/lib/browse.ts";
 import { createOgRelease } from "../static-site/lib/og.ts";
 import { siteIdentity } from "../static-site/lib/site-identity.ts";
 import { assertOwnedCodeSafe } from "../static-site/lib/retention.ts";
-import { exportedRoutes, exportSourceMode, exportGeneratedAt, exportHomepage } from "./helpers/static-export.mjs";
+import { exportedRoutes, exportSourceMode, exportGeneratedAt, exportHomepage,exportMerchandising } from "./helpers/static-export.mjs";
 import { guides, selectGuideProducts } from "../static-site/lib/guides.ts";
 import {
   eligiblePool,
@@ -209,7 +209,7 @@ test(
   "initial browse/Random payloads stay small and their public JSON matches the release",
   { skip: !fs.existsSync(new URL("out/index.html", root)) },
   () => {
-    const release = createBrowseRelease(exportSnapshot, exportGeneratedAt, exportHomepage);
+    const release = createBrowseRelease(catalogDisplayView(exportSnapshot,exportMerchandising), exportGeneratedAt, exportHomepage);
     const home = fs.readFileSync(new URL("out/index.html", root), "utf8");
     const random = fs.readFileSync(
       new URL("out/random-gift.html", root),

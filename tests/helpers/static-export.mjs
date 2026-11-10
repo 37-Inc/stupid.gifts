@@ -11,6 +11,7 @@ export const exportSourceMode=manifest?.sourceMode??siteSourceMode;
 export const exportIdentity=manifest?siteIdentityFor(exportSourceMode):siteIdentity;
 export const exportGeneratedAt=manifest?.generatedAt;
 export const exportHomepage=manifest?.homepage;
+export const exportMerchandising=manifest?.merchandising;
 export function exportedRoutes(snapshot,inventory){
   // Validate one-hop target/path membership without loading every PNG body.
   const empty=new Uint8Array();
