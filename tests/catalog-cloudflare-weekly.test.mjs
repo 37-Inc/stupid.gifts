@@ -279,9 +279,10 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
         // ordinary refresh must preserve its existing licensed/native history.
         // The discovery cohort exercises the current successful short-copy path.
         return prompt.includes('Drafts:')?{id:item.id,approved:Boolean(discovered),qualityScore:.95,
-          reasons:discovered?[]:['Synthetic existing-copy rejection'],correctedDescription:null,correctedEditorial:null}
+          reasons:discovered?[]:['Synthetic existing-copy rejection'],correctedDescription:null,correctedTitle:null,correctedEditorial:null}
           :{id:item.id,punnyTitle:product.punnyTitle,wittyDescription:product.wittyDescription,humorTags:product.humorTags,
-            qualityScore:product.qualityScore,isActive:true,shortDescription:discovered?.wittyDescription||`${item.title} is a brass lobster fixture for a desk.`,editorialWriteup:product.editorialWriteup};
+            qualityScore:product.qualityScore,isActive:true,shortTitle:product.title,
+            shortDescription:discovered?.wittyDescription||`${item.title} is a brass lobster fixture for a desk.`,editorialWriteup:product.editorialWriteup};
       })})},finish_reason:'stop'}],usage:{prompt_tokens:10,completion_tokens:10,total_tokens:20}});
     }
     calls.http++;
