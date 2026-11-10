@@ -61,6 +61,10 @@ function hostedRunKey(kind,day,source,canaryId,admitAsins){
   return kind==='code'?'serving-'+source.slice(0,12):kind==='full'?'scheduled-'+day:kind==='photos'?'photos-'+day
     :kind==='admit'?'admit-'+day+'-'+hash(canonicalJson(admitAsins)).slice(0,12):'canary-'+day+'-'+canaryId;
 }
+export function hostedAdmissionAsins(mode,value){
+  if(value&&mode!=='admit')fail('admission_asins');
+  return value?value.split(',').map(id=>id.trim()).sort():undefined;
+}
 /** Evening Pacific photo wakes fall on the following UTC date. Use that stable
  * slot for both evening retries and delayed-after-midnight dispatches, so a late
  * prior-night run cannot reserve the following night's photo identity. Saved
@@ -380,8 +384,7 @@ async function main(){
   process.umask(0o077);
   if(process.platform!=='linux'||process.versions.node.split('.')[0]!=='22'||homedir()!=='/home/runner')fail('runner');
   const [mode='shadow',canaryId,admissionList]=process.argv.slice(2);if(process.argv.length>5)fail('invocation');
-  if(admissionList&&mode!=='admit')fail('admission_asins');
-  const admitAsins=admissionList?.split(',').map(id=>id.trim()).sort();
+  const admitAsins=hostedAdmissionAsins(mode,admissionList);
   const runtime=automationRuntime(),source=process.env.GITHUB_SHA;
   if((await exec('git',['rev-parse','HEAD'],{cwd:ROOT,env:hostedCommandEnvironment(process.env,{credentials:false})})).stdout.trim()!==source)fail('reviewed_source');
   const now=new Date(),capturedDay=hostedInvocationDay(mode,now);

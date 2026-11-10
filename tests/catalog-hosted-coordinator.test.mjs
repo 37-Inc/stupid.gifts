@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {PassThrough} from 'node:stream';
 import {once} from 'node:events';
-import {coordinateHostedCatalog,hostedRunRecord,hostedInvocationDay,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader} from '../scripts/catalog/hosted-coordinator.mjs';
+import {coordinateHostedCatalog,hostedRunRecord,hostedInvocationDay,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader,hostedAdmissionAsins} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
 import {routineReviewProduct,routineRecoveryPhase} from '../scripts/catalog/daily-operator.mjs';
@@ -105,6 +105,15 @@ test('manual exact admission uses the existing operator and pins only sorted own
   assert.deepEqual(f.calls[0],['prepare','--admit-asins',admitAsins.join(','),'--run',runKey]);
   assert.deepEqual(hostedRunRecord(JSON.parse(f.files.get(f.runtime.care+'/runs/'+runKey+'/hosted-run.json'))).admitAsins,admitAsins);
   assert.equal(f.calls.filter(args=>args[0]==='start').length,1);
+});
+test('workflow always passes an empty admission argument outside manual admit mode',async()=>{
+  for(const mode of ['full','photos','shadow','canary','code','editorial','activate']){
+    assert.equal(hostedAdmissionAsins(mode,''),undefined);
+    assert.equal(hostedAdmissionAsins(mode,undefined),undefined);
+    assert.throws(()=>hostedAdmissionAsins(mode,'B0FMXQJW2V'),/admission_asins/);
+  }
+  assert.deepEqual(hostedAdmissionAsins('admit',' B0H2TW8LZ9, B0FMXQJW2V '),['B0FMXQJW2V','B0H2TW8LZ9']);
+  const f=fixture();assert.equal((await f.run({admitAsins:hostedAdmissionAsins('full','')})).state,'accepted');
 });
 test('manual admission rejects empty/duplicate/malformed cohorts and cannot replace unrelated pending work',async()=>{
   for(const admitAsins of [undefined,[],['B0FMXQJW2V','B0FMXQJW2V'],['bad'],['B0HDRTSB19','B0FMXQJW2V']])
