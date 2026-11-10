@@ -27,6 +27,10 @@ on:
         description: Owner-picked comma-separated exact ASINs; admit mode only, no unrelated refresh or discovery
         type: string
         default: ''
+      admit_saved_run:
+        description: Optional accepted admission run key to reuse ORIGINAL saved observations; no supplier fetch
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -64,6 +68,7 @@ jobs:
           CATALOG_SCHEDULE: ${{ github.event.schedule || '' }}
           CATALOG_CANARY_ASIN: ${{ inputs.canary_asin }}
           CATALOG_ADMIT_ASINS: ${{ inputs.admit_asins }}
+          CATALOG_ADMIT_SAVED_RUN: ${{ inputs.admit_saved_run }}
           STUPID_GIFTS_WEBSITE_CAMPAIGNS: ${{ secrets.STUPID_GIFTS_WEBSITE_CAMPAIGNS }}
           STUPID_GIFTS_OPERATOR_MODE: hosted
           STUPID_GIFTS_CLOUDFLARE_API_TOKEN: ${{ secrets.STUPID_GIFTS_CLOUDFLARE_API_TOKEN }}
@@ -74,4 +79,4 @@ jobs:
           STUPID_GIFTS_R2_SECRET_ACCESS_KEY: ${{ secrets.STUPID_GIFTS_R2_SECRET_ACCESS_KEY }}
         run: |
           umask 077
-          node --import tsx scripts/catalog/hosted-coordinator.mjs "$CATALOG_MODE" "$CATALOG_CANARY_ASIN" "$CATALOG_ADMIT_ASINS"
+          node --import tsx scripts/catalog/hosted-coordinator.mjs "$CATALOG_MODE" "$CATALOG_CANARY_ASIN" "$CATALOG_ADMIT_ASINS" "$CATALOG_ADMIT_SAVED_RUN"

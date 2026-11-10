@@ -58,3 +58,17 @@ test('owner-selected taste review does not bypass source readiness or copy revie
   assert.equal(discoveryCandidateBlockReason({...product,isActive:false},.65,true),'inactive_candidate');
   assert.equal(discoveryCandidateBlockReason({...product,imageUrl:''},.65,true),'missing_image');
 });
+test('owner-picked dog and owl are not collapsed by generic garden-statue title containment',async()=>{
+  const original=amazon.getItems;let calls=0,all=false;
+  const dog={id:'B0FMXQJW2V',title:'Funny Dog Garden Statue with Solar LED Light Stream Outdoor Yard Lawn Decor',
+    price:29.99,source:'amazon',imageUrl:'https://example.invalid/dog.jpg',affiliateUrl:'https://www.amazon.com/dp/B0FMXQJW2V?tag=fixture-20',
+    availabilityStatus:'IN_STOCK',sourceFacts:{shape:'peeing dog'},remotelyVerified:true};
+  try{amazon.getItems=async()=>{calls++;return[dog];};
+    const decisions=[];
+    const result=await executeCatalog({...((await dailyCatalogPhases(cadence,[],false,[dog.id]))[0]),dryRun:true},[],{
+      warnings:[],timingsMs:{},items:{record(p,d){decisions.push(d);},async flush(){}}},
+    {async getActiveCatalogIdentities({includeInactive}){all=includeInactive;return[{id:'B0BMVY5KGC',title:'Owl Outdoor Statue with Solar Light Garden ...',isActive:false}];}});
+    assert.equal(calls,1);assert.equal(all,true);assert.equal(result.catalogDuplicates,0);
+    assert(decisions.every(d=>d.reasonCode!=='near_duplicate_in_catalog'));
+  }finally{amazon.getItems=original;}
+});

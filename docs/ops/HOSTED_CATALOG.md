@@ -23,6 +23,18 @@ alternate daily commands; use the maintained same-run recovery path below.
   unrelated refresh/search, automatic campaign joining or cadence change.
   Its sorted ASINs are pinned in the existing pending intent; retries resume that
   same cohort. Finish unrelated pending work before dispatching it.
+- To correct a rejected owner-picked admission WITHOUT fetching again, use the
+  same manual `admit` operation with the rejected `admit_asins` subset and
+  `admit_saved_run` set to its accepted original admission run key. The original
+  source, authenticated workspace receipt and remaining retention must still be
+  valid. A separate correction intent leaves the completed original run and its
+  charges unchanged. No Amazon request/credential is used; only the missing
+  product receives normal copy review, embedding, index delivery and publication.
+  Exact ASINs (including held identities) still deduplicate; generic title
+  similarity is not proof that different owner-selected objects are duplicates.
+  A later missing observation, unavailable item or expired evidence cannot be
+  resurrected. Missing price stays unknown. Do not use a fresh normal admission
+  or another supplier batch to bypass unavailable saved evidence.
 - An immutable pending intent pins source, Pacific day, input version and run
   key. Resume it before new work. Its phases, reservations and publication state
   remain in `RunWorkspace` and the existing D1 controls.
