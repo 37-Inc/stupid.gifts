@@ -12,6 +12,7 @@ import {canonicalJson} from '../../lib/catalog/canonical-json.ts';
 import {checkCloudflareRunner} from './check-cloudflare-runner.ts';
 import {catalogD1FailureDetail} from './d1-write-rest.ts';
 import {hostedRunRecord,hostedRunKey,validAdmissionAsins,validSavedAdmissionRun} from './hosted-run-record.mjs';
+import {loadSavedAdmission} from './saved-admission.mjs';
 export {hostedRunRecord} from './hosted-run-record.mjs';
 
 const exec=promisify(execFile),HASH=/^[a-f0-9]{64}$/,SOURCE=/^[a-f0-9]{40}$/,ASIN=/^[A-Z0-9]{10}$/;
@@ -161,6 +162,7 @@ function defaults(runtime,environment){
       return currentHostedInputs(runtime.durable);
     },restoreInputs:ref=>restoreHostedInputs(runtime.durable,runtime.base,ref),
     shadowCheck:()=>checkHostedProviderShadow(runtime),
+    savedAdmission:record=>loadSavedAdmission(runtime,record.admitSavedRun,record.admitAsins),
     async checkout(source){
       console.log(JSON.stringify({state:'progress',step:'checkout',source}));
       const clean=hostedCommandEnvironment(environment,{credentials:false});
@@ -288,6 +290,9 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
     const original=hostedRunRecord(json(await runtime.state.bytes(runtime.care+'/runs/'+record.admitSavedRun+'/hosted-run.json')));
     if(original.kind!=='admit'||record.admitAsins.some(id=>!original.admitAsins.includes(id)))fail('admission_source');
     await deps.checkout(original.source);
+    // A fresh hosted runner has no Mac/local receipt cache. Restore original
+    // authenticated evidence before invoking even an older pinned helper.
+    await deps.savedAdmission(record);
   }
   if(mode==='shadow')return{state:'shadow',source:record.source,runKey:record.runKey,inputsVerified:true,workspace:'not_verified_readonly',pending:true,
     ...shadowProviderFields(await deps.shadowCheck())};
@@ -335,6 +340,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
     let result;
     if(!status.prepared){result=await invoke('prepare',record.kind==='photos'?['--photos-only']:record.kind==='canary'?['--canary-id',record.canaryId]
       :record.kind==='admit'?['--admit-asins',record.admitAsins.join(','),...(record.admitSavedRun?['--admit-saved-run',record.admitSavedRun]:[])]:[]);
+      if(['attention','pending'].includes(result.state))return{...result,runKey:record.runKey};
       if(result.state==='skipped'&&['photos_current','run_already_completed'].includes(result.reason)){
         if(result.reason==='photos_current')return finish({state:'skipped',reason:result.reason});
         const checked=await deps.inspect(record,directory),accepted=await deps.accepted(record,checked);if(accepted)return finish({state:'accepted',...accepted});

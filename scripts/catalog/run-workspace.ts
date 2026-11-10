@@ -812,7 +812,7 @@ async function transferAll<T>(items:T[],action:(item:T)=>Promise<void>){
 }
 /** Remote durability uses this very journal and its hash chain. There is no
  * second workflow state, owner lease, saved config or host lock in the bucket. */
-async function durableJournal(input:RunWorkspaceOptions,directory:string,create:boolean) {
+async function durableJournal(input:RunWorkspaceOptions,directory:string,create:boolean,readOnly=false) {
   const store=input.durable!,prefix=`runs/${input.runId}/`,headKey=prefix+'head.json';
   const prefetched=new Map<string,DurableObject>(),prefetchErrors=new Map<string,unknown>();
   const get=async(name:string)=>{const object=await store.get(prefix+name);if(!object)fail('durable_missing');return object;};
@@ -838,6 +838,7 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
     if(!Buffer.from(actual.bytes).equals(bytes))fail('durable_readback');return actual;
   }
   async function commit(record:RecordFile) {
+    if(readOnly)fail('readonly_mutation');
     const event=record.event,refs=event.type==='artifact'||event.type==='checkpoint'?[event.ref]
       :event.type==='blob-parts'?event.refs:event.type==='execution-adoption'?[event.adoption.contexts.ref]:[];
     const manifest=refs.length?(await readManifest(directory,input)).manifest:null;
@@ -971,11 +972,20 @@ export async function readRunWorkspace(input:RunWorkspaceOptions):Promise<Worksp
     successfulPublication:structuredClone(state.success),execution:structuredClone(state.execution)};
 }
 /** Explicit correction of a rejected admission: read the latest ORIGINAL
- * registered observation from an accepted run, without taking its locks,
- * changing its journal or renewing its clock. A later omission stays missing. */
+ * registered observation from an accepted run without changing its journal or
+ * renewing its clock. A cold runner restores only the authenticated local cache;
+ * no original journal mutation or database/Worker/source lock is allowed. */
 export async function readSavedAmazonObservation(input:RunWorkspaceOptions,ids:string[]) {
   if(!Array.isArray(ids)||!ids.length||ids.length>10||new Set(ids).size!==ids.length
     ||ids.some(id=>!/^[A-Z0-9]{10}$/.test(id)))fail('saved_admission_ids');
+  if(input.durable){
+    options(input);await pathWithoutLinks(input.directory);await assertProtectedDestination(input.directory,input.repository);
+    await protectedStat(dirname(input.directory),true);
+    for(const file of [input.directory,join(input.directory,'runs'),join(input.directory,'locks'),
+      join(input.directory,'runs',input.runId),join(input.directory,'runs',input.runId,'objects'),join(input.directory,'runs',input.runId,'events')])
+      await privateDirectory(file,true);
+    await durableJournal(input,await location({...input,mode:'resume'},false),false,true);
+  }
   const {directory,info,state,assertUnchanged}=await readWorkspaceState(input);
   if(!state.success||state.checkpoint?.checkpoint.phase!=='finalized'||state.checkpoint.checkpoint.owner!==null)
     fail('saved_admission_not_accepted');

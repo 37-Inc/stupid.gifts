@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {DatabaseSync} from 'node:sqlite';
-import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,realpath} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,realpath,cp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -88,6 +88,33 @@ test('saved admission cannot resurrect a later omitted gift or read an unfinishe
   await assert.rejects(readSavedAmazonObservation({...f.options,mode:'resume'},[id]),/saved_admission_missing/);
   const unfinished=await fixture(t);await unfinished.w.close();
   await assert.rejects(readSavedAmazonObservation({...unfinished.options,mode:'resume'},[id]),/saved_admission_not_accepted/);
+});
+test('cold hosted saved-admission cache restores original durable evidence with zero remote writes',async t=>{
+  const id='B0FMXQJW2V',receipt={schemaVersion:1,kind:'amazon-observation',operation:'getItems',observedAt:NOW,
+    requestedIds:[id],returnedIds:[id],products:[{id,availabilityStatus:'IN_STOCK',sourceFactsHash:HASH,
+      snapshot:{title:'TEST ONLY dog',imageUrl:'https://example.invalid/dog.jpg',sourceFacts:{shape:'dog'}}}]};
+  const f=await fixture(t,{finalized:true,observations:[receipt]});await recordSuccessfulPublication(f.input);await f.w.close();
+  const remote=new Map();
+  async function collect(dir,relative=''){
+    for(const entry of await readdir(dir,{withFileTypes:true})){
+      const name=relative+entry.name,file=join(dir,entry.name);
+      if(entry.isDirectory())await collect(file,name+'/');else remote.set('runs/fixture-run/'+name,await readFile(file));
+    }
+  }
+  await collect(f.w.directory);
+  const directory=f.options.directory+'-cold',run=join(directory,'runs','fixture-run');
+  await mkdir(run,{recursive:true,mode:0o700});
+  // Retained synthetic recovery metadata is distinct from provider body cache.
+  await cp(join(f.w.directory,'publication-recovery-bounds'),join(run,'publication-recovery-bounds'),{recursive:true});
+  const durable={get:async key=>remote.has(key)?{bytes:remote.get(key),etag:'fixed-original'}:null,
+    listJournal:async()=>[...remote.keys()].filter(k=>k.includes('/events/')).map(k=>k.slice('runs/fixture-run/'.length)),
+    putImmutable:async()=>{throw Error('must not write original remote run');},
+    compareAndSwap:async()=>{throw Error('must not change original head');},remove:async()=>{throw Error('must not purge');}};
+  const saved=await readSavedAmazonObservation({...f.options,directory,mode:'resume',durable},[id]);
+  assert.deepEqual(saved.receipt,receipt);assert.equal(saved.expiresAt,EXPIRED);
+  assert.deepEqual(await readdir(join(directory,'locks')),[]);
+  assert.deepEqual((await readRunWorkspace({...f.options,directory,mode:'resume',durable})).budget,
+    (await readRunWorkspace({...f.options,mode:'resume'})).budget);
 });
 
 test('actual accounted resolved/idle snapshot records body-free success; expired registered bodies purge without rewriting old controls or charges',async t=>{

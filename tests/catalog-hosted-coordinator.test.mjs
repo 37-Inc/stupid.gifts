@@ -70,6 +70,7 @@ function fixture(){
     publicAffiliateUrl:'https://www.amazon.com/dp/B000000001?tag=goose-gifts-37-20',persistent:true,sourceFactsHash:HASH}];
   f.deps={currentInputs:async()=>{events.push('current-inputs');return f.activeRef;},restoreInputs:async input=>{restored.push(input);},
     shadowCheck:async()=>{events.push('provider-read-check');return providerReport();},
+    savedAdmission:async()=>{events.push('saved-evidence-restored');},
     checkout:async source=>{checkedOut.push(source);f.executingSource=source;return '/operators/'+source;},
     inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,config:f.config,configSha256:HASH,approvalPin:f.approvalPin,publication:f.publication}),
     accepted:async()=>f.phase==='finalized'?f.accepted:null,
@@ -136,8 +137,13 @@ test('saved admission carries the original source through the real coordinator/o
     return invoke(directory,args);
   }});
   assert.equal(result.state,'accepted');assert.deepEqual(f.checkedOut,[NEW_SOURCE,SOURCE]);
+  assert.ok(f.events.indexOf('saved-evidence-restored')<f.events.indexOf('prepare'));
   assert.deepEqual(f.calls.map(a=>a[0]),['prepare','start','review','publish']);
   assert.deepEqual(f.calls[0].slice(0,5),['prepare','--admit-asins',admitAsins[0],'--admit-saved-run',originalKey]);
+});
+test('preparation attention preserves its exact diagnostic instead of masking it as incomplete',async()=>{
+  const f=fixture(),result=await f.run({}, {invoke:async()=>({state:'attention',errorCode:'run_workspace_durable_missing'})});
+  assert.equal(result.errorCode,'run_workspace_durable_missing');assert.ok(JSON.parse(f.pointer()).pending);
 });
 test('workflow always passes an empty admission argument outside manual admit mode',async()=>{
   for(const mode of ['full','photos','shadow','canary','code','editorial','activate']){
