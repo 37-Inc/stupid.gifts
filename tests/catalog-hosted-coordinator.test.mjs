@@ -169,6 +169,24 @@ test('source handoff refuses any saved preparation or workspace, without deletin
   f.runtime.durable.get=async()=>({bytes:bytes({retained:true})});
   await assert.rejects(assertUnpreparedHostedAdmission(f.runtime,record),/workspace_already_exists/);
 });
+test('failed saved admission repairs its outputs through the maintained helper, never starts providers twice',async()=>{
+  const f=fixture(),invoke=f.deps.invoke,admitAsins=['B0FMXQJW2V'],from='admit-'+DAY+'-'+hash(canonicalJson(admitAsins)).slice(0,12);
+  f.files.set(f.runtime.care+'/runs/'+from+'/hosted-run.json',bytes({schemaVersion:1,runKey:from,source:SOURCE,day:DAY,kind:'admit',admitAsins,inputsRef:ref}));
+  await f.run({mode:'admit',admitAsins,admitSavedRun:from},{invoke:async(dir,args)=>{
+    if(args[0]==='start'){f.phase='phase_failed';return{state:'attention',errorCode:'weekly_requires_review'};}return invoke(dir,args);
+  }});
+  const inspect=f.deps.inspect;let repairs=0;
+  const result=await f.run({mode:'admit',source:NEW_SOURCE,admitAsins,admitSavedRun:from},{inspect:async()=>({...await inspect(),configSha256:HASH}),invoke:async(dir,args)=>{
+    if(args[0]==='recover'&&f.phase==='phase_failed'){
+      repairs++;assert.equal(args[1],HASH);f.phase='phases_complete';return{state:'pending',phase:f.phase,reason:'awaiting_reviewed_approval'};
+    }return invoke(dir,args);
+  }});
+  assert.equal(result.state,'accepted');assert.equal(repairs,1);assert.equal(f.calls.filter(a=>a[0]==='prepare').length,1);
+  assert.equal(f.events.filter(e=>e==='saved-evidence-restored').length,1);
+  const config={runId:'original',inputs:{savedAdmission:{}},cadence:{admitAsins},},cp={phase:'phase_failed',owner:{phase:'writing',ownerReference:'original',operationKey:hash('weekly:'+HASH)}};
+  assert.equal(routineRecoveryPhase(cp,config,HASH,HASH),'admission-repair');
+  assert.throws(()=>routineRecoveryPhase({...cp,phase:'phases_running'},config,HASH,HASH),/provider_replay_forbidden/);
+});
 test('workflow always passes an empty admission argument outside manual admit mode',async()=>{
   for(const mode of ['full','photos','shadow','canary','code','editorial','activate']){
     assert.equal(hostedAdmissionAsins(mode,''),undefined);

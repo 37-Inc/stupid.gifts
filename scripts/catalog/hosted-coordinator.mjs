@@ -305,12 +305,13 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
     pointerBytes=await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:{path:file,sha256:hash(bytes)}},pointerBytes);
     record=next;directory=await deps.checkout(record.source);
   }
-  if(record.admitSavedRun){
+  if(record.admitSavedRun&&!(await deps.inspect(record,directory)).started){
     const original=hostedRunRecord(json(await runtime.state.bytes(runtime.care+'/runs/'+record.admitSavedRun+'/hosted-run.json')));
     if(original.kind!=='admit'||record.admitAsins.some(id=>!original.admitAsins.includes(id)))fail('admission_source');
     await deps.checkout(original.source);
-    // A fresh hosted runner has no Mac/local receipt cache. Restore original
-    // authenticated evidence before invoking even an older pinned helper.
+    // Only preparation/start needs the original run cache. Once started, this
+    // run already owns the exact copied receipt; recovery/publication must not
+    // download the old catalog/package history again.
     await deps.savedAdmission(record);
   }
   if(mode==='shadow')return{state:'shadow',source:record.source,runKey:record.runKey,inputsVerified:true,workspace:'not_verified_readonly',pending:true,
@@ -368,6 +369,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
       continue;
     }
     if(!status.started)result=await invoke('start');
+    else if(status.phase==='phase_failed'&&record.admitSavedRun)
+      result=await deps.invoke(ROOT,['recover',status.configSha256,'--run',record.runKey]);
     else if(status.phase==='phases_complete'&&!status.approvalPin){
       const review=record.source!==source?await deps.invoke(ROOT,['recover',status.configSha256,'--run',record.runKey]):await invoke('review'),
         file=runtime.care+'/runs/'+record.runKey+'/reviewed-proposal.json';

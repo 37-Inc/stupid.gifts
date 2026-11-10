@@ -393,11 +393,12 @@ export function operatorInvocation(argv,calendar){
  * config digest. Saved provider/model stages are reused, never re-collected.
  * Post-provider recovery still requires the original approval pin. */
 export function routineRecoveryPhase(cp,config,configSha256,digest){
-  const originalWriter=config.cadence?.automation&&HASH.test(configSha256??'')
+  const originalWriter=(config.cadence?.automation||config.inputs?.savedAdmission)&&HASH.test(configSha256??'')
     &&cp?.owner?.phase==='writing'&&cp.owner.ownerReference===config.runId
     &&cp.owner.operationKey===sha256(`weekly:${configSha256}`);
   if(originalWriter&&digest===configSha256){
-    if(cp.phase==='phases_running')return 'provider';
+    if(cp.phase==='phase_failed'&&config.inputs?.savedAdmission)return 'admission-repair';
+    if(cp.phase==='phases_running'&&config.cadence?.automation)return 'provider';
     if(cp.phase==='phases_complete')return 'review';
   }
   if(originalWriter&&cp.phase==='phases_complete'&&HASH.test(digest??''))return 'publication';
@@ -459,8 +460,8 @@ else{
       const token=await RUNTIME.token();await observeHeadroom(token,spent,record.capacity,fetch,await currentD1Plan(token));
     }
     const result=await runCloudflareWeekly({...entry.driver,command:command==='publish'||recovering?'resume':command,
-      ...(approvalSha&&recoveryPhase!=='provider'?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})},
-      recovering?{repository:config.publication.sourceRoot}:{});
+      ...(approvalSha&&!['provider','admission-repair'].includes(recoveryPhase)?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})},
+      recovering?{repository:config.publication.sourceRoot,...(recoveryPhase==='admission-repair'?{repairSavedAdmission:true}:{})}:{});
     await remember(result,entry,config,directory);console.log(JSON.stringify(weeklyCommandSummary(result)));
     if(result.state==='finalized'){
       await cleanupAcceptedPublication(entry.workspace,config.runId);

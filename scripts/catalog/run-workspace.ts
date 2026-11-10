@@ -146,6 +146,7 @@ export interface RunWorkspace {
   assertHeld():Promise<void>;assertScope(scope:WorkspaceScope):Promise<void>;
   putArtifact(value:unknown,options:{kind:'phase'|'publication';observedAt:string}):Promise<ArtifactRef>;
   readArtifact(ref:ArtifactRef):Promise<Json>;
+  registeredArtifacts():Promise<Array<{ref:ArtifactRef;kind:Kind}>>;
   putBlob(bytes:Uint8Array,options:{kind:'phase'|'publication';observedAt:string}):Promise<ArtifactRef>;
   readBlob(ref:ArtifactRef):Promise<Uint8Array>;
   /** Immutable body-free catalog control, retained in the existing journal. */
@@ -1383,6 +1384,12 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       assertScope:async(expected:WorkspaceScope)=>{await assertHeld();scope(expected);if(!same(manifest.scope,expected))fail('scope_mismatch');},
       putArtifact:(value:unknown,o:{kind:'phase'|'publication';observedAt:string})=>serial(async()=>{if(!o||!['phase','publication'].includes(o.kind))fail('kind');await usable();return put(json(value),o.kind,o.observedAt,true);}),
       readArtifact:(ref:ArtifactRef)=>serial(async()=>{const v=await read(ref);if(!['phase','publication'].includes(v.kind))fail('kind');return structuredClone(v.value);}),
+      registeredArtifacts:()=>serial(async()=>{
+        const result:Array<{ref:ArtifactRef;kind:Kind}>=[];
+        for(const ref of state.refs.values())if(!state.purged.has(ref.sha256))
+          result.push({ref:structuredClone(ref),kind:(state.bodyRegistrations.get(ref.sha256)??await loadStored(directory,ref,manifest)).kind});
+        return result;
+      }),
       putBlob:async(bytes:Uint8Array,o:{kind:'phase'|'publication';observedAt:string})=>{
         if(!(bytes instanceof Uint8Array)||bytes.byteLength>WORKSPACE_BLOB_LIMITS.bytes)fail('blob_bytes');
         // Snapshot before joining the queue; later caller mutation cannot alter
