@@ -19,7 +19,7 @@ import { assertPermanentCatalog } from '../../lib/catalog/freeze-permanent-catal
 import {assertApprovedCatalogInventory} from './permanent-catalog-seal.ts';
 import type { ApprovedCohortRevision } from '../../lib/catalog/freeze-approved-cohort.ts';
 import type { ActivationPermit, DeploymentIdentity, DeploymentObservation, BuildRecoveryApproval, ReviewedUploadActivationApproval, ReviewedUploadActivationApprovalV1, ReviewedUploadActivationInput } from '../../lib/catalog/build-requests.ts';
-import { beginBuildActivation, claimBuildRequest, encodeBuildRequest, resolveBuildActivation, drainDeploymentObservation,
+import { beginBuildActivation, reconcileObservedServingActivation, claimBuildRequest, encodeBuildRequest, resolveBuildActivation, drainDeploymentObservation,
   encodeBuildRecoveryApproval, recoverUnstartedBuildRequest, readUnstartedBuildRecovery,
   encodeReviewedUploadActivationApproval, reviewedUploadActivationDeadline, beginReviewedUploadActivation, readReviewedUploadActivation,validatePublicationFinishAuthority } from '../../lib/catalog/build-requests.ts';
 import { isAccountedPublicationFetch } from './publication-read-fetch.ts';
@@ -873,6 +873,37 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       await save({stage:'activating',permit:{requestId:control.requestId,token:control.build.token,runReference:control.runReference,
         releaseId:config.releaseId,versionReference:control.versionReference!,mutationOwner:actual}},actual);
     }
+    if(serving&&!reviewed&&!control.permit&&owner.phase==='freezing'&&['uploaded','activating'].includes(control.stage)
+      &&control.versionReference&&control.publication&&control.intent&&control.packageSha256){
+      const deployed=await api.deployed();
+      if(deployed?.version===control.versionReference){
+        if(control.deploymentId!==null&&control.deploymentId!==deployed.id)throw Error('serving_observation_mismatch');
+        // A separately authorized exact promotion is already live. Observe and
+        // reconcile it truthfully; never pretend we observed its prior or POST again.
+        await verifyBuiltPackage();verifyUploadedVersion(await api.version(control.versionReference),config,control.versionReference,control);
+        const reconciled=await reconcileObservedServingActivation(db,control.build,control.publication,serving.revision!,serving.authority,
+          owner,control.versionReference,control.deploymentMarker,async signal=>{
+            signal.throwIfAborted();const before=await api.deployed(signal);
+            if(!before||before.id!==deployed.id||before.version!==control!.versionReference||before.marker!==control!.deploymentMarker
+              ||!matchesIdentity(await api.identity(signal),control!.intent!))throw Error('serving_observation_mismatch');
+            if(canonicalJson(await api.deployed(signal))!==canonicalJson(before))throw Error('serving_observation_mismatch');
+            return{environment:config.environment,settled:true,active:identity(control!.intent!,control!.versionReference!),
+              deploymentId:before.id,marker:before.marker!};
+          },async observation=>{
+            await permanentProof();
+            const proof={schemaVersion:1,observation,configSha256,packageSha256:control!.packageSha256,
+              requestId:control!.requestId,intent:control!.intent,versionReference:control!.versionReference,owner};
+            const pin=checkpoint!.checkpoint.pins.publicationObservedActivation;
+            if(pin){const saved=await workspace.readArtifact(pin) as unknown as typeof proof;
+              if(canonicalTime(saved.observation.observedAt)>observation.observedAt
+                ||canonicalJson({...saved,observation:{...saved.observation,observedAt:observation.observedAt}})!==canonicalJson(proof))
+                throw Error('serving_observation_fenced');
+              if(control!.stage!=='activating')await save({stage:'activating'});
+            }else await save({stage:'activating'},owner,{publicationObservedActivation:await workspace.putArtifact(proof,{kind:'publication',observedAt:observation.observedAt})});
+          },now());
+        await save({stage:'activating',permit:reconciled.permit,deploymentId:reconciled.observation.deploymentId},reconciled.permit.mutationOwner);
+      }
+    }
     if(control.permit){
       owner=control.permit.mutationOwner!;
       const receiptOnly=options.acceptedReceiptOnly===true;
@@ -933,8 +964,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
           // Approved persistent completion already checks all source/projection
           // rows on both sides of this callback. Retain one full private/held
           // inventory AFTER the independent native/deployment observation.
-          if(serving)await vectorProof();
-          else if(!options.approvedCatalog?.persistent)await permanentProof();
+          if(!serving&&!options.approvedCatalog?.persistent)await permanentProof();
           await observed();await permanentProof();receiptInventoryOwner={...owner};return control!.intent!;
         };
         if(serving)await completeActivatedServingPublication(db,serving.revision!,control.publication!,control.permit,serving.authority,readDeployed,now);

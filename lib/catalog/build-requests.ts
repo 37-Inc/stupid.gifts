@@ -10,6 +10,7 @@ import { canonicalTime } from './snapshot.ts';
 import { canonicalJson } from './canonical-json.ts';
 import { legacyMutationBatch, legacyMutationGuard, mutationAssertion, mutationFenceQuery, unabandonedImportsQuery } from './mutation-fence.ts';
 import type { MutationOwner } from './mutation-fence.ts';
+import type { AcceptedPublishedRevision } from './prune-existing-revision.ts';
 import type { D1Statement } from './storage/d1.ts';
 
 /** Immutable build inputs, not a guessed future release manifest. cutoff is the
@@ -284,7 +285,7 @@ export async function beginBuildActivation(db: CatalogD1, claim: CatalogBuildCla
   const earliest = earliestDisplayExpiry(snapshot.products);
   if (intent.codeSha !== request.codeSha || intent.priorReleaseId !== request.priorReleaseId || snapshot.catalogRevision !== intent.catalogRevision
     || intent.nextExpiry !== earliest || snapshot.products.some(product => catalogDisplayDeadline(product) <= Date.parse(request.cutoff))
-    || !(await rollbackPreflight(db, snapshot, now,Boolean(options?.acceptedCatalog))).ok) throw new Error('build_publication_unready');
+    || !options?.acceptedCatalog&&!(await rollbackPreflight(db, snapshot, now)).ok) throw new Error('build_publication_unready');
   if(options?.acceptedCatalog)await publicationPreflight(db,snapshot,intent,now,options.acceptedCatalog);
   if(continuation&&(!mutationOwner||mutationOwner.phase!=='freezing'))throw Error('build_permanent_continuation_invalid');
   const gate = sourceGate(request,continuation?await permanentPublicationDeadline(request,snapshot,continuation,now):request.cutoff);
@@ -323,6 +324,65 @@ export async function beginBuildActivation(db: CatalogD1, claim: CatalogBuildCla
   const result = await statement.run() as { success?: boolean; meta?: { changes?: number } };
   if (result.success !== true || result.meta?.changes !== 1) throw new Error('build_fenced_or_preflight_changed');
   return { requestId: claim.requestId, token: claim.token, runReference: claim.runReference, releaseId: intent.releaseId, versionReference };
+}
+
+/** Reconcile an ALREADY independently observed exact serving activation. This
+ * records a post-hoc fact under the original claims, NEVER grants a provider POST.
+ * Its caller must retain the observation with the original package/checkpoint. */
+export async function reconcileObservedServingActivation(db:CatalogD1,claim:CatalogBuildClaim,publication:PublicationClaim,
+  revision:AcceptedPublishedRevision,authority:AcceptedCatalogAuthority,owner:MutationOwner,versionReference:string,deploymentMarker:string,
+  readDeployment:(signal:AbortSignal)=>Promise<DeploymentObservation&{deploymentId:string;marker:string}>,
+  beforeCommit:(observation:{kind:'observed-serving-activation';observedAt:string;deploymentId:string;marker:string})=>Promise<void>,now=new Date()){
+  const requestBytes=encodeBuildRequest(claim.request),intent=publication.intent,snapshot=revision.snapshot;
+  if(owner.phase!=='freezing'||owner.operationKey!==await digest(encodeAcceptedCatalogAuthority(authority))
+    ||revision.evidence!=='accepted-public-projection'||'sourceRows' in revision||revision.operationKey!==owner.operationKey
+    ||encodeBuildRequest(authority.request)!==requestBytes||claim.requestId!==await digest(requestBytes)
+    ||claim.runReference!==intent.releaseId||typeof versionReference!=='string'||!REFERENCE.test(versionReference)
+    ||typeof deploymentMarker!=='string'||!REFERENCE.test(deploymentMarker)
+    ||owner.environment!==authority.request.environment||owner.indexName!==revision.request.scope.indexName)
+    throw Error('serving_observation_fenced');
+  await publicationPreflight(db,snapshot,intent,now,authority);
+  const build=await row(db,claim.requestId),outbox=(await db.prepare('SELECT * FROM publication_outbox WHERE intent_id=?')
+    .bind(publication.intentId).all<Record<string,unknown>>()).results[0],receipt=await acceptedCatalogReceipt(db,authority);
+  if(!build||build.state!=='building'||build.lease_token!==claim.token||build.lease_until!==claim.leaseUntil
+    ||build.request_json!==requestBytes||build.environment!==claim.request.environment||build.source_revision!==claim.request.sourceRevision
+    ||build.run_reference!==claim.runReference||build.dispatch_reference!==null||build.release_id!==null||build.version_reference!==null
+    ||!outbox||!['claimed','dispatched'].includes(String(outbox.state))||outbox.intent_json!==encodePublicationIntent(intent)
+    ||outbox.release_id!==intent.releaseId||outbox.lease_token!==publication.token||outbox.lease_until!==publication.leaseUntil
+    ||outbox.completed_token!==null||outbox.error_code!==null||outbox.dispatch_reference!==(outbox.state==='claimed'?null:`version:${versionReference}`))
+    throw Error('serving_observation_fenced');
+  const observed=await observe(readDeployment,30_000) as DeploymentObservation&{deploymentId:string;marker:string};
+  if(observed.environment!==owner.environment||observed.settled!==true||!observed.active||!matches(observed.active,intent)
+    ||observed.active.versionReference!==versionReference||observed.marker!==deploymentMarker
+    ||typeof observed.deploymentId!=='string'||!REFERENCE.test(observed.deploymentId))
+    throw Error('serving_observation_mismatch');
+  const observation={kind:'observed-serving-activation' as const,observedAt:now.toISOString(),deploymentId:observed.deploymentId,marker:observed.marker};
+  const exact=(table:string,value:Record<string,unknown>)=>{const keys=Object.keys(value);
+    if(keys.some(key=>!/^[a-z_]+$/.test(key)))throw Error('serving_observation_fenced');
+    return db.prepare(`SELECT json(CASE WHEN EXISTS(SELECT 1 FROM ${table} WHERE ${keys.map(key=>`${key} IS ?`).join(' AND ')})
+      THEN 'true' ELSE 'serving_observation_fenced' END)`).bind(...keys.map(key=>value[key]));};
+  const fence=mutationFenceQuery(owner,['freezing']),activeOwner={...owner,phase:'activating' as const},gate=publicationActivationGate(snapshot,intent,authority),
+    imports=await unabandonedImportsQuery(db,owner.environment);
+  await beforeCommit(observation); // Fresh accepted-public/native proof + retained observation; no subsequent provider action.
+  await db.batch([mutationAssertion(db,owner,['freezing']),exact('catalog_build_requests',build as unknown as Record<string,unknown>),
+    exact('publication_outbox',outbox),exact('publication_receipts',receipt),
+    db.prepare(`SELECT json(CASE WHEN ${gate.sql} AND ${imports.sql}
+      AND (SELECT coalesce(max(rowid),0) FROM publication_receipts)=?
+      AND NOT EXISTS(SELECT 1 FROM publication_receipts WHERE release_id=?)
+      AND (SELECT coalesce(max(sequence),0) FROM vector_sync_outbox)=?
+      AND NOT EXISTS(SELECT 1 FROM vector_sync_outbox WHERE status!='complete')
+      AND NOT EXISTS(SELECT 1 FROM catalog_build_requests WHERE environment=? AND state='activating')
+      THEN 'true' ELSE 'serving_observation_fenced' END)`)
+      .bind(...gate.params,...imports.params,authority.publicationReceiptWatermark,intent.releaseId,authority.globalVectorWatermark,owner.environment),
+    db.prepare(`UPDATE publication_outbox SET state='dispatched',dispatch_reference=?,updated_at=? WHERE intent_id=? AND lease_token=?`)
+      .bind(`version:${versionReference}`,now.toISOString(),publication.intentId,publication.token),
+    db.prepare(`UPDATE catalog_build_requests SET state='activating',lease_until=NULL,release_id=?,version_reference=? WHERE request_id=? AND lease_token=?`)
+      .bind(intent.releaseId,versionReference,claim.requestId,claim.token),
+    db.prepare(`UPDATE catalog_mutation_scopes SET phase='activating',external_pending=1,activation_request_id=?
+      WHERE environment=? AND index_name=? AND ${fence.sql}`).bind(claim.requestId,owner.environment,owner.indexName,...fence.params),
+    mutationAssertion(db,activeOwner,['activating'])]);
+  return{permit:{requestId:claim.requestId,token:claim.token,runReference:claim.runReference,releaseId:intent.releaseId,
+    versionReference,mutationOwner:activeOwner},observation};
 }
 
 export interface ReviewedUploadActivationApprovalV1 {
@@ -566,10 +626,11 @@ export async function resolveBuildActivation(db: CatalogD1, permit: ActivationPe
         AND NOT EXISTS(SELECT 1 FROM publication_receipts WHERE release_id=?)
         AND (SELECT coalesce(max(sequence),0) FROM vector_sync_outbox)=?
         AND NOT EXISTS(SELECT 1 FROM vector_sync_outbox WHERE status!='complete')
-        AND (SELECT count(*) FROM products)=?
+        AND (SELECT count(*) FROM catalog_public_products WHERE catalog_revision=?)=
+          (SELECT product_count FROM catalog_projection_receipts WHERE catalog_revision=?)
         AND EXISTS(SELECT 1 FROM publication_outbox WHERE release_id=? AND intent_json=? AND state='verified' AND completed_token IS NOT NULL)`)
         .bind(permit.requestId,permit.token,...columns.map(k=>original[k]),authority.publicationReceiptWatermark,
-          permit.releaseId,authority.globalVectorWatermark,authority.identityCount,permit.releaseId,outbox.intent_json));
+          permit.releaseId,authority.globalVectorWatermark,authority.request.sourceRevision,authority.request.sourceRevision,permit.releaseId,outbox.intent_json));
       if(result.success!==true||result.meta?.changes!==1)throw Error('build_fenced');
       return'resolved';
     }

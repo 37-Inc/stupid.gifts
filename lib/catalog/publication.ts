@@ -1,7 +1,7 @@
 import type { CatalogReleaseManifest, CatalogSnapshot } from './types.ts';
 import type { CatalogD1, D1Statement, D1ReadOptions } from './storage/d1.ts';
 import { earliestDisplayExpiry } from './display.ts';
-import { canonicalTime } from './snapshot.ts';
+import { canonicalTime,validateCatalogSnapshot } from './snapshot.ts';
 import { canonicalJson } from './canonical-json.ts';
 import { rollbackPreflight, visibleRevisionCountQuery } from './d1.ts';
 import { legacyMutationBatch, mutationAssertion, mutationFenceQuery } from './mutation-fence.ts';
@@ -106,10 +106,11 @@ function gate(snapshot: CatalogSnapshot, intent: PublicationIntent,authority?:Ac
 /** Same predicates for the explicit reviewed, original-token activation CAS. */
 export { gate as publicationActivationGate,preflight as publicationPreflight };
 async function preflight(db: CatalogD1, snapshot: CatalogSnapshot, intent: PublicationIntent, now: Date,authority?:AcceptedCatalogAuthority): Promise<void> {
-  if(authority)await acceptedCatalogReceipt(db,authority);
+  if(authority){await acceptedCatalogReceipt(db,authority);validateCatalogSnapshot(snapshot,now);
+    if(await digest(JSON.stringify(snapshot)+'\n')!==authority.request.sourceDigest)throw Error('publication_preflight_failed');}
   const earliest = earliestDisplayExpiry(snapshot.products);
   if (snapshot.dataKind !== 'catalog' || snapshot.catalogRevision !== intent.catalogRevision || intent.nextExpiry !== earliest
-    || !(await rollbackPreflight(db, snapshot, now,Boolean(authority))).ok) throw new Error('publication_preflight_failed');
+    || !authority&&!(await rollbackPreflight(db, snapshot, now)).ok) throw new Error('publication_preflight_failed');
   const check = gate(snapshot, intent,authority);
   if (!(await db.prepare(`SELECT 1 WHERE ${check.sql}`).bind(...check.params).all()).results.length) throw new Error('publication_preflight_failed');
 }
