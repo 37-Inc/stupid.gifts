@@ -5,7 +5,7 @@ import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,realpath} from 'node:fs/prom
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {openRunWorkspace,readRunWorkspace} from '../scripts/catalog/run-workspace.ts';
+import {openRunWorkspace,readRunWorkspace,readSavedAmazonObservation} from '../scripts/catalog/run-workspace.ts';
 import {recordSuccessfulPublication,purgeCompletedWorkspaces} from '../scripts/catalog/purge-workspaces.ts';
 import {createCatalogD1Rest} from '../scripts/catalog/d1-write-rest.ts';
 import {encodeBuildRequest} from '../lib/catalog/build-requests.ts';
@@ -15,7 +15,7 @@ import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
 const NOW='2026-10-22T18:00:00.000Z',EXPIRED='2026-10-22T19:00:00.000Z',HASH='c'.repeat(64);
 const scope={environment:'production',accountId:'a'.repeat(32),databaseId:'00000000-0000-4000-8000-000000000001',databaseName:'fixture',workerName:'fixture',indexName:'fixture'};
 const live=globalThis.fetch;globalThis.fetch=async()=>{throw Error('Live network forbidden');};test.after(()=>{globalThis.fetch=live;});
-async function fixture(t,{badPrivate=false}={}){
+async function fixture(t,{badPrivate=false,finalized=false,observations=[]}={}){
   const parent=await mkdtemp(join(await realpath(tmpdir()),'goose-successor-')),repository=join(parent,'source'),directory=join(parent,'workspace');
   await mkdir(repository,{mode:0o700});t.after(()=>rm(parent,{recursive:true,force:true}));
   let clock=NOW,calls=0,lose=false,afterRead;const handles=[];
@@ -26,6 +26,7 @@ async function fixture(t,{badPrivate=false}={}){
   const unknown={id:'retained-unknown',requestSha256:HASH,units:{httpRequests:1,sqlStatements:0}};
   await w.reserveBudget(unknown);await w.settleBudget(unknown.id,{status:'unknown',usage:null});
   const artifact=await w.putArtifact({supplier:'TEST ONLY EXPIRED BODY'},{kind:'phase',observedAt:NOW});
+  for(const receipt of observations)await w.saveReceipt({sha256:sha256(canonicalJson(receipt)),receipt});
   await w.preparePublicationDirectories('fixture-release',NOW,null);
   await mkdir(join(w.directory,'packages','fixture-release'),{mode:0o700});await writeFile(join(w.directory,'packages','fixture-release','body'),'TEST ONLY',{mode:0o600});
   const request={schemaVersion:1,environment:scope.environment,sourceRevision:'fixture-catalog',sourceDigest:HASH,codeSha:options.codeSha,
@@ -41,7 +42,7 @@ async function fixture(t,{badPrivate=false}={}){
       vectorPlan:{catalogRevision:request.sourceRevision,planSha256:HASH,ids:[]},packageSha256:HASH,uploadMarker:'fixture-upload',
       versionReference:'fixture-version',deploymentMarker:'fixture-activation',deploymentId:'fixture-deployment',receiptSha256:sha256(canonicalJson(privateReceipt))};
   if(badPrivate)control.receiptSha256='f'.repeat(64);
-  const cp=await w.writeCheckpoint(null,{phase:'attention',owner,state:{supplier:'TEST ONLY CHECKPOINT BODY'},pins:{artifact},phaseComplete:null,control:{publication:control}});
+  const cp=await w.writeCheckpoint(null,{phase:finalized?'finalized':'attention',owner:finalized?null:owner,state:{supplier:'TEST ONLY CHECKPOINT BODY'},pins:{artifact},phaseComplete:null,control:{publication:control}});
   const rows={receipt:{release_id:intent.releaseId,catalog_revision:intent.catalogRevision,code_sha:intent.codeSha,completed_at:NOW,manifest_json:encodePublicationIntent(intent)},
     build:{request_id:requestId,environment:scope.environment,source_revision:intent.catalogRevision,request_json:encodeBuildRequest(request),state:'resolved',lease_token:'fixture-build',lease_until:null,
       run_reference:control.runReference,release_id:intent.releaseId,version_reference:control.versionReference,error_code:null},
@@ -67,6 +68,27 @@ async function fixture(t,{badPrivate=false}={}){
   return{w,db,rows,sql,input,artifact,cp,options,calls:()=>calls,setNow(v){clock=v;},lose(){lose=true;},after(fn){afterRead=fn;},
     async reopen(){const h=await openRunWorkspace({...options,mode:'resume'});handles.push(h);return h;}};
 }
+
+test('saved admission reader authenticates accepted original receipt without locks, writes or renewed retention',async t=>{
+  const id='B0FMXQJW2V',snapshot={title:'TEST ONLY solar peeing dog',imageUrl:'https://example.invalid/dog.jpg',sourceFacts:{shape:'dog'}},
+    receipt={schemaVersion:1,kind:'amazon-observation',operation:'getItems',observedAt:NOW,requestedIds:[id],returnedIds:[id],products:[{
+      id,availabilityStatus:'IN_STOCK',snapshot,sourceFactsHash:sha256(canonicalJson(snapshot))}]};
+  const f=await fixture(t,{finalized:true,observations:[receipt]});
+  await recordSuccessfulPublication(f.input);await f.w.close();
+  const before=await readRunWorkspace({...f.options,mode:'resume'}),events=await readdir(join(f.w.directory,'events'));
+  const saved=await readSavedAmazonObservation({...f.options,mode:'resume'},[id]);
+  assert.deepEqual(saved.receipt,receipt);assert.equal(saved.expiresAt,EXPIRED);assert.equal(saved.receipt.observedAt,NOW);
+  assert.deepEqual(await readdir(join(f.w.directory,'events')),events);
+  assert.deepEqual((await readRunWorkspace({...f.options,mode:'resume'})).budget,before.budget);
+  await assert.rejects(readSavedAmazonObservation({...f.options,mode:'resume',now:()=>EXPIRED},[id]),/expired/);
+});
+test('saved admission cannot resurrect a later omitted gift or read an unfinished run',async t=>{
+  const id='B0FMXQJW2V',receipt={schemaVersion:1,kind:'amazon-observation',operation:'getItems',observedAt:NOW,requestedIds:[id],returnedIds:[],products:[]};
+  const f=await fixture(t,{finalized:true,observations:[receipt]});await recordSuccessfulPublication(f.input);await f.w.close();
+  await assert.rejects(readSavedAmazonObservation({...f.options,mode:'resume'},[id]),/saved_admission_missing/);
+  const unfinished=await fixture(t);await unfinished.w.close();
+  await assert.rejects(readSavedAmazonObservation({...unfinished.options,mode:'resume'},[id]),/saved_admission_not_accepted/);
+});
 
 test('actual accounted resolved/idle snapshot records body-free success; expired registered bodies purge without rewriting old controls or charges',async t=>{
   const f=await fixture(t),before=await f.w.readCheckpoint({controlOnly:true}),oldBudget=await f.w.budget(),proof=await recordSuccessfulPublication(f.input);

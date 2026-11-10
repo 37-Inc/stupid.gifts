@@ -78,7 +78,7 @@ function fixture(){
       calls.push(args);let command=args[0];events.push(command);
       if(command==='recover')command=args[1]===HASH?(f.phase==='phases_complete'?'review':'resume'):'publish';
       if(command==='prepare'){assert.ok(events.indexOf('pending')<events.indexOf('prepare'));f.prepared=true;
-        return{source:f.executingSource,configSha256:HASH,runId:f.config.runId};}
+        return{source:directory.split('/').at(-1),configSha256:HASH,runId:f.config.runId};}
       if(command==='start'||command==='resume'){f.phase='phases_complete';return{state:'pending',reason:'awaiting_reviewed_approval',phase:f.phase};}
       if(command==='review'){const runKey=args.at(-1),file=runtime.care+'/runs/'+runKey+'/reviewed-proposal.json';files.set(file,f.proposalBytes);
         return{state:'requires_agent_review',proposalPath:file,proposalSha256:f.proposalSha,summary:f.summary};}
@@ -121,6 +121,23 @@ test('real operator consumes the coordinator exact-admission intent and matches 
     return invoke(directory,args);
   }});
   assert.equal(result.state,'accepted');assert.equal(f.calls.filter(a=>a[0]==='prepare').length,1);
+});
+test('saved admission carries the original source through the real coordinator/operator handoff without another batch',async()=>{
+  const f=fixture(),invoke=f.deps.invoke,admitAsins=['B0FMXQJW2V'];
+  const originalKey='admit-'+DAY+'-'+hash(canonicalJson(admitAsins)).slice(0,12);
+  f.files.set(f.runtime.care+'/runs/'+originalKey+'/hosted-run.json',bytes({schemaVersion:1,runKey:originalKey,
+    source:SOURCE,day:DAY,kind:'admit',admitAsins,inputsRef:ref}));
+  const result=await f.run({mode:'admit',source:NEW_SOURCE,admitAsins,admitSavedRun:originalKey},{invoke:async(directory,args)=>{
+    assert.equal(directory,'/operators/'+NEW_SOURCE);
+    const parsed=operatorInvocation(args,{day:DAY,monday:false});
+    const pending=await routineHostedPending(f.runtime,NEW_SOURCE,parsed.runKey);
+    routineHostedPreparation(pending,parsed);
+    if(parsed.command==='prepare')assert.equal(parsed.admitSavedRun,originalKey);
+    return invoke(directory,args);
+  }});
+  assert.equal(result.state,'accepted');assert.deepEqual(f.checkedOut,[NEW_SOURCE,SOURCE]);
+  assert.deepEqual(f.calls.map(a=>a[0]),['prepare','start','review','publish']);
+  assert.deepEqual(f.calls[0].slice(0,5),['prepare','--admit-asins',admitAsins[0],'--admit-saved-run',originalKey]);
 });
 test('workflow always passes an empty admission argument outside manual admit mode',async()=>{
   for(const mode of ['full','photos','shadow','canary','code','editorial','activate']){

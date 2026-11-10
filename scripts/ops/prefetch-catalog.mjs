@@ -2076,7 +2076,8 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
   const qualityCandidates = candidates.filter(product=>!block(product));
   const qualityRejected = rejectedByQuality.length;
   candidates.splice(0, candidates.length, ...qualityCandidates);
-  const deduplicated = reviewedDiscovery?{products:[...candidates],duplicates:0,rejected:[]}:deduplicateCandidates(candidates);
+  const exactAdmission=reviewedDiscovery||Boolean(options.admitAsins);
+  const deduplicated = exactAdmission?{products:[...candidates],duplicates:0,rejected:[]}:deduplicateCandidates(candidates);
   deduplicated.rejected.forEach((product) => telemetry.items.record(product, {
     phase: 'discovery',
     stage: 'deduplication',
@@ -2093,10 +2094,10 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
       const catalog = await store.getActiveCatalogIdentities({ includeInactive: reviewedDiscovery || options.discoveryNewOnly === true });
       if(reviewedDiscovery)discoveryCatalog=catalog;
       const catalogIds=new Set(catalog.map(p=>p.id));
-      const exactMatches=reviewedDiscovery?candidates.filter(p=>catalogIds.has(p.id)):[];
+      const exactMatches=exactAdmission?candidates.filter(p=>catalogIds.has(p.id)):[];
       // Only exact identities or already verified duplicate relationships can
       // veto the visual review. Similar titles are not proof of one design.
-      const catalogDeduplicated = reviewedDiscovery?{
+      const catalogDeduplicated = exactAdmission?{
         products:candidates.filter(p=>!catalogIds.has(p.id)),
         rejected:exactMatches.map(p=>({...p,duplicateOfProductId:p.id})),
         duplicates:exactMatches.length,superseded:[],
@@ -2108,7 +2109,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
         phase: 'discovery',
         stage: 'deduplication',
         decision: 'duplicate',
-        reasonCode: reviewedDiscovery?'existing_catalog_identity':'near_duplicate_in_catalog',
+        reasonCode: exactAdmission?'existing_catalog_identity':'near_duplicate_in_catalog',
         winnerProductId: product.duplicateOfProductId,
       }));
     } catch (error) {

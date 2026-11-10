@@ -11,7 +11,7 @@ import {currentHostedInputs,restoreHostedInputs,syncHostedCampaignFeed} from './
 import {canonicalJson} from '../../lib/catalog/canonical-json.ts';
 import {checkCloudflareRunner} from './check-cloudflare-runner.ts';
 import {catalogD1FailureDetail} from './d1-write-rest.ts';
-import {hostedRunRecord,hostedRunKey,validAdmissionAsins} from './hosted-run-record.mjs';
+import {hostedRunRecord,hostedRunKey,validAdmissionAsins,validSavedAdmissionRun} from './hosted-run-record.mjs';
 export {hostedRunRecord} from './hosted-run-record.mjs';
 
 const exec=promisify(execFile),HASH=/^[a-f0-9]{64}$/,SOURCE=/^[a-f0-9]{40}$/,ASIN=/^[A-Z0-9]{10}$/;
@@ -200,7 +200,10 @@ function defaults(runtime,environment){
       if(record.kind==='canary'&&(canonicalJson(config.cadence.automation?.refreshIds??null)!==canonicalJson([record.canaryId])
         ||config.cadence.automation.discovery!==false||config.credentials.openai))fail('canary_config');
       if(canonicalJson(config.cadence.admitAsins??null)!==canonicalJson(record.kind==='admit'?record.admitAsins:null)
-        ||record.kind==='admit'&&config.cadence.automation)fail('admission_config');
+        ||record.kind==='admit'&&config.cadence.automation||Boolean(config.inputs.savedAdmission)!==Boolean(record.admitSavedRun))fail('admission_config');
+      if(record.admitSavedRun){const bytes=await runtime.state.bytes(config.inputs.savedAdmission.path),pin=json(bytes);
+        if(hash(bytes)!==config.inputs.savedAdmission.sha256
+          ||pin.runKey!==record.admitSavedRun||canonicalJson(pin.ids)!==canonicalJson(record.admitAsins))fail('admission_config');}
       for(const role of ['cloudflare','amazonId','amazonSecret','openai'])if(config.credentials[role]&&canonicalJson(config.credentials[role])!==canonicalJson(runtime.credentials[role]))fail('credential_reference');
       const remote=await Promise.all(['manifest.json','head.json'].map(name=>runtime.durable.get(`runs/${config.runId}/${name}`)));
       const local=await Promise.all(['manifest.json','head.json'].map(name=>optional(()=>lstat(path.join(runtime.workspace,'runs',config.runId,name)))));
@@ -248,10 +251,11 @@ function defaults(runtime,environment){
 
 /** One manual/scheduled invocation, one existing run. The ONLY mutable progress
  * pointer refers to immutable intent; actual phases/dispatches stay in RunWorkspace. */
-export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins,source,day:capturedDay,runtime,environment=process.env},injected={}){
+export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins,admitSavedRun,source,day:capturedDay,runtime,environment=process.env},injected={}){
   if(!['shadow','full','photos','canary','code','admit'].includes(mode)||!SOURCE.test(source)||!runtime.hosted||!runtime.durable)fail('invocation');
   day(capturedDay);if(mode==='canary'?!ASIN.test(canaryId):canaryId!==undefined)fail('canary');
   if(mode==='admit'?!validAdmissionAsins(admitAsins):admitAsins!==undefined)fail('admission_asins');
+  if(admitSavedRun!==undefined&&(mode!=='admit'||!validSavedAdmissionRun(admitSavedRun)))fail('admission_source');
   const deps={...defaults(runtime,environment),...injected},pointerFile=runtime.care+'/pending-run.json';
   let pointerBytes=await optional(()=>runtime.state.readPointer('pending-run',pointerFile)),record;
   if(pointerBytes){const pointer=json(pointerBytes);
@@ -267,19 +271,24 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
   if(mode==='code'&&record&&record.kind!=='code')return{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_catalog_pending'};
   // Owner-picked admission never substitutes another cohort or resumes unrelated
   // provider work. Scheduled wakes may still finish this saved exact intent.
-  if(mode==='admit'&&record&&(record.kind!=='admit'||canonicalJson(record.admitAsins)!==canonicalJson(admitAsins)))
+  if(mode==='admit'&&record&&(record.kind!=='admit'||canonicalJson(record.admitAsins)!==canonicalJson(admitAsins)||record.admitSavedRun!==admitSavedRun))
     return{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_catalog_pending'};
   if(!record){
     if(mode==='shadow'){const inputsRef=inputsReference(await deps.currentInputs());await deps.restoreInputs(inputsRef);await deps.checkout(source);
       return{state:'shadow',source,inputsVerified:true,workspace:'not_verified_readonly',pending:false,...shadowProviderFields(await deps.shadowCheck())};}
-    const runKey=hostedRunKey(mode,capturedDay,source,canaryId,admitAsins);
+    const runKey=hostedRunKey(mode,capturedDay,source,canaryId,admitAsins,admitSavedRun);
     const file=runtime.care+'/runs/'+runKey+'/hosted-run.json';let bytes=await optional(()=>runtime.state.bytes(file));
     if(bytes){record=hostedRunRecord(json(bytes));if(record.runKey!==runKey)fail('run_record');resumed=true;}
-    else{record=hostedRunRecord({schemaVersion:1,runKey,source,day:capturedDay,kind:mode,inputsRef:inputsReference(await deps.currentInputs({refreshCampaigns:true})),...(mode==='canary'?{canaryId}:mode==='admit'?{admitAsins}:{})});
+    else{record=hostedRunRecord({schemaVersion:1,runKey,source,day:capturedDay,kind:mode,inputsRef:inputsReference(await deps.currentInputs({refreshCampaigns:true})),...(mode==='canary'?{canaryId}:mode==='admit'?{admitAsins,...(admitSavedRun?{admitSavedRun}:{})}:{})});
       bytes=await runtime.state.put(file,record);}
     pointerBytes=await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:{path:file,sha256:hash(bytes)}},pointerBytes);
   }
   await deps.restoreInputs(record.inputsRef);const directory=await deps.checkout(record.source);
+  if(record.admitSavedRun){
+    const original=hostedRunRecord(json(await runtime.state.bytes(runtime.care+'/runs/'+record.admitSavedRun+'/hosted-run.json')));
+    if(original.kind!=='admit'||record.admitAsins.some(id=>!original.admitAsins.includes(id)))fail('admission_source');
+    await deps.checkout(original.source);
+  }
   if(mode==='shadow')return{state:'shadow',source:record.source,runKey:record.runKey,inputsVerified:true,workspace:'not_verified_readonly',pending:true,
     ...shadowProviderFields(await deps.shadowCheck())};
   const finish=async result=>{
@@ -325,7 +334,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
     }
     let result;
     if(!status.prepared){result=await invoke('prepare',record.kind==='photos'?['--photos-only']:record.kind==='canary'?['--canary-id',record.canaryId]
-      :record.kind==='admit'?['--admit-asins',record.admitAsins.join(',')]:[]);
+      :record.kind==='admit'?['--admit-asins',record.admitAsins.join(','),...(record.admitSavedRun?['--admit-saved-run',record.admitSavedRun]:[])]:[]);
       if(result.state==='skipped'&&['photos_current','run_already_completed'].includes(result.reason)){
         if(result.reason==='photos_current')return finish({state:'skipped',reason:result.reason});
         const checked=await deps.inspect(record,directory),accepted=await deps.accepted(record,checked);if(accepted)return finish({state:'accepted',...accepted});
@@ -376,8 +385,9 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
 async function main(){
   process.umask(0o077);
   if(process.platform!=='linux'||process.versions.node.split('.')[0]!=='22'||homedir()!=='/home/runner')fail('runner');
-  const [mode='shadow',canaryId,admissionList]=process.argv.slice(2);if(process.argv.length>5)fail('invocation');
+  const [mode='shadow',canaryId,admissionList,savedRun]=process.argv.slice(2);if(process.argv.length>6)fail('invocation');
   const admitAsins=hostedAdmissionAsins(mode,admissionList);
+  const admitSavedRun=savedRun||undefined;
   const runtime=automationRuntime(),source=process.env.GITHUB_SHA;
   if((await exec('git',['rev-parse','HEAD'],{cwd:ROOT,env:hostedCommandEnvironment(process.env,{credentials:false})})).stdout.trim()!==source)fail('reviewed_source');
   const now=new Date(),capturedDay=hostedInvocationDay(mode,now);
@@ -392,7 +402,7 @@ async function main(){
     const repository=await defaults(runtime,process.env).checkout(source);
     console.log(JSON.stringify(await previewHostedHomepage(runtime,{repository,source,day:capturedDay})));return;
   }
-  const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),...(admitAsins?{admitAsins}:{}),source,day:capturedDay,runtime});
+  const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),...(admitAsins?{admitAsins}:{}),...(admitSavedRun?{admitSavedRun}:{}),source,day:capturedDay,runtime});
   console.log(JSON.stringify(result));if(result.state==='attention'){console.error('::warning::Catalog run remains pending; resume its existing identity.');process.exitCode=1;}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)main().catch(error=>{

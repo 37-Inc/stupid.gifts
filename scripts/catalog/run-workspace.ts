@@ -948,7 +948,7 @@ async function expired(directory:string,state:State,manifest:WorkspaceManifest,n
 /** Read-only metadata/status. Never acquires/removes a lock or returns artifact
  * bodies/state. Expired content does not hide identities needed to reconcile an
  * already dispatched activation. This is NOT permission to build/publish anew. */
-export async function readRunWorkspace(input:RunWorkspaceOptions):Promise<WorkspaceStatus> {
+async function readWorkspaceState(input:RunWorkspaceOptions) {
   input={...input,scope:structuredClone(input.scope),retention:structuredClone(input.retention),budgetCaps:structuredClone(input.budgetCaps)};
   const directory=await location({...input,mode:'resume'},false);const info=await readManifest(directory,input);
   const before=(await readdir(join(directory,'events'))).sort();const state=await loadState(directory,info.manifest,false,input.requestLimit);
@@ -959,10 +959,42 @@ export async function readRunWorkspace(input:RunWorkspaceOptions):Promise<Worksp
   }
   await verifyExecutionMetadata(directory,state,await realpath(input.repository));
   await verifySuccessMetadata(directory,state);
+  return{directory,info,state,assertUnchanged:async()=>{
+    if(!same(before,(await readdir(join(directory,'events'))).sort()))fail('concurrent_read');
+  }};
+}
+export async function readRunWorkspace(input:RunWorkspaceOptions):Promise<WorkspaceStatus> {
+  const {directory,info,state,assertUnchanged}=await readWorkspaceState(input);
   const expiredRefs=await expired(directory,state,info.manifest,time((input.now||(()=>new Date().toISOString()))()));
-  if(!same(before,(await readdir(join(directory,'events'))).sort()))fail('concurrent_read');
+  await assertUnchanged();
   return{directory,...info,requestLimit:state.requestLimit,checkpoint:state.checkpoint,budget:totals(state),budgetCeiling:ceiling(state),expired:expiredRefs,
     successfulPublication:structuredClone(state.success),execution:structuredClone(state.execution)};
+}
+/** Explicit correction of a rejected admission: read the latest ORIGINAL
+ * registered observation from an accepted run, without taking its locks,
+ * changing its journal or renewing its clock. A later omission stays missing. */
+export async function readSavedAmazonObservation(input:RunWorkspaceOptions,ids:string[]) {
+  if(!Array.isArray(ids)||!ids.length||ids.length>10||new Set(ids).size!==ids.length
+    ||ids.some(id=>!/^[A-Z0-9]{10}$/.test(id)))fail('saved_admission_ids');
+  const {directory,info,state,assertUnchanged}=await readWorkspaceState(input);
+  if(!state.success||state.checkpoint?.checkpoint.phase!=='finalized'||state.checkpoint.checkpoint.owner!==null)
+    fail('saved_admission_not_accepted');
+  let latest:{ref:ArtifactRef;receipt:ProviderReceipt;expiresAt:string;stored:Stored}|undefined;
+  for(const ref of state.refs.values()){
+    const registration=state.bodyRegistrations.get(ref.sha256);
+    if(registration&&registration.kind!=='amazon-observation'||state.purged.has(ref.sha256))continue;
+    const value=await loadStored(directory,ref,info.manifest);
+    if(value.kind!=='amazon-observation')continue;
+    const body=value.value as unknown as ProviderReceipt;receipt(body);
+    if(body.kind==='amazon-observation'&&ids.some(id=>(body.requestedIds??body.returnedIds).includes(id))){
+      latest={ref,receipt:body,expiresAt:value.expiresAt,stored:value};
+    }
+  }
+  if(!latest||latest.receipt.kind!=='amazon-observation'||latest.receipt.operation!=='getItems'
+    ||ids.some(id=>!latest!.receipt.products.some(p=>p.id===id)))fail('saved_admission_missing');
+  fresh(latest.stored,time((input.now||(()=>new Date().toISOString()))()));
+  await assertUnchanged();
+  return{ref:structuredClone(latest.ref),receipt:structuredClone(latest.receipt),expiresAt:latest.expiresAt,manifestSha256:info.manifestSha256};
 }
 /** Host-local resource locks (D1 + Worker + build checkout), sorted to avoid lock-order
  * deadlocks across run IDs IN THE SAME CANONICAL WORKSPACE ROOT. Separate roots

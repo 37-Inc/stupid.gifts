@@ -43,6 +43,8 @@ import {maintenanceDigest} from './maintenance-state.ts';
 import {createEditorialStages,createCatalogEditorial} from './catalog-editorial.mjs';
 import {createReviewedPhaseJournal,prepareReviewedPhase,applyReviewedPhase,reconcileReviewedPhaseOwner} from './reviewed-provider-phases.mjs';
 import {routineUploadRetry} from './routine-upload-retry.ts';
+import {automationRuntime} from './automation-runtime.mjs';
+import {loadSavedAdmission,savedAdmissionEvidence} from './saved-admission.mjs';
 import amazonCreators from '../../lib/amazon-creators.js';
 import { automatedCatalogPhases,automatedCatalogExecutor,validateCatalogAutomation,dailyCatalogPhases, pacificCatalogCalendar, runDailyCatalogWithBackend, withCatalogCadence, validCatalogRunKey } from '../ops/catalog-daily.mjs';
 import {validateExecutionAdoption,validateExecutionAdoptionConfigs} from './execution-adoption.ts';
@@ -59,7 +61,7 @@ export interface CloudflareWeeklyConfig {
     automation?:{schemaVersion:1;refreshIds:string[];discovery:boolean;leadAsins?:string[];searchTopics?:string[]}};
   credentials:{cloudflare:CloudflareCredentialReference;amazonId:CatalogCredentialReference;amazonSecret:CatalogCredentialReference;amazonVersion:string;openai?:CatalogCredentialReference;stagingAuthSecret?:CatalogCredentialReference};
   limits:{requests:number;statements:number;reportedRowsRead?:number;reportedRowsWritten?:number};retention:RetentionPolicy;
-  inputs:{previous:InputRef;context:InputRef;rights:InputRef;originalVectors?:InputRef};publication:PublicationConfig;
+  inputs:{previous:InputRef;context:InputRef;rights:InputRef;originalVectors?:InputRef;savedAdmission?:InputRef};publication:PublicationConfig;
 }
 export const WEEKLY_RESUME_STATES=Object.freeze({
   created:'No provider phase started; the exact initial claim can be recovered.',
@@ -153,7 +155,8 @@ export function validateCloudflareWeeklyConfig(input:unknown):CloudflareWeeklyCo
     ||rowBudget&&(!Number.isInteger(c.limits.reportedRowsRead)||!Number.isInteger(c.limits.reportedRowsWritten))
     ||c.limits.reportedRowsRead!==undefined&&(!Number.isInteger(c.limits.reportedRowsRead)||c.limits.reportedRowsRead<1||c.limits.reportedRowsRead>3_000_000)
     ||c.limits.reportedRowsWritten!==undefined&&(!Number.isInteger(c.limits.reportedRowsWritten)||c.limits.reportedRowsWritten<1||c.limits.reportedRowsWritten>50_000)
-    ||!exact(c.inputs,c.inputs?.originalVectors?'context,originalVectors,previous,rights':'context,previous,rights'))throw new Error('weekly_configuration_invalid');
+    ||!exact(c.inputs,['context','previous','rights',...(c.inputs?.originalVectors?['originalVectors']:[]),...(c.inputs?.savedAdmission?['savedAdmission']:[])].sort().join(',')))throw new Error('weekly_configuration_invalid');
+  if(c.inputs.savedAdmission&&(!c.cadence?.admitAsins||c.cadence.automation))throw Error('weekly_saved_admission_scope');
   if(c.cadence&&(!exact(c.cadence,`${Object.hasOwn(c.cadence,'admitAsins')?'admitAsins,':''}${Object.hasOwn(c.cadence,'automation')?'automation,':''}day,featuredIds${Object.hasOwn(c.cadence,'photosOnly')?',photosOnly':''}${c.cadence.runKey===undefined?'':',runKey'}`)
     ||c.cadence.admitAsins!==undefined&&(c.cadence.photosOnly||!c.cadence.runKey||!Array.isArray(c.cadence.admitAsins)
       ||!c.cadence.admitAsins.length||c.cadence.admitAsins.length>10||new Set(c.cadence.admitAsins).size!==c.cadence.admitAsins.length
@@ -234,7 +237,7 @@ async function providerEnvironment(config:CloudflareWeeklyConfig,resolveToken:(r
   const names=Object.keys(process.env).filter(key=>/^(CATALOG_|AMAZON_|OPENAI_|GOOGLE_SEARCH_|POSTGRES_|VERCEL_)/.test(key));
   const values={...Object.fromEntries(names.map(key=>[key,undefined])),AMAZON_ASSOCIATE_TAG:config.catalog.associateTag,
     AMAZON_MARKETPLACE:config.catalog.marketplace,AMAZON_CREATORS_CREDENTIAL_VERSION:config.credentials.amazonVersion,
-    AMAZON_CREATORS_CREDENTIAL_ID:await resolveCatalogCredential(config.credentials.amazonId,resolveToken),AMAZON_CREATORS_CREDENTIAL_SECRET:await resolveCatalogCredential(config.credentials.amazonSecret,resolveToken),
+    AMAZON_CREATORS_CREDENTIAL_ID:config.inputs.savedAdmission?undefined:await resolveCatalogCredential(config.credentials.amazonId,resolveToken),AMAZON_CREATORS_CREDENTIAL_SECRET:config.inputs.savedAdmission?undefined:await resolveCatalogCredential(config.credentials.amazonSecret,resolveToken),
     OPENAI_API_KEY:needsModel?await resolveCatalogCredential(config.credentials.openai!,resolveToken):undefined};
   return values;
 }
@@ -631,15 +634,25 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       const owner=await claimMutationOwnership(db,scope,{phase:'writing',ownerReference:config.runId,operationKey:sha256(`weekly:${options.configSha256}`)});
       if(!owner)throw new Error('weekly_owner_busy');const cursor={current:owner};await write({phase:'phases_running',owner});
       const intent=await ws.readArtifact(cp.pins.rights) as unknown as {rightsById:Record<string,never>;reviewedDeleteReference?:string};
-      const evidence=createCatalogProviderEvidence({reviewedRightsById:intent.rightsById,reviewedDeleteReference:intent.reviewedDeleteReference,associateTag:config.catalog.associateTag,saveReceipt:input=>ws.saveReceipt(input),
+      const evidence=createCatalogProviderEvidence({reviewedRightsById:intent.rightsById,reviewedDeleteReference:intent.reviewedDeleteReference,associateTag:config.catalog.associateTag,saveReceipt:input=>ws.saveReceipt(input),readReceipt:ref=>ws.readReceipt(ref),
         saveReviewedShort:async input=>ws.putArtifact({schemaVersion:1,kind:'reviewed-short-copy',...input},{kind:'phase',observedAt:input.reviewedAt}),now});
+      let providerEvidence=evidence;
+      if(config.inputs.savedAdmission){
+        const pin=await reviewed(config.inputs.savedAdmission.path,config.inputs.savedAdmission.sha256,repo),
+          saved=await loadSavedAdmission(automationRuntime(),pin.runKey,config.cadence!.admitAsins!,{now});
+        if(canonicalJson(saved.pin)!==canonicalJson(pin)||Object.values(config.retention.rules).some(rule=>Date.parse(rule.notAfter)>Date.parse(pin.expiresAt)))
+          throw Error('weekly_saved_admission_changed');
+        const originalReceipt=await ws.saveReceipt({sha256:saved.ref.sha256,receipt:saved.receipt});
+        await evidence.restoreReceipt(originalReceipt);
+        providerEvidence=savedAdmissionEvidence(evidence,saved,config.cadence!.admitAsins!,config.catalog.associateTag);
+      }
       const maintenance=createD1CatalogMaintenanceStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision,
         intent:evidence.intent,preservePermanentListings:Boolean(config.cadence)});
       const telemetry=createD1CatalogTelemetryStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision});
       try{await scopedProviders(environment,async()=>{
         const {runWeeklyCatalogWithBackend}=await import('../ops/catalog-weekly.mjs');
         const backend={runId:config.runId,gitSha:config.codeSha,backfillLimit:config.backfillLimit,
-          maintenanceStore:maintenance,telemetryStore:telemetry,providerEvidence:evidence,deferPublicationFinalization:true,
+          maintenanceStore:maintenance,telemetryStore:telemetry,providerEvidence,deferPublicationFinalization:true,
           async publish(input:{finalization:Record<string,unknown>}){
             const phaseComplete=await ws.putArtifact(finalization(input.finalization),{kind:'publication',observedAt:now()});
             await write({phase:'phases_complete',owner:cursor.current,phaseComplete});return{status:'pending'};

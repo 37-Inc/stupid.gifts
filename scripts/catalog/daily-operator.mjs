@@ -10,7 +10,8 @@ import {PHOTO_EXPIRY_SQL} from './maintenance-d1.ts';
 import {planRoutineAutomation} from './automation-plan.ts';
 import {loadAutomationMerchandising,loadAutomationDiscoveryInputs} from './automation-inputs.mjs';
 import {routineMerchandising} from './campaign-operator.mjs';
-import {hostedRunRecord} from './hosted-run-record.mjs';
+import {hostedRunRecord,validSavedAdmissionRun} from './hosted-run-record.mjs';
+import {loadSavedAdmission} from './saved-admission.mjs';
 import path from 'node:path';
 
 // Shared local/hosted operator; one active coordinator, never another publisher. The reviewed driver owns every
@@ -80,10 +81,11 @@ export async function routineHostedPending(runtime,source,runKey,{recovery=false
   if(record.source!==source&&!recovery||! /^[a-f0-9]{40}$/.test(source)||record.runKey!==runKey||record.kind==='code')refuse('hosted_pending');
   return record;
 }
-export function routineHostedPreparation(pending,{command,photosOnly,admitAsins,canaryId}){
+export function routineHostedPreparation(pending,{command,photosOnly,admitAsins,admitSavedRun,canaryId}){
   if(canaryId&&(!pending||pending.kind!=='canary'||pending.canaryId!==canaryId)||pending?.kind==='canary'&&command==='prepare'&&!canaryId)refuse('canary_authority');
   if(pending&&command==='prepare'&&(Boolean(photosOnly)!==(pending.kind==='photos')
-    ||canonicalJson(admitAsins??null)!==canonicalJson(pending.kind==='admit'?pending.admitAsins:null)))refuse('hosted_pending');
+    ||canonicalJson(admitAsins??null)!==canonicalJson(pending.kind==='admit'?pending.admitAsins:null)
+    ||admitSavedRun!==pending.admitSavedRun))refuse('hosted_pending');
 }
 export function routineAutomationPolicy(value){
   if(value===null)return null;
@@ -98,11 +100,11 @@ export async function materializeRoutinePreparation(directory,bundle,save=put){
   if(bundle.schemaVersion!==1||bundle.kind!=='routine-preparation'||bundle.source!==operator.source
     ||bundle.helperSha256!==operator.helperSha256||config.codeSha!==operator.source||config.runId!==operator.runId
     ||operator.configPath!==directory+'/config.json'||digest(JSON.stringify(config)+'\n')!==operator.configSha256
-    ||Object.keys(inputs).sort().join(',')!=='context,rights'
+    ||Object.keys(inputs).sort().join(',')!==(config.inputs.savedAdmission?'context,rights,savedAdmission':'context,rights')
     ||bundle.freshness&&canonicalJson(config.cadence?.automation?.refreshIds)!==canonicalJson(bundle.freshness.refreshIds))refuse('preparation_bundle');
   if(bundle.freshness)await save(directory+'/freshness-plan.json',bundle.freshness);
   if(bundle.preparationReceipt)await save(directory+'/preparation-receipt.json',bundle.preparationReceipt);
-  for(const name of ['context','rights']){
+  for(const name of Object.keys(inputs)){
     const ref=config.inputs[name];if(ref.path!==directory+'/'+name+'.json'||digest(JSON.stringify(inputs[name])+'\n')!==ref.sha256)refuse('preparation_bundle');
     await save(ref.path,inputs[name]);
   }
@@ -123,7 +125,9 @@ export async function routineFreshnessPool(db,canaryId){
   }
 }
 export async function hydrateRoutineInputs(config,read=bytes){
-  for(const name of ['previous','context','rights']){const ref=config.inputs[name];await read(ref.path,ref.sha256);}
+  for(const name of ['previous','context','rights',...(config.inputs.savedAdmission?['savedAdmission']:[])]){
+    const ref=config.inputs[name];await read(ref.path,ref.sha256);
+  }
   const derived=config.publication?.semanticSearch?.derivedCatalog;
   if(derived){
     // Policy binds canonical catalog identities, not JSON whitespace. The
@@ -214,7 +218,8 @@ export async function assertNoUnsealedMaintenance(db,seal,scope=SCOPE){
   if(rows.length)refuse('unsealed_maintenance');
 }
 function options(config,configPath,configSha256){return{config,driver:{configPath,configSha256,workspace:WORKSPACE,cadenceOnly:true,...(RUNTIME.durable?{durable:RUNTIME.durable}:{})},workspace:{directory:WORKSPACE,repository:ROOT,mode:'resume',runId:config.runId,codeSha:SOURCE,configSha256,scope:SCOPE,retention:config.retention,budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe',...(RUNTIME.durable?{durable:RUNTIME.durable}:{})}};}
-async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId){
+async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,admitSavedRun){
+  if(admitSavedRun&&!RUNTIME.hosted)refuse('saved_admission_hosted_only');
   const old=await optional(directory+'/operator.json');
   if(old&&await optional(directory+'/success.json'))return{state:'skipped',reason:'run_already_completed',runId:old.runId};
   if(old?.source===SOURCE&&old.helperSha256===self){const bundle=await optional(directory+'/preparation.json');
@@ -251,9 +256,11 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId){
   const servingPrior=await routineServingPrior(token,seal);
   const preparationReceipt={capacity,metrics:db.metrics(),servingPrior,prior,source:SOURCE,helperSha256:self};
   if(!bundled)await put(directory+'/preparation-receipt.json',preparationReceipt);
-  const now=new Date().toISOString(),cutoff=new Date(Date.now()+(RUNTIME.hosted?24:2)*3600000).toISOString(),notAfter=new Date(Date.now()+86400000).toISOString();
+  const savedAdmission=admitSavedRun?await loadSavedAdmission(RUNTIME,admitSavedRun,admitAsins):null;
+  const now=new Date().toISOString(),cutoff=new Date(Date.now()+(RUNTIME.hosted?24:2)*3600000).toISOString(),
+    notAfter=new Date(Math.min(Date.now()+86400000,savedAdmission?Date.parse(savedAdmission.pin.expiresAt):Infinity)).toISOString();
   const context={envelopeSha256:sha256(seal.envelopeJson+'\n'),snapshotSha256:seal.snapshotSha256,projectionSha256:seal.projectionReceipt.projection_sha256,sourceExportSha256:seal.projectionReceipt.source_export_sha256,vectorSyncWatermark:rows[0].results[0].n,publicationReceiptWatermark:rows[1].results[0].n,cutoff,priorPublication:seal.publication};
-  const inputValues={context,rights:{rightsById:{}}},inputs={previous:{path:prior.control.path,sha256:prior.control.sha256,observedAt:now}};
+  const inputValues={context,rights:{rightsById:{}},...(savedAdmission?{savedAdmission:savedAdmission.pin}:{})},inputs={previous:{path:prior.control.path,sha256:prior.control.sha256,observedAt:now}};
   for(const [name,value]of Object.entries(inputValues)){const file=directory+'/'+name+'.json';inputs[name]={path:file,
     sha256:bundled?digest(JSON.stringify(value)+'\n'):await put(file,value),observedAt:now};}
   const runId='daily-'+calendar.day+'-'+SOURCE.slice(0,8)+'-'+digest(path.basename(directory)).slice(0,8);
@@ -363,6 +370,8 @@ export function operatorInvocation(argv,calendar){
   const admitFlag=args.indexOf('--admit-asins');
   const admitAsins=admitFlag>=0?args[admitFlag+1]?.split(','):undefined;
   if(admitFlag>=0)args.splice(admitFlag,2);
+  const savedFlag=args.indexOf('--admit-saved-run'),admitSavedRun=savedFlag>=0?args[savedFlag+1]:undefined;
+  if(savedFlag>=0)args.splice(savedFlag,2);
   const canaryFlag=args.indexOf('--canary-id'),canaryId=canaryFlag>=0?args[canaryFlag+1]:undefined;
   if(canaryFlag>=0)args.splice(canaryFlag,2);
   const flag=args.indexOf('--run');
@@ -375,9 +384,10 @@ export function operatorInvocation(argv,calendar){
     ||command==='resume'&&approvalSha!==undefined&&!HASH.test(approvalSha)||photosOnly&&command!=='prepare'||photosOnly&&flag<0
     ||canaryFlag>=0&&(command!=='prepare'||flag<0||photosOnly||admitAsins||! /^[A-Z0-9]{10}$/.test(canaryId??'')
       ||runKey!=='canary-'+calendar.day+'-'+canaryId)
+    ||savedFlag>=0&&(!admitAsins||!validSavedAdmissionRun(admitSavedRun))
     ||admitFlag>=0&&(command!=='prepare'||flag<0||photosOnly||!admitAsins?.length||admitAsins.length>10
       ||new Set(admitAsins).size!==admitAsins.length||admitAsins.some(id=>! /^[A-Z0-9]{10}$/.test(id))))refuse('command');
-  return{command,approvalSha,runKey,...(photosOnly?{photosOnly:true}:{}),...(admitAsins?{admitAsins}:{}),...(canaryId?{canaryId}:{})};
+  return{command,approvalSha,runKey,...(photosOnly?{photosOnly:true}:{}),...(admitAsins?{admitAsins}:{}),...(admitSavedRun?{admitSavedRun}:{}),...(canaryId?{canaryId}:{})};
 }
 /** A reviewed descendant may resume the original finite cohort with its exact
  * config digest. Saved provider/model stages are reused, never re-collected.
@@ -405,12 +415,12 @@ let calendar=pacificCatalogCalendar();
 // the immutable hosted pending record, never a CLI date/environment override.
 const rawRun=argv.indexOf('--run'),pending=RUNTIME.hosted?await routineHostedPending(RUNTIME,SOURCE,rawRun>=0?argv[rawRun+1]:'scheduled-'+calendar.day,{recovery:argv[0]==='recover'}):null;
 if(pending)calendar=pacificCatalogCalendar(pending.day+'T12:00:00Z');
-const {command,approvalSha,runKey,photosOnly,admitAsins,canaryId}=operatorInvocation(argv,calendar),directory=CARE+'/runs/'+runKey;
-routineHostedPreparation(pending,{command,photosOnly,admitAsins,canaryId});
+const {command,approvalSha,runKey,photosOnly,admitAsins,admitSavedRun,canaryId}=operatorInvocation(argv,calendar),directory=CARE+'/runs/'+runKey;
+routineHostedPreparation(pending,{command,photosOnly,admitAsins,admitSavedRun,canaryId});
 await source(command,runKey,pending);
 if(command==='prepare'||command==='reconcile-availability'){
   if(command==='reconcile-availability'&&(!argv.includes('--run')||photosOnly||admitAsins))refuse('availability_command');
-  const record=await prepare(directory,calendar,photosOnly,admitAsins,canaryId);
+  const record=await prepare(directory,calendar,photosOnly,admitAsins,canaryId,admitSavedRun);
   if(command==='prepare'||record.state==='skipped')console.log(JSON.stringify(record));
   else{
     const config=validateCloudflareWeeklyConfig(await json(record.configPath,record.configSha256)),entry=options(config,record.configPath,record.configSha256);
