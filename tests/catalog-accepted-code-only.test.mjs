@@ -90,18 +90,22 @@ async function fixture(t,{codeSha='8'.repeat(40),mixed=false}={}){
   }};
 }
 
-test('accepted persistent reader proves >20 identities without source/native writes or renewed observations',async t=>{
-  const f=await fixture(t);assert.equal(f.input.revision.sourceRows.length,32);
+test('accepted published reader proves >20 identities without private source or native writes or renewed observations',async t=>{
+  const f=await fixture(t);assert.equal(f.input.revision.evidence,'accepted-public-projection');assert.equal('sourceRows' in f.input.revision,false);
   const prepared=codeOnlyAuthority({seal:f.seal,codeSha:f.authority.request.codeSha,observedAt:f.authority.observedAt,cutoff:f.authority.request.cutoff,
     globalVectorWatermark:f.authority.globalVectorWatermark,publicationReceiptWatermark:f.authority.publicationReceiptWatermark});
   assert.equal(prepared.identityCount,32);assert.equal(prepared.request.capturedAt,f.input.revision.snapshot.generatedAt);
   assert.equal(prepared.publication.receiptSha256,f.seal.publication.receiptSha256);
   assert.ok(f.input.revision.snapshot.products.length>20);assert.ok(f.input.revision.snapshot.products.every(p=>p.eligibleUntil===null));
   assertAcceptedCodeOnlyBinding(f.input);const before=canonicalJson(f.input);
+  const queryStart=f.queryText.length;
   await f.read();f.unchanged();assert.equal(canonicalJson(f.input),before);
+  assert.ok(!f.queryText.slice(queryStart).some(sql=>/\b(?:FROM|JOIN)\s+(?:products|catalog_maintenance_products|catalog_maintenance_operations)\b/i.test(sql)),
+    'Serving input must not recapture mutable private product/semantic history');
   const changed=structuredClone(f.input);changed.authority.sealSha256='0'.repeat(64);assert.throws(()=>assertAcceptedCodeOnlyBinding(changed));
   const bit=f.index.get(uuid(1)).values[0];f.index.get(uuid(1)).values[0]=Object.is(bit,-0)?0:-0;
-  await assert.rejects(f.read());f.index.get(uuid(1)).values[0]=bit;f.unchanged();
+  // Code-only reuses authenticated immutable delivery proof, not live provider payloads.
+  await f.read();f.index.get(uuid(1)).values[0]=bit;f.unchanged();
   const vector=f.sql.prepare('SELECT sequence,status FROM vector_sync_outbox LIMIT 1').get();
   f.sql.prepare("UPDATE vector_sync_outbox SET status='pending' WHERE sequence=?").run(vector.sequence);
   await assert.rejects(readAcceptedCodeOnlyCatalog({db:f.db,owner:f.owner,seal:f.seal,authority:f.authority,runReference:'code-only'}));
@@ -113,7 +117,28 @@ test('accepted persistent reader proves >20 identities without source/native wri
   const wrongWatermark=structuredClone(f.authority);wrongWatermark.globalVectorWatermark++;
   await assert.rejects(readAcceptedCodeOnlyCatalog({db:f.db,owner:f.owner,seal:f.seal,authority:wrongWatermark,runReference:'code-only'}));
   f.unchanged();
-  f.sql.prepare("UPDATE products SET title='source drift' WHERE public_id=?").run(uuid(1));await assert.rejects(f.read());
+  const originalTitle=f.sql.prepare('SELECT title FROM products WHERE public_id=?').get(uuid(1)).title;
+  f.sql.prepare("UPDATE products SET title='unpublished private edit' WHERE public_id=?").run(uuid(1));
+  assert.equal(canonicalJson((await f.read()).revision.snapshot),canonicalJson(f.input.revision.snapshot));
+  f.sql.prepare('UPDATE products SET title=? WHERE public_id=?').run(originalTitle,uuid(1));f.unchanged();
+  await assert.rejects(f.read({...f.owner,epoch:f.owner.epoch+1}));
+});
+
+test('accepted published reader rejects actual public, native anchor and genuine receipt drift',async t=>{
+  const f=await fixture(t),revision=f.input.revision.snapshot.catalogRevision;
+  f.sql.exec('DROP TRIGGER catalog_public_immutable');
+  const row=f.sql.prepare('SELECT description FROM catalog_public_products WHERE catalog_revision=? AND public_id=?').get(revision,uuid(1));
+  f.sql.prepare("UPDATE catalog_public_products SET description='public drift' WHERE catalog_revision=? AND public_id=?").run(revision,uuid(1));
+  await assert.rejects(f.read());
+  f.sql.prepare('UPDATE catalog_public_products SET description=? WHERE catalog_revision=? AND public_id=?').run(row.description,revision,uuid(1));
+  const id=f.input.revision.nativeHistory[0].source.deliveryId,native=f.sql.prepare('SELECT evidence_json FROM catalog_vector_deliveries WHERE delivery_id=?').get(id);
+  f.sql.exec('DROP TRIGGER catalog_vector_delivery_complete_immutable');
+  f.sql.prepare("UPDATE catalog_vector_deliveries SET evidence_json='[]' WHERE delivery_id=?").run(id);await assert.rejects(f.read());
+  f.sql.prepare('UPDATE catalog_vector_deliveries SET evidence_json=? WHERE delivery_id=?').run(native.evidence_json,id);
+  const receipt=f.sql.prepare('SELECT completed_at FROM publication_receipts WHERE release_id=?').get(f.seal.publication.releaseId);
+  f.sql.prepare("UPDATE publication_receipts SET completed_at='2000-01-01T00:00:00.000Z' WHERE release_id=?").run(f.seal.publication.releaseId);
+  await assert.rejects(f.read());
+  f.sql.prepare('UPDATE publication_receipts SET completed_at=? WHERE release_id=?').run(receipt.completed_at,f.seal.publication.releaseId);f.unchanged();
 });
 
 test('mixed accepted catalog preserves original finite overlays, permanent fallbacks and completion authority',async t=>{
@@ -313,10 +338,16 @@ test('actual mixed serving-only publisher resumes uncertain activation with one 
     acceptedCatalog:completed?acceptedCodeOnlyControl(f.seal,f.authority):f.input,requestId:queued.requestId,
     runReference:config.releaseId,workspace,config,credentials:{cloudflareToken:'FIXTURE_ONLY',identityAuthorization:'Basic FIXTURE_ONLY'},dependencies:{fetch:io.fetch,
       observationFetch:io.observationFetch,command:accountedPublicationUploadCommand({workspace,scope:{accountId:f.accountId,workerName:config.workerName},send:raw,command}),now:f.now}});
+  const originalTitle=f.sql.prepare('SELECT title FROM products WHERE public_id=?').get(uuid(1)).title;
+  const withPrivateDrift=async()=>{
+    f.sql.prepare("UPDATE products SET title='unpublished private edit' WHERE public_id=?").run(uuid(1));
+    try{const result=await execute();assert.equal(f.sql.prepare('SELECT title FROM products WHERE public_id=?').get(uuid(1)).title,'unpublished private edit');return result;}
+    finally{f.sql.prepare('UPDATE products SET title=? WHERE public_id=?').run(originalTitle,uuid(1));}
+  };
   const denied=await execute(true);assert.equal(denied.state,'pending');assert.equal(denied.errorCode,'publication_serving_settlement_scope');assert.equal(counts.uploads,0);
-  const first=await execute();assert.equal(first.state,'pending',JSON.stringify(first));assert.equal(counts.activations,1,JSON.stringify(first));assert.equal(counts.uploads,1);f.unchanged();
+  const first=await withPrivateDrift();assert.equal(first.state,'pending',JSON.stringify(first));assert.equal(counts.activations,1,JSON.stringify(first));assert.equal(counts.uploads,1);f.unchanged();
   const expectedManifestSha256=workspace.manifestSha256;await workspace.close();workspace=await openRunWorkspace({...wsOptions,mode:'resume',expectedManifestSha256});io=await transports();
-  loseResolve=true;const uncertain=await execute();assert.equal(uncertain.state,'pending',JSON.stringify(uncertain));f.unchanged();
+  loseResolve=true;const uncertain=await withPrivateDrift();assert.equal(uncertain.state,'pending',JSON.stringify(uncertain));f.unchanged();
   assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'idle');
   assert.equal(f.sql.prepare('SELECT state FROM catalog_build_requests WHERE request_id=?').get(queued.requestId).state,'resolved');
   assert.equal(f.sql.prepare('SELECT count(*) n FROM publication_receipts WHERE release_id=?').get(config.releaseId).n,0);

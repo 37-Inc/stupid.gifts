@@ -58,6 +58,12 @@ prebuild attempts are terminal, not recovery candidates.
 - The normal publisher builds and verifies once, uploads, activates, reads back
   uncertain writes and resolves ownership. Existing native delivery proof is
   reused behind unchanged D1 watermarks; no vectors or products are rewritten.
+- UI-only publication reads the exact accepted **public** projection, including
+  articles, and verifies its snapshot/projection hashes, genuine catalog receipt,
+  original native journal hashes, owner and pending/write watermarks afresh at
+  build/activation boundaries. Unpublished private edits are neither promoted nor
+  asserted unchanged; they belong to the next normal catalog publication. This
+  avoids repeated private source/vector recapture without caching mutable truth.
 - Acceptance checks the actual public identity, resolved build, idle owner and
   original genuine catalog receipt. The separate private serving-only receipt
   lives in `daily-catalog-care/code-only/<label>/success.json`. Catalog
@@ -70,5 +76,5 @@ prebuild attempts are terminal, not recovery candidates.
 
 An existing successful label is a historical no-op, not proof it is still the
 current serving release. `status` reads saved records only. Missing credentials,
-source/catalog drift or unresolved provider state requires attention; none
+accepted-public/receipt/native barrier drift or unresolved provider state requires attention; none
 authorizes another merchant batch, takeover, quota reset or blind POST retry.

@@ -254,7 +254,8 @@ function publicRows(rows: { public_display_json: string }[], now: Date): PublicC
   } catch { return []; } });
 }
 /** Reused inside fenced publication SQL; omission uses the database execution clock. */
-export function visibleRevisionCountQuery(revision: string, now?: Date): ProjectionQuery {
+export function visibleRevisionCountQuery(revision: string, now?: Date,acceptedPublished=false): ProjectionQuery {
+  if(acceptedPublished)return{sql:'SELECT count(*) FROM catalog_public_products WHERE catalog_revision=?',params:[revision]};
   const visible = now ? LISTED : LISTED.replaceAll('?', "strftime('%Y-%m-%dT%H:%M:%fZ','now')");
   return { sql: `SELECT count(*) FROM catalog_public_products v ${JOIN}
     WHERE v.catalog_revision=? AND ${visible}`, params: [revision, ...(now ? [now.toISOString(), now.toISOString(), now.toISOString()] : [])] };
@@ -297,7 +298,7 @@ export async function keywordSearchRevision(db: CatalogD1, query: string, limit:
   return publicRows(result.results, now);
 }
 /** Rollback is an explicit compatibility check, never a blind old-Worker flip. */
-export async function rollbackPreflight(db: CatalogD1, snapshot: CatalogSnapshot, now = new Date()): Promise<{ ok: boolean; reason: string }> {
+export async function rollbackPreflight(db: CatalogD1, snapshot: CatalogSnapshot, now = new Date(),acceptedPublished=false): Promise<{ ok: boolean; reason: string }> {
   if (snapshot.products.some((product) => !resolvePublicProduct(product,now))) return { ok: false, reason: 'release_expired' };
   try { validateCatalogSnapshot(snapshot, now); } catch { return { ok: false, reason: 'release_invalid' }; }
   const receipt = await db.prepare('SELECT * FROM catalog_projection_receipts WHERE catalog_revision=?')
@@ -307,8 +308,13 @@ export async function rollbackPreflight(db: CatalogD1, snapshot: CatalogSnapshot
     || receipt.results[0].product_count !== snapshot.products.length) return { ok: false, reason: 'release_digest_mismatch' };
   const expected = new Map(snapshot.products.map((product) => [product.publicId, JSON.stringify(persistentPublicProduct(product)??resolvePublicProduct(product,now))]));
   let visible = 0;
-  for (let offset = 0; offset < snapshot.products.length; offset += 240) {
-    const products = await getListedRevisionProductsByPublicIds(db, snapshot.products.slice(offset, offset + 240).map((product) => product.publicId), now, snapshot.catalogRevision);
+  const size=acceptedPublished?80:240;
+  for (let offset = 0; offset < snapshot.products.length; offset += size) {
+    const ids=snapshot.products.slice(offset,offset+size).map(product=>product.publicId);
+    const products = acceptedPublished?(await db.prepare(`SELECT public_display_json FROM catalog_public_products
+      WHERE catalog_revision=? AND public_id IN (${ids.map(()=>'?').join(',')})`).bind(snapshot.catalogRevision,...ids).all<{public_display_json:string}>()).results
+      .map(row=>{const p=validatePublicCatalogProduct(JSON.parse(row.public_display_json),now);return persistentPublicProduct(p)??resolvePublicProduct(p,now);}).filter((p):p is PublicCatalogProduct=>p!==null)
+      :await getListedRevisionProductsByPublicIds(db,ids,now,snapshot.catalogRevision);
     if (products.some((product) => expected.get(product.publicId) !== JSON.stringify(product))) return { ok: false, reason: 'projection_bytes_incompatible' };
     visible += products.length;
   }

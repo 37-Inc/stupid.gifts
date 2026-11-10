@@ -16,7 +16,7 @@ import {executePublication,validatePublicationConfig} from './publish-release.ts
 import {accountedPublicationFetch,accountedPublicationReadFetch} from './publication-read-fetch.ts';
 import {accountedPublicationUploadCommand} from './publication-upload-command.ts';
 import {automationRuntime} from './automation-runtime.mjs';
-import {routineServingPrior,currentD1Plan,observeHeadroom,routineLimits,routineSearchPolicy,assertNoUnsealedMaintenance,cleanupAcceptedPublication} from './daily-operator.mjs';
+import {routineServingPrior,currentD1Plan,observeHeadroom,routineLimits,routineSearchPolicy,cleanupAcceptedPublication} from './daily-operator.mjs';
 
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url))),BASE=path.join(homedir(),'.codex/private/goose-gifts-migration');
 const SCOPE=Object.freeze({environment:'production',accountId:'7f05a1dcb6e16f9c239564a0293bbe74',databaseId:'77b30f85-c57c-4acb-a0df-53368806c2a6',
@@ -160,7 +160,8 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
     if(rows[2].results.length!==1||sha256(canonicalJson(rows[2].results[0]))!==seal.publication.receiptSha256
       ||rows[3].results.length!==1||rows[3].results[0].phase!=='idle'||rows[3].results[0].external_pending!==0
       ||rows[4].results[0].n!==0||rows[5].results[0]?.release_id!==seal.publication.releaseId)refuse('catalog_or_owner_changed');
-    await assertNoUnsealedMaintenance(db,seal);
+    // UI serving deliberately retains the accepted public catalog; unpublished
+    // private maintenance is not promoted or asserted current by this route.
     const servingPrior=await routineServingPrior(token,seal),latestBytes=await servingPointer(),latest=latestBytes?JSON.parse(latestBytes):null;
     const saved=latest?.releaseId===servingPrior.releaseId?(await store.json(latest.operator.path,latest.operator.sha256)).config.value
       :(await store.json(path.dirname(prior.control.path)+'/config.json')).publication;
