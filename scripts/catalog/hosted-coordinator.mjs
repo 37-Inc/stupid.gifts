@@ -222,7 +222,11 @@ function defaults(runtime,environment){
     wait:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
     async codeOnly(record,directory){
       const saved=await optional(()=>runtime.state.bytes(runtime.care+'/code-only/'+record.runKey+'/operator.json'));
-      const recovering=record.source!==environment.GITHUB_SHA&&Boolean(saved);
+      // A saved preparation is not yet an owned publication. If a runner was
+      // lost before its journal existed, start that SAME original source/intent;
+      // descendant recovery intentionally requires an existing checkpoint.
+      const recovering=record.source!==environment.GITHUB_SHA&&Boolean(saved)
+        &&Boolean(await runtime.durable.get('runs/code-'+record.runKey+'-'+record.source.slice(0,8)+'/manifest.json'));
       const result=await this.invoke(recovering?ROOT:directory,['code-only',recovering?'recover':'start','--run',record.runKey]);
       if(!['published','already_completed'].includes(result.state))return result;
       const success=json(await runtime.state.bytes(runtime.care+'/code-only/'+record.runKey+'/success.json'));
