@@ -7,7 +7,32 @@ same heading, search bar and shared cards, with no guest-specific label. Search
 runs only on Search/Enter; Clear and Back restore the shortlist on `/h`.
 There is no fake search match or reveal gate.
 
-The current Billy Ray assortment, in order:
+## Saved filming lineups
+
+`/h` now opens the Matan edition. `/h/matan` is its stable saved URL.
+Billy Ray's exact original order is preserved at `/h/billy-ray`; a postponed
+filming can use that link immediately, without changing production again.
+All three pages look like the regular storefront, with no guest label. Each
+saved URL keeps its own assortment when Search/Enter, Clear and Back are used.
+They are unlisted/noindex and are not included in the sitemap.
+
+The Matan assortment, in order:
+
+- Bullshit button — an immediate debate/heckling prop.
+- Top Banana award trophy — an absurd award-show callback.
+- Grow a girlfriend — a tiny novelty toy, not a claim about anyone's private life.
+- Donald socks with hair — a visual combable-hair gag.
+- Pop-up finger box — a surprise response to an argument.
+- "Hey, you dropped this" brain pillow — an internet-debate prop.
+- Emotional-support chicken nuggets — a soft landing after the roast.
+- Circular-saw pizza cutter — an oversized-seriousness joke for ordinary pizza.
+
+The visual review used existing catalog photos/copy; no supplier or model batch
+was needed. Selection references Matan Even's public absurdist/prank persona
+and award-show appearance, not claims about his beliefs, identity or sex life.
+Research: <https://en.wikipedia.org/wiki/Matan_Even>.
+
+The archived Billy Ray assortment, in order:
 
 - Cowboy cat pillow cover — a cat in a cowboy hat riding a horse.
 - Chicken-leg socks — a visual alternative to cowboy boots.
@@ -22,9 +47,13 @@ These are editorial rationales, not claims about the guest's interests,
 purchases, endorsement or a confirmed appearance. The private rehearsal stays
 unlisted/noindex; it is not an episode archive or an acquisition search page.
 The goat, fortune-telling pickle and raw chicken vase were already shown and
-are intentionally absent from this edition. Previous picks remain in Git history.
+are intentionally absent from both editions. Previous picks remain in Git history.
 
-`static-site/lib/show-rehearsal.ts` owns only ordered canonical slugs. Resolve
+`static-site/lib/show-rehearsal.ts` owns the named `SHOW_PRESETS` (ordered
+canonical slugs only) and one `ACTIVE_SHOW_PRESET` for `/h`. To add a guest,
+add a new named array, retain existing arrays, review it and change the active
+key if needed. The saved route is generated automatically; there is no CMS,
+database table, new scheduled job or copied product asset. Resolve
 against the current public catalog. Never silently substitute unreviewed gifts.
 Use the same short title/description as every other card and product page;
 there are no show-only copy overrides. Photos and tagged merchant links use the
@@ -32,8 +61,8 @@ normal catalog components and retain their original content deadlines.
 
 Change the shortlist through the ordinary reviewed serving release, preserving
 the accepted catalog, D1 receipt, homepage edition, semantic index and all
-history. Point the existing daily task at the accepted newer source afterward
-so a later refresh does not restore the previous guest page. No extra merchant
+history. The existing GitHub daily coordinator follows merged main, so a later
+refresh keeps the saved editions and current active choice. No extra merchant
 batch or model generation is necessary for this existing-catalog selection.
 
 Creator Connections research in the authorized website account checked cowboy,

@@ -8,6 +8,7 @@ import { captureRenderedLists, captureStaticSearch } from "../lib/analytics";
 import { catalogDeadline, persistentPublicProduct, resolvePublicProduct } from "../../lib/catalog/display";
 import { validatePublicCatalogProduct } from "../../lib/catalog/snapshot";
 import { createBrowserSearchDemand } from "../lib/search-demand";
+import type { ShowPreset } from "../lib/show-rehearsal";
 
 type SearchState = {
   status: "idle" | "loading" | "ready" | "unavailable";
@@ -15,7 +16,7 @@ type SearchState = {
 };
 
 export function Search({ children, action = "/", autoSearch = true }: {
-  children?: ReactNode; action?: "/" | "/h"; autoSearch?: boolean;
+  children?: ReactNode; action?: "/" | "/h" | `/h/${ShowPreset}`; autoSearch?: boolean;
 } = {}) {
   const [query, setQuery] = useState("");
   const [state, setState] = useState<SearchState>({
