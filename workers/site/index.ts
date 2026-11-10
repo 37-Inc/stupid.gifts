@@ -8,7 +8,7 @@ import { createDerivedSemanticSearch } from './derived-search.ts';
 import type { DerivedSemanticSearch } from './derived-search.ts';
 import { recordSearchDemand } from './search-demand.ts';
 import { productPresentation } from '../../lib/catalog/presentation.ts';
-import {readMerchandising} from '../../lib/catalog/merchandising.ts';
+import {readMerchandising,productTitleView} from '../../lib/catalog/merchandising.ts';
 import { createCatalogGiftsHandler } from './catalog-gifts.ts';
 
 export type { SiteEnv, SearchAdapters, SearchStorage, SemanticBudgetScope } from './bindings.ts';
@@ -259,7 +259,7 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
     const selection = preparedFeed.select(seed, limit, excluded, now());
     if (!selection || !available()) return json({ error: 'Catalog temporarily unavailable' }, 503);
     const products = selection.products.flatMap(product => {
-      const resolved = resolvePublicProduct(product, now());return resolved ? [productPresentation(resolved)] : [];
+      const resolved = resolvePublicProduct(product, now());return resolved ? [productTitleView(productPresentation(resolved),merchandising)] : [];
     });
     if (selection.products.length&&!products.length) return json({ error: 'Catalog temporarily unavailable' }, 503);
     return json({ products, hasMore: selection.hasMore });

@@ -66,6 +66,27 @@ saves the last good ID-only edition next to the normal catalog receipt.
 
 ## Fallback and scope
 
+The same morning editor also repairs at most50 incomplete display names per day
+using one text-only draft and one independent factual review with the existing
+Luna key/journal. Priority is the current24 and `/h`, then the November9
+QA-excluded most-clicked ID seed, then a stable catalog sweep. This is finite
+editorial work, not a supplier allowance, usage cutoff or another schedule.
+Only names still ending in an ellipsis after safe formatting need review.
+Approved names are saved as exact-title/description-bound presentation metadata
+and used on every page, cards, JSON feeds and search. Original catalog titles,
+IDs, slugs, photos, descriptions, articles and native embeddings remain intact.
+No merchant fetch, article regeneration or re-embedding is needed for this queue.
+
+Private `title-repairs/YYYY-MM-DD/plan.json` and `result.json` plus the existing
+state-store CAS pointer retain decisions and selected/approved/remaining/deferred
+counts. Retries reuse saved responses; uncertain or ambiguous items keep their
+original title and are explicitly deferred, not paid-retried every day. Changed
+source facts make an item eligible again; unchanged deferred cases need a later
+targeted review. Storage/model failure is attention, never a catalog/site gate.
+Evening photo care simply carries the saved names forward. New admissions get a
+complete factual name in the existing short-copy draft/review calls, not another
+model stage. Never invent the missing tail of a truncated supplier title.
+
 If optional editorial work fails, proceed with normal catalog care: preparation
 reuses the last accepted edition, then the reviewed source seed if necessary.
 Unavailable picks are replaced from the remaining public catalog. Never ask

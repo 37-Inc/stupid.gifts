@@ -46,7 +46,7 @@ function mockModels(t, { reject = false, rejectIds = [], long = false, draftVeto
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ products: inputs.map(p => reviewing
       ? { id: p.id, approved: !reject && !rejectIds.includes(p.id), qualityScore: .95,
         reasons: reject || rejectIds.includes(p.id) ? ['unsupported capability'] : [], correctedDescription: null, correctedEditorial: null }
-      : { id: p.id, shortDescription: short, editorialWriteup: long ? article : undefined,
+      : { id: p.id, shortTitle: p.title, shortDescription: short, editorialWriteup: long ? article : undefined,
         qualityScore: draftVeto ? .1 : .9, isActive: !draftVeto }) }) } }], usage: {} });
   });
   return calls;
@@ -73,7 +73,8 @@ test('default enrichment creates reviewed short copy and no article', async t =>
   assert.equal(after.wittyDescription, short);
   assert.equal(after.editorialWriteup, undefined);
   assert.equal(calls.embedded.length, 1);
-  assert.equal(after.editorialPromptVersion, 'catalog-short-copy-v1');
+  assert.equal(after.editorialPromptVersion, 'catalog-short-copy-v2-title');
+  assert.equal(after.punnyTitle, product().title);
 });
 
 test('rejected descriptions never get new embeddings', async t => {

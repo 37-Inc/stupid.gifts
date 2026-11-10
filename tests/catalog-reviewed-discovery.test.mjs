@@ -104,7 +104,7 @@ test('copy draft, review and native response are each saved and reused without a
     const review=body.messages[0].content.includes('skeptical');
     return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({products:[review
       ?{id:p.id,approved:true,correctedDescription:null,qualityScore:.95,reasons:[]}
-      :{id:p.id,shortDescription:'A cotton alligator oven mitt with a toothy mouth.',humorTags:['alligator','kitchen'],qualityScore:.9,isActive:true}]})}}],usage:{total_tokens:10}});
+      :{id:p.id,shortTitle:p.title,shortDescription:'A cotton alligator oven mitt with a toothy mouth.',humorTags:['alligator','kitchen'],qualityScore:.9,isActive:true}]})}}],usage:{total_tokens:10}});
   });
   const evidence={embeddings:async()=>{proofs++;},reviewedShort:async()=>true};
   const options={enrichmentBatchSize:4,discoveryNewOnly:true,editorialStages:saved.stage};

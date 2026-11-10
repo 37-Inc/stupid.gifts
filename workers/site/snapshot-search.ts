@@ -3,14 +3,14 @@ import { persistentPublicProduct } from '../../lib/catalog/display.ts';
 import { catalogSearchTerms } from '../../lib/catalog/search-terms.ts';
 import { productPresentation } from '../../lib/catalog/presentation.ts';
 import type { SearchStorage } from './bindings.ts';
-import {appealPriority,usableCommissionPriority,merchandisingForProduct} from '../../lib/catalog/merchandising.ts';
+import {appealPriority,usableCommissionPriority,merchandisingForProduct,productTitleView} from '../../lib/catalog/merchandising.ts';
 import type {Merchandising} from '../../lib/catalog/merchandising.ts';
 
 /** The deployed, independently cleared catalog is already in the Worker.
  * Search that immutable public view, not mutable/private D1 rows on each visit.
  * Mixed/finite catalogs retain the existing database adapter and expiry checks. */
 export function snapshotKeywordSearch(snapshot: CatalogSnapshot,merchandising:Merchandising={}): SearchStorage['keyword'] | null {
-  const products = snapshot.products.map(p=>{const base=persistentPublicProduct(p);return base?productPresentation(base):null;});
+  const products = snapshot.products.map(p=>{const base=persistentPublicProduct(p);return base?productTitleView(productPresentation(base),merchandising):null;});
   if (!products.length || products.some(p => !p)) return null;
   const index = new Map<string, Map<number, number>>();
   products.forEach((product, id) => {

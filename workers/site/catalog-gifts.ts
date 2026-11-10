@@ -1,6 +1,7 @@
 import type { CatalogSnapshot, PublicCatalogProduct, SiteAssetManifest } from '../../lib/catalog/types.ts';
 import { catalogDeadline, persistentPublicProduct, resolvePublicProduct } from '../../lib/catalog/display.ts';
 import { productPresentation } from '../../lib/catalog/presentation.ts';
+import { productTitleView,readMerchandising } from '../../lib/catalog/merchandising.ts';
 import { isCatalogDisplayEligibleProduct } from '../../lib/db/product-scoring.ts';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -43,7 +44,7 @@ export function createCatalogGiftsHandler({ snapshot, manifest, now = Date.now }
       const route = manifest.routes[`/gifts/${resolved.slug}`];
       if (!route || route.state !== 'ready'
         || !(catalogDeadline(route.eligibleUntil) > at || base && typeof route.persistentIndexable === 'boolean')) return [];
-      const view = productPresentation(resolved);
+      const view = productTitleView(productPresentation(resolved),readMerchandising(manifest.merchandising)??{});
       let image: URL;
       try { image = new URL(view.imageUrl, 'https://stupid.gifts'); } catch { return []; }
       if (image.protocol !== 'https:' || !IMAGE_HOSTS.has(image.hostname) || image.username || image.password) return [];
