@@ -368,6 +368,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
       continue;
     }
     if(!status.started)result=await invoke('start');
+    else if(status.phase==='phase_failed'&&record.admitSavedRun)
+      result=await deps.invoke(ROOT,['recover',status.configSha256,'--run',record.runKey]);
     else if(status.phase==='phases_complete'&&!status.approvalPin){
       const review=record.source!==source?await deps.invoke(ROOT,['recover',status.configSha256,'--run',record.runKey]):await invoke('review'),
         file=runtime.care+'/runs/'+record.runKey+'/reviewed-proposal.json';

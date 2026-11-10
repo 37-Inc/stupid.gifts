@@ -58,6 +58,7 @@ test('saved supplier adapter never calls its network callback and keeps facts/cl
   const adapter=savedAdmissionEvidence(evidence,f.observation,[ASIN],'goose-gifts-37-20');
   const products=await adapter.amazon('getItems',()=>{throw Error('must not fetch');},p=>p,[ASIN]);
   assert.equal(products[0].price,undefined);assert.equal(editorialSourceHash(products[0]),f.observation.receipt.products[0].sourceFactsHash);
+  assert.equal(products[0].currency,'USD');
   const p={...products[0],punnyTitle:'Solar peeing dog statue',wittyDescription:'A little dog statue with a solar-lit pretend stream. Put the dog outdoors and give the garden a very questionable new decoration.',editorialSourceHash:editorialSourceHash(products[0]),editorialStatus:'short_ready',editorialQualityScore:.9};
   assert.equal(await evidence.reviewedShort(p,{approved:true,qualityScore:.9}),true);
   const rights=evidence.intent('upsertProduct',[p,editorialSourceHash(p)]).rightsById[ASIN];

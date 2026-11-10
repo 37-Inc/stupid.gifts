@@ -204,6 +204,18 @@ test('routine completion finishes from permanent controls without a recovery-bud
   const reads=[...f.reads],before=f.scopeRow();await settleActivatedPermanentWeekly(f.options);
   assert.deepEqual(f.reads,reads);assert.deepEqual(f.scopeRow(),before);
 });
+test('saved admission recovery keeps the original failed telemetry after genuine publication acceptance',async t=>{
+  const f=await settlementFixture(t),id='B0FMXQJW2V',finish=canonicalJson({status:'failed',error_summary:'Invalid maintenance input',usage:{requests:3}});
+  f.sqlite.prepare("UPDATE catalog_runs SET status='failed',completed_at=? WHERE id=?").run(NOW,RUN);
+  f.sqlite.prepare('UPDATE catalog_run_telemetry SET finish_json=? WHERE run_id=?').run(finish,RUN);
+  f.config.inputs={savedAdmission:{}};f.config.cadence={admitAsins:[id]};
+  const ref={reference:'objects/'+HASH+'.json',sha256:HASH},read=f.ws.readCheckpoint;
+  f.ws.readCheckpoint=async options=>{const cp=await read(options);cp.checkpoint.pins.savedAdmissionRepair=ref;return cp;};
+  f.ws.readArtifact=async actual=>{assert.deepEqual(actual,ref);return{kind:'saved-admission-currency-repair',runId:RUN,configSha256:HASH,id,failedTelemetrySha256:sha256(finish)};};
+  assert.equal((await settleActivatedPermanentWeekly(f.options)).state,'finalized');
+  assert.equal(f.scopeRow().phase,'idle');assert.equal(f.run().status,'failed');
+  assert.equal(f.sqlite.prepare('SELECT finish_json FROM catalog_run_telemetry').get().finish_json,finish);
+});
 
 test('telemetry commit and idle release lost local acknowledgments resume without another generation or write',async t=>{
   for(const checkpoint of [1,2,3])await t.test(`before checkpoint ${checkpoint}`,async sub=>{

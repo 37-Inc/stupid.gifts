@@ -40,6 +40,11 @@ alternate daily commands; use the maintained same-run recovery path below.
   is retained with an abandonment/successor record; prepared or dispatched work
   never rebases. Routine acceptance uses the genuine catalog-successor seal,
   not the obsolete migration-only publication-success marker.
+  The missing-US-currency failure in a saved correction has an exact same-run
+  output repair: authenticate the retained approved copy, original observation
+  and native embedding, then retry only the deterministic D1 insert. No supplier
+  or model stage repeats. Original failed telemetry/usage remains immutable;
+  genuine publication/hosted-success evidence records recovery separately.
 - An immutable pending intent pins source, Pacific day, input version and run
   key. Resume it before new work. Its phases, reservations and publication state
   remain in `RunWorkspace` and the existing D1 controls.

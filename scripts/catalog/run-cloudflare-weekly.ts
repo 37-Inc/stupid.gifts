@@ -45,6 +45,7 @@ import {createReviewedPhaseJournal,prepareReviewedPhase,applyReviewedPhase,recon
 import {routineUploadRetry} from './routine-upload-retry.ts';
 import {automationRuntime} from './automation-runtime.mjs';
 import {loadSavedAdmission,savedAdmissionEvidence} from './saved-admission.mjs';
+import {repairSavedAdmission as repairSavedAdmissionFromOutputs,retainedFailedAdmission} from './saved-admission-repair.mjs';
 import amazonCreators from '../../lib/amazon-creators.js';
 import { automatedCatalogPhases,automatedCatalogExecutor,validateCatalogAutomation,dailyCatalogPhases, pacificCatalogCalendar, runDailyCatalogWithBackend, withCatalogCadence, validCatalogRunKey } from '../ops/catalog-daily.mjs';
 import {validateExecutionAdoption,validateExecutionAdoptionConfigs} from './execution-adoption.ts';
@@ -272,6 +273,7 @@ export interface WeeklyDriverOptions {
   durable?:RunWorkspaceOptions['durable'];
 }
 type Dependencies={repository?:string;fetch?:typeof fetch;resolveToken?:(ref:KeychainRef)=>Promise<string>;resolveWranglerOAuth?:()=>Promise<string>;now?:()=>string;
+  repairSavedAdmission?:true;
   /** Keep the hydrated revision in memory while an acknowledged native write becomes visible. */
   wait?:(ms:number)=>Promise<void>;
   /** Hosted adapter mirrors new immutable objects and this accepted head before
@@ -328,7 +330,9 @@ export async function settleActivatedPermanentWeekly(input:{db:CatalogD1 & {prov
     operationKey:sha256(`finalize:${input.configSha256}`)});if(!owner)throw Error('weekly_finalize_owner');await save('published',owner);}
   const cursor={current:owner},telemetry=createD1CatalogTelemetryStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision});
   const prior=await telemetry.loadCatalogRun(config.runId,{items:false});
-  if(prior?.run.status==='completed'){
+  if(await retainedFailedAdmission(ws,db,config,input.configSha256)){
+    // Keep the original failed provider attempt and its usage immutable.
+  }else if(prior?.run.status==='completed'){
     if(canonicalJson(prior.run.counts)!==canonicalJson(finish.counts))throw Error('weekly_finalization_mismatch');
     const actual=await readMutationOwner(db,scope);
     if(actual){
@@ -450,6 +454,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       catch(error){return{state:'attention',phase:saved.checkpoint.phase,errorCode:safeCode(error),budget:await ws.budget()};}
     }
     if(!permanentFinalization&&saved&&['phases_running','phase_failed','attention','finalized'].includes(saved.checkpoint.phase)
+      &&!(dependencies.repairSavedAdmission&&config.inputs.savedAdmission&&saved.checkpoint.phase==='phase_failed')
       &&!(config.cadence?.automation&&saved.checkpoint.phase==='phases_running')
       &&!(saved.checkpoint.phase==='attention'&&(resolving(saved.checkpoint)||reviewedUploadResume(saved,reviewedUploadRetry))))
       return{state:saved.checkpoint.phase==='finalized'?'finalized':'attention',phase:saved.checkpoint.phase,
@@ -487,6 +492,10 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       retry:reviewedUploadRetry,finishAuthorization:finish?.authorization}):null;
     const write=async(patch:Partial<WorkspaceCheckpoint>)=>{const value={...cp,...patch};const next=await ws.writeCheckpoint(saved?.sha256||null,value);
       saved=next;cp=next.checkpoint;await dependencies.checkpointSaved?.({workspace:ws,checkpoint:next});};
+    if(cp.phase==='phase_failed'&&dependencies.repairSavedAdmission){
+      await repairSavedAdmissionFromOutputs({ws,db,config,configSha256:options.configSha256,now,checkpoint:cp,write});
+      return{state:'pending',phase:cp.phase,reason:'awaiting_reviewed_approval',budget:await ws.budget()};
+    }
     if(cp.phase==='attention'&&(resolving(cp)||reviewedUploadResume(saved,reviewedUploadRetry)))cp={...cp,phase:'publishing'};
     const state=()=>cp.state as Record<string,unknown>;
     if(!saved){
@@ -813,8 +822,10 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       const cursor={current:owner};const telemetry=createD1CatalogTelemetryStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision});
       const summary=await ws.readArtifact(cp.phaseComplete!) as Record<string,unknown>;
       const input={...summary,status:'completed',counts:{...summary.counts as object,publication:{status:'published',releaseId:receipt.releaseId,receiptSha256:receipt.receiptSha256}}};
-      await telemetry.finishCatalogRun(config.runId,input);const actual=await telemetry.loadCatalogRun(config.runId,{items:false});
-      if(actual?.run.id!==config.runId||actual.run.status!=='completed'||canonicalJson(actual.run.counts)!==canonicalJson(input.counts))throw new Error('weekly_finalization_mismatch');
+      if(!await retainedFailedAdmission(ws,db,config,options.configSha256)){
+        await telemetry.finishCatalogRun(config.runId,input);const actual=await telemetry.loadCatalogRun(config.runId,{items:false});
+        if(actual?.run.id!==config.runId||actual.run.status!=='completed'||canonicalJson(actual.run.counts)!==canonicalJson(input.counts))throw new Error('weekly_finalization_mismatch');
+      }
       await write({owner:cursor.current});await releaseExact(db,cursor.current);await write({phase:'finalized',owner:null});
       return{state:'finalized',runId:config.runId,releaseId:receipt.releaseId,receiptSha256:receipt.receiptSha256,
         catalogSeal:await ws.catalogSuccessor()??(cp.pins.publishedSeal?await readOrdered(ws,cp.pins.publishedSeal):undefined),budget:await ws.budget()};

@@ -44,7 +44,7 @@ export function savedAdmissionEvidence(evidence,saved,ids,associateTag){
     if(operation!=='getItems'||canonicalJson(requestedIds)!==canonicalJson(ids))fail();
     return ids.map(id=>{
       const entry=saved.receipt.products.find(p=>p.id===id);if(!entry)fail();
-      const product={...structuredClone(entry.snapshot),id,source:'amazon',availabilityStatus:entry.availabilityStatus,
+      const product={...structuredClone(entry.snapshot),id,source:'amazon',currency:'USD',availabilityStatus:entry.availabilityStatus,
         isActive:['IN_STOCK','IN_STOCK_SCARCE','INSTOCKSCARCE','AVAILABLE_DATE','LEADTIME','PREORDER'].includes(entry.availabilityStatus),
         remotelyVerified:true,affiliateUrl:`https://www.amazon.com/dp/${id}?tag=${encodeURIComponent(associateTag)}`};
       return normalize?normalize(product):product;
