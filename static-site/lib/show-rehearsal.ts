@@ -15,15 +15,15 @@ export const SHOW_PRESETS = {
     "lobster-claw-oven-mitts-quilted-cotton-lining-design-heat-resistant-crab-claw-gloves-microwave-oven-gloves-lobster-oven",
   ],
   matan: [
+    "B005LY2HHO", // Grow a Girlfriend
+    "B0BVCTV6WL", // Small-penis notebook
+    "B0HNWBJ1L3", // Monkey-butt tissue holder
+    "B09VTJRGBJ", // Shart survival kit
+    "B08BC25ZTP", // Butt tape
+    "B0CGXSKGXL", // Existing wiener lamp
     "bullshit-button-hit-for-instant-hilarity",
-    "fun-express-top-banana-award-trophy",
-    "grow-a-girlfriend-the-perfect-companion",
     "donald-socks-hair-today-gone-tomorrow",
     "pop-goes-the-finger-surprise-prank-in-a-box",
-    "hey-you-dropped-this-your-iq",
-    "emotional-support-chicken-nuggets-cuddle-crunch",
-    "pizza-boss-3000-slice-of-humor-for-kitchen-heroes",
-    "wiener-switch-light-up-your-night-with-laughter",
     "B0FMXQJW2V", // Solar peeing dog
     "B0H2TW8LZ9", // Magnetic desk goose
     "B0HDRTSB19", // Seagull reading print

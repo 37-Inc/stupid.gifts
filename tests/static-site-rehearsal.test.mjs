@@ -24,13 +24,13 @@ test("Billy Ray's original eight picks stay intact and Matan becomes the distinc
   ]);
   assert.equal(ACTIVE_SHOW_PRESET, "matan");
   assert.equal(SHOW_PICK_SLUGS, SHOW_PRESETS.matan);
-  assert.equal(SHOW_PICK_SLUGS[0], "bullshit-button-hit-for-instant-hilarity");
+  assert.deepEqual(SHOW_PICK_SLUGS.slice(0, 6), ["B005LY2HHO", "B0BVCTV6WL", "B0HNWBJ1L3", "B09VTJRGBJ", "B08BC25ZTP", "B0CGXSKGXL"]);
   for (const slugs of Object.values(SHOW_PRESETS)) {
     assert.equal(new Set(slugs).size, slugs.length);
     for (const slug of slugs) assert.doesNotMatch(slug, /belly-fanny|farting-ring|screaming-goat|mystic-pickle|raw-chicken-vase/);
   }
   assert.equal(SHOW_PRESETS.matan.length, 12);
-  assert.deepEqual(SHOW_PRESETS.matan.slice(-4), ["wiener-switch-light-up-your-night-with-laughter", "B0FMXQJW2V", "B0H2TW8LZ9", "B0HDRTSB19"]);
+  assert.deepEqual(SHOW_PRESETS.matan.slice(-3), ["B0FMXQJW2V", "B0H2TW8LZ9", "B0HDRTSB19"]);
   assert.ok(!SHOW_PRESETS.matan.includes("B0B3XCGVJB")); // Duck is site-only.
   assert.ok(SHOW_PICK_SLUGS.every((slug) => !SHOW_PRESETS["billy-ray"].includes(slug)));
   for (const key of SHOW_PRESET_KEYS) assert.equal(isShowPreset(key), true);
