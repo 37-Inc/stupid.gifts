@@ -14,6 +14,7 @@ import { createStaticRoutes } from "../static-site/lib/asset-routes.ts";
 import { createBrowseRelease } from "../static-site/lib/browse.ts";
 import { createOgRelease } from "../static-site/lib/og.ts";
 import { siteIdentity } from "../static-site/lib/site-identity.ts";
+import { SHOW_PRESET_KEYS, SHOW_PRESETS } from "../static-site/lib/show-rehearsal.ts";
 import { guides } from "../static-site/lib/guides.ts";
 import { validateCatalogSnapshot } from "../lib/catalog/snapshot.ts";
 import { createSiteWorker } from "../workers/site/index.ts";
@@ -45,7 +46,8 @@ function fixtureEpisodes(snapshot) {
 }
 function inventory(snapshot, inputs = []) {
   const show = createShowRelease(snapshot, inputs);
-  const pages = ["/", "/random-gift", "/gift-guides", "/howie", "/preview/presentation",
+  const pages = ["/", "/random-gift", "/gift-guides", "/howie", "/preview/presentation", "/h",
+    ...SHOW_PRESET_KEYS.map((key) => `/h/${key}`),
     ...guides.map((g) => `/gift-guides/${g.slug}`), ...snapshot.products.map((p) => `/gifts/${p.slug}`),
     ...show.episodes.flatMap((e) => [`/howie/${e.key}`, `/howie/${e.key}/presentation`])];
   const safe = ["/safe/catalog", "/safe/product", "/safe/howie", "/safe/presentation",
@@ -60,6 +62,23 @@ function inventory(snapshot, inputs = []) {
     ...createOgRelease(snapshot, siteIdentity).byPath.keys(),
   ])];
 }
+test("saved filming lineups retain independent noindex/freshness policies on every document alias", () => {
+  const snapshot = structuredClone(catalog);
+  snapshot.products[0].slug = SHOW_PRESETS.matan[0];
+  snapshot.products[0].eligibleUntil = "2026-10-21T00:00:00.000Z";
+  snapshot.products[1].slug = SHOW_PRESETS["billy-ray"][0];
+  snapshot.products[1].eligibleUntil = "2026-10-22T00:00:00.000Z";
+  const routes = createStaticRoutes(snapshot, inventory(snapshot));
+  for (const [pathname, deadline] of [["/h", snapshot.products[0].eligibleUntil],
+    ["/h/matan", snapshot.products[0].eligibleUntil], ["/h/billy-ray", snapshot.products[1].eligibleUntil]]) {
+    for (const alias of [pathname, `${pathname}.html`, `${pathname}.txt`, `${pathname}/__next.__PAGE__.txt`]) {
+      assert.equal(routes[alias].indexable, false, alias);
+      assert.equal(routes[alias].eligibleUntil, deadline, alias);
+      assert.match(routes[alias].safeAssetPath, /^\/safe\/catalog/);
+    }
+  }
+  assert.equal(routes["/h/unknown"], undefined);
+});
 test("draft candidates can retain UUIDs but unapproved details never become display/presentation data", () => {
   const draft = { ...fixtureEpisodes(catalog)[0], status: "draft", episodeDate: null,
     ownerConfirmed: false, presentationAssetsApproved: false };

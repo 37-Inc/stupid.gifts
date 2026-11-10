@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
-import { selectShowPicks, SHOW_PICK_SLUGS } from "../static-site/lib/show-rehearsal.ts";
+import { selectShowPicks, SHOW_PICK_SLUGS, SHOW_PRESETS, SHOW_PRESET_KEYS, ACTIVE_SHOW_PRESET, isShowPreset } from "../static-site/lib/show-rehearsal.ts";
 import { productPresentation } from "../lib/catalog/presentation.ts";
 import copy from "../content/catalog-presentation.json" with { type: "json" };
 
@@ -11,12 +11,28 @@ const product = (slug, id, overrides = {}) => ({
   currency: "USD", price: 0, isActive: true, qualityScore: 0.8, eligibleUntil: null, ...overrides,
 });
 
-test("Billy Ray shortlist is distinct, visually relevant and excludes retired gags", () => {
-  assert.equal(SHOW_PICK_SLUGS.length, 8);
-  assert.equal(new Set(SHOW_PICK_SLUGS).size, SHOW_PICK_SLUGS.length);
-  for (const slug of SHOW_PICK_SLUGS) assert.doesNotMatch(slug, /wiener|belly-fanny|farting-ring|screaming-goat|mystic-pickle|raw-chicken-vase/);
-  assert.equal(SHOW_PICK_SLUGS[0], "country-cat-cowboy-decor-for-cat-lovers");
-  assert.ok(SHOW_PICK_SLUGS.includes("guitar-shaped-cutting-board-wood-for-kitchen"));
+test("Billy Ray's original eight picks stay intact and Matan becomes the distinct active edition", () => {
+  assert.deepEqual(SHOW_PRESETS["billy-ray"], [
+    "country-cat-cowboy-decor-for-cat-lovers",
+    "cluck-yeah-chicken-leg-socks-for-poultry-lovers",
+    "guitar-shaped-cutting-board-wood-for-kitchen",
+    "rooster-but-not-a-roost-wine-bottle-holder",
+    "wrap-it-up-tortilla-blanket-for-foodies",
+    "trash-talk-with-the-raccoon-desk-buddy",
+    "desktop-boxing-knock-out-stress-in-style",
+    "lobster-claw-oven-mitts-quilted-cotton-lining-design-heat-resistant-crab-claw-gloves-microwave-oven-gloves-lobster-oven",
+  ]);
+  assert.equal(ACTIVE_SHOW_PRESET, "matan");
+  assert.equal(SHOW_PICK_SLUGS, SHOW_PRESETS.matan);
+  assert.equal(SHOW_PICK_SLUGS[0], "bullshit-button-hit-for-instant-hilarity");
+  for (const slugs of Object.values(SHOW_PRESETS)) {
+    assert.equal(slugs.length, 8);
+    assert.equal(new Set(slugs).size, slugs.length);
+    for (const slug of slugs) assert.doesNotMatch(slug, /wiener|belly-fanny|farting-ring|screaming-goat|mystic-pickle|raw-chicken-vase/);
+  }
+  assert.ok(SHOW_PICK_SLUGS.every((slug) => !SHOW_PRESETS["billy-ray"].includes(slug)));
+  for (const key of SHOW_PRESET_KEYS) assert.equal(isShowPreset(key), true);
+  for (const key of ["unknown", "toString", "__proto__"]) assert.equal(isShowPreset(key), false);
 });
 const snapshot = (products) => ({
   schemaVersion: 1, dataKind: "catalog", catalogRevision: "test", generatedAt: "2026-10-26T00:00:00.000Z",
@@ -24,19 +40,29 @@ const snapshot = (products) => ({
 });
 
 test("show picks preserve fixed order and exact shared product copy", () => {
-  const products = SHOW_PICK_SLUGS.map((slug, i) => product(slug, String(i)));
-  const selected = selectShowPicks(snapshot([...products].reverse()));
-  assert.deepEqual(selected.map((p) => p.slug), [...SHOW_PICK_SLUGS]);
-  assert.deepEqual(selected, products);
+  for (const preset of SHOW_PRESET_KEYS) {
+    const products = SHOW_PRESETS[preset].map((slug, i) => product(slug, String(i)));
+    const selected = selectShowPicks(snapshot([...products].reverse()), preset);
+    assert.deepEqual(selected.map((p) => p.slug), [...SHOW_PRESETS[preset]]);
+    assert.deepEqual(selected, products);
+  }
 });
 
 test("show page renders fresh picks immediately with ordinary storefront search and no guest label", () => {
   const page = fs.readFileSync(new URL("../static-site/app/h/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /picks\.map/);
   assert.match(page, /indexable: false/);
-  assert.match(page, /<Search action="\/h" autoSearch=\{false\}>/);
-  assert.doesNotMatch(page, /Hand-picked for|show-intro|Billy Ray/);
-  assert.doesNotMatch(page, /ShowRehearsal|selectShowOpening|SHOW_PICK_COPY|presentation=|hidden=|<form|<input/);
+  assert.match(page, /<ShowShortlist \/>/);
+  const shared = fs.readFileSync(new URL("../static-site/components/ShowShortlist.tsx", import.meta.url), "utf8");
+  assert.match(shared, /picks\.map/);
+  assert.match(shared, /<Search action=\{action\} autoSearch=\{false\}>/);
+  assert.doesNotMatch(shared, /Hand-picked for|show-intro|Billy Ray|Matan/);
+  assert.doesNotMatch(shared, /ShowRehearsal|selectShowOpening|SHOW_PICK_COPY|presentation=|hidden=|<form|<input/);
+  const saved = fs.readFileSync(new URL("../static-site/app/h/[preset]/page.tsx", import.meta.url), "utf8");
+  assert.match(saved, /dynamicParams = false/);
+  assert.match(saved, /SHOW_PRESET_KEYS\.map/);
+  assert.match(saved, /if \(!isShowPreset\(preset\)\) notFound\(\)/);
+  assert.match(saved, /indexable: false/);
+  assert.match(saved, /action=\{`\/h\/\$\{preset\}`\}/);
 });
 
 test("reviewed Billy Ray titles and descriptions are the shared canonical presentation", () => {
