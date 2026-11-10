@@ -78,3 +78,20 @@ test('a failed old cleanup retains its identity but does not starve another due 
   await assert.rejects(cleanupHostedRuns(f.runtime,async()=>{throw Error('old source unavailable');},{now:()=>DUE,open:f.open}));
   assert.deepEqual(JSON.parse(f.pointer()).runs.map(r=>r.runId),['second-original','fixture-run']);assert.equal(f.purged(),0);
 });
+
+test('code-only housekeeping requires its actual serving receipt and idle checkpoint, not a catalog successor',async()=>{
+  const f=fixture(),manifest=JSON.parse(f.objects.get('runs/fixture-run/manifest.json').bytes),key='serving-'+SOURCE.slice(0,12),
+    runId='code-'+key+'-'+SOURCE.slice(0,8),receipt='d'.repeat(64),checkpoint='e'.repeat(64);
+  manifest.runId=runId;manifest.retention.reviewReference='maintained/accepted-catalog-code-only';
+  f.objects.set('runs/'+runId+'/manifest.json',{bytes:bytes(manifest)});
+  const success={kind:'serving-only',releaseId:runId,source:SOURCE,configSha256:manifest.configSha256,
+    checkpointSha256:checkpoint,receiptSha256:receipt,idle:{phase:'idle',externalPending:0}};
+  f.files.set(f.runtime.care+'/code-only/'+key+'/success.json',bytes(success));await registerHostedWorkspaceCleanup(f.runtime,manifest);
+  let purged=0;const open=async()=>({readCheckpoint:async()=>({sha256:checkpoint,checkpoint:{phase:'published',owner:null,
+    control:{publication:{receiptSha256:receipt}}}}),catalogSuccessor:async()=>{throw Error('not a catalog publication');},
+    purgeExpired:async()=>{purged++;return[];},retainedBodies:async()=>false,close:async()=>{}});
+  f.files.set(f.runtime.care+'/code-only/'+key+'/success.json',bytes({...success,receiptSha256:'f'.repeat(64)}));
+  await assert.rejects(cleanupHostedRuns(f.runtime,async()=>f.repository,{now:()=>DUE,open}),/cleanup_identity/);assert.equal(purged,0);
+  f.files.set(f.runtime.care+'/code-only/'+key+'/success.json',bytes(success));
+  assert.equal((await cleanupHostedRuns(f.runtime,async()=>f.repository,{now:()=>DUE,open})).state,'cleaned');assert.equal(purged,1);
+});

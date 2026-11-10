@@ -50,7 +50,7 @@ export function createOperatorStateStore(base:string,remote?:CatalogObjectStore)
       if(remote)await remote.putImmutable(key(file),body);
       await save(file,body);return body;
     },
-    async pointer(name:'last-success'|'pending-run'|'cleanup-runs'|'title-repairs',file:string,value:unknown,expected:Uint8Array|null){
+    async pointer(name:'last-success'|'pending-run'|'cleanup-runs'|'title-repairs'|'code-only-serving',file:string,value:unknown,expected:Uint8Array|null){
       key(file);const body=Buffer.from(JSON.stringify(value)+'\n');
       if(body.length>LIMIT)fail('size');
       if(remote){const objectKey=`pointers/${name}.json`,current=await remote.get(objectKey);
@@ -66,7 +66,7 @@ export function createOperatorStateStore(base:string,remote?:CatalogObjectStore)
       const temporary=file+'.'+process.pid+'.next';await save(temporary,body);await rename(temporary,file);
       return body;
     },
-    async readPointer(name:'last-success'|'pending-run'|'cleanup-runs'|'title-repairs',file:string){
+    async readPointer(name:'last-success'|'pending-run'|'cleanup-runs'|'title-repairs'|'code-only-serving',file:string){
       if(!remote)return bytes(file);
       const object=await remote.get(`pointers/${name}.json`);
       if(!object){const missing=new Error('catalog_operator_state_missing') as NodeJS.ErrnoException;missing.code='ENOENT';throw missing;}

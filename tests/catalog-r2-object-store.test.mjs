@@ -150,8 +150,8 @@ test('cleanup is immutable-body only and checks exact identity without claiming 
   assert.equal(await store.get(key),null);
   await assert.rejects(store.remove('runs/one/head.json',second.etag),/mutable_key/);
 });
-test('title-review pointer uses the existing durable CAS and cannot be removed as an immutable body',async()=>{
-  const {store}=fixture(),key='pointers/title-repairs.json';
+for(const name of ['title-repairs','code-only-serving'])test(name+' pointer uses the existing durable CAS and cannot be removed as an immutable body',async()=>{
+  const {store}=fixture(),key='pointers/'+name+'.json';
   const first=await store.compareAndSwap(key,null,bytes('first review state'));
   const second=await store.compareAndSwap(key,first.etag,bytes('second review state'));
   assert.deepEqual((await store.get(key)).bytes,second.bytes);

@@ -563,7 +563,10 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           const {executeCatalog}=await import('../ops/prefetch-catalog.mjs');
           const execute=automatedCatalogExecutor(executeCatalog),results=[],warnings=[],timingsMs:Record<string,number>={},merchandising:Record<string,unknown>={},changed=new Set<string>(),admitted=new Set<string>();
           for(let index=0;index<phases.length;index++){
-            const key=`phase-${index}`;let supplierCall=0;
+            const key=`phase-${index}`,started=Date.now();let supplierCall=0;
+            const progress=(stage:'start'|'complete')=>console.log(JSON.stringify({state:'catalog_phase_progress',phase:index+1,
+              totalPhases:phases.length,stage,elapsedMs:Date.now()-started}));
+            progress('start');
             const providerEvidence={...evidence,amazon:async(...args:Parameters<typeof evidence.amazon>)=>args[0]==='getItems'
               ?(await stages.run('refresh-collect',{run:config.runId,phase:index,call:supplierCall++,ids:args[3]},()=>evidence.amazon(...args))).value
               :evidence.amazon(...args)};
@@ -571,6 +574,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
               ...(phases[index].discoveryNewOnly?{discoveryEditor:editor}:{})},store:maintenance,evidence:providerEvidence,runId:config.runId});
             await applyReviewedPhase({key,journal,prepared,store:maintenance,telemetryStore:telemetry,runId:config.runId,checkpoint,
               withIntent:async(value:unknown,action:()=>Promise<unknown>)=>{capturedIntent=value;try{return await action();}finally{capturedIntent=null;}}});
+            progress('complete');
             results.push(numbers(prepared.result));warnings.push(...prepared.warnings);Object.assign(merchandising,prepared.merchandising);
             for(const[key,value]of Object.entries(prepared.timingsMs))timingsMs[key]=(timingsMs[key]||0)+Number(value);
             for(const mutation of prepared.mutations){

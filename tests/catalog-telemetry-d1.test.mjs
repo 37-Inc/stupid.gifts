@@ -23,9 +23,9 @@ async function fixture({applyTelemetry=true}={}){
   for(const name of (await readdir(new URL('../migrations/d1/',import.meta.url))).filter(name=>/^00\d\d_.*\.sql$/.test(name)&&(applyTelemetry||!name.startsWith('0012_'))).sort())
     sqlite.exec(await readFile(new URL(`../migrations/d1/${name}`,import.meta.url),'utf8'));
   let clock=NOW;sqlite.function('strftime',{varargs:true},()=>clock);
-  let before;let after;let writes=0;
+  let before;let after;let writes=0,queries=0;
   const db={prepare(sql){let values=[];return{sql,get values(){return values;},bind(...params){values=params;return this;},
-    async all(){return{results:sqlite.prepare(sql).all(...values).map(row=>({...row}))};},async run(){return sqlite.prepare(sql).run(...values);}};},
+    async all(){queries++;return{results:sqlite.prepare(sql).all(...values).map(row=>({...row}))};},async run(){queries++;return sqlite.prepare(sql).run(...values);}};},
     async batch(statements){assert.ok(statements.length<=50);assert.ok(Buffer.byteLength(JSON.stringify(statements))<512*1024);
       before?.(statements);sqlite.exec('BEGIN');try{for(const statement of statements){assert.ok(statement.values.length<=100);sqlite.prepare(statement.sql).all(...statement.values);}sqlite.exec('COMMIT');writes++;}catch(error){sqlite.exec('ROLLBACK');throw error;}after?.(statements);}};
   sqlite.prepare("INSERT INTO catalog_mutation_scopes(environment,index_name) VALUES('staging','test-only')").run();
@@ -36,9 +36,15 @@ async function fixture({applyTelemetry=true}={}){
   const finalize=async(id,input)=>{await telemetry.finishCatalogRun(id,input);return telemetry.loadCatalogRun(id);};
   const backend={runId:RUN,maintenanceStore:maintenance,telemetryStore:telemetry,publish:async()=>published,finalizeRun:finalize};
   return{sqlite,db,scope,owner,cursor,options,telemetry,maintenance,backend,finalize,close:()=>sqlite.close(),
-    clock(value){clock=value;},before(fn){before=fn;},after(fn){after=fn;},writes:()=>writes,
+    clock(value){clock=value;},before(fn){before=fn;},after(fn){after=fn;},writes:()=>writes,queries:()=>queries,
     raw:()=>({...sqlite.prepare('SELECT * FROM catalog_runs WHERE id=?').get(RUN)})};
 }
+
+test('confirmed atomic telemetry ACK avoids redundant post-commit receipt/owner reads',async()=>{
+  const f=await fixture();try{let atCommit;f.after(()=>{atCommit=f.queries();});
+    await f.telemetry.startCatalogRun({id:RUN});assert.equal(f.queries(),atCommit);assert.equal(f.cursor.current.epoch,f.owner.epoch+1);
+  }finally{f.close();}
+});
 
 test('D1 telemetry preserves full run/items, immutable raw history, sequence, exact retry and shared maintenance cursor',async()=>{
   const f=await fixture();try{

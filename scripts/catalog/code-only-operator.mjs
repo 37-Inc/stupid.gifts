@@ -15,7 +15,7 @@ import {openRunWorkspace} from './run-workspace.ts';
 import {executePublication,validatePublicationConfig} from './publish-release.ts';
 import {accountedPublicationFetch,accountedPublicationReadFetch} from './publication-read-fetch.ts';
 import {accountedPublicationUploadCommand} from './publication-upload-command.ts';
-import {resolveWranglerOAuth} from './check-cloudflare-runner.ts';
+import {automationRuntime} from './automation-runtime.mjs';
 import {routineServingPrior,currentD1Plan,observeHeadroom,routineLimits,routineSearchPolicy,assertNoUnsealedMaintenance,cleanupAcceptedPublication} from './daily-operator.mjs';
 
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url))),BASE=path.join(homedir(),'.codex/private/goose-gifts-migration');
@@ -37,7 +37,7 @@ export function codeOnlyInvocation(argv){
   return{command,runKey};
 }
 /** Protected immutable technical records only. No supplier bodies or keys. */
-export function createCodeOnlyStore(base){
+export function createCodeOnlyStore(base,state){
   const inside=file=>path.isAbsolute(file)&&file.startsWith(base+'/')&&!path.relative(base,file).split(path.sep).includes('..');
   const directory=async file=>{
     if(file!==base&&!inside(file))refuse('private_path');
@@ -45,12 +45,15 @@ export function createCodeOnlyStore(base){
     for(const part of [null,...parts]){if(part)current=path.join(current,part);await fs.mkdir(current,{mode:0o700}).catch(error=>{if(error.code!=='EEXIST')throw error;});
       const stat=await fs.lstat(current);if(!stat.isDirectory()||stat.uid!==process.getuid()||(stat.mode&0o777)!==0o700||await fs.realpath(current)!==current)refuse('private_directory');}
   };
-  const bytes=async(file,expected)=>{if(!inside(file)||await fs.realpath(file)!==file)refuse('private_path');const stat=await fs.lstat(file);
+  const bytes=async(file,expected)=>{if(!inside(file))refuse('private_path');
+    const restored=state?await state.bytes(file):null;
+    if(await fs.realpath(file)!==file)refuse('private_path');const stat=await fs.lstat(file);
     if(!stat.isFile()||stat.uid!==process.getuid()||stat.nlink!==1||(stat.mode&0o777)!==0o600||stat.size>10*1024*1024)refuse('private_file');
-    const body=await fs.readFile(file);if(expected&&sha256(body)!==expected)refuse('private_digest');return body;};
+    const body=restored??await fs.readFile(file);if(expected&&sha256(body)!==expected)refuse('private_digest');return body;};
   const json=async(file,expected)=>JSON.parse((await bytes(file,expected)).toString('utf8'));
   const optional=async file=>{try{return await json(file);}catch(error){if(error.code==='ENOENT')return null;throw error;}};
   const put=async(file,value)=>{if(!inside(file))refuse('private_path');await directory(path.dirname(file));const body=Buffer.from(JSON.stringify(value)+'\n');let handle;
+    if(state){await state.put(file,value);if(!(await bytes(file)).equals(body))refuse('private_readback');return sha256(body);}
     try{handle=await fs.open(file,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);}
     catch(error){if(error.code!=='EEXIST'||!(await bytes(file)).equals(body))refuse('immutable_changed');return sha256(body);}
     try{await handle.writeFile(body);await handle.sync();}finally{await handle.close();}if(!(await bytes(file)).equals(body))refuse('private_readback');return sha256(body);};
@@ -112,23 +115,42 @@ function source(){
 /** One maintained route. Only existing OAuth, production scope and protected
  * local journal are selected; no merchant/model credentials or phases exist. */
 export async function codeOnlyMain(argv=process.argv.slice(2)){
-  const {command,runKey}=codeOnlyInvocation(argv),codeSha=source(),store=createCodeOnlyStore(BASE),care=BASE+'/daily-catalog-care',
+  const {command,runKey}=codeOnlyInvocation(argv),runtime=automationRuntime(),codeSha=source(),store=createCodeOnlyStore(BASE,runtime.hosted?runtime.state:null),care=BASE+'/daily-catalog-care',
     directory=care+'/code-only/'+runKey,recordPath=directory+'/operator.json',helperSha256=sha256(await fs.readFile(new URL(import.meta.url)));
+  const catalogPointer=async expected=>{
+    const bytes=runtime.hosted?await runtime.state.readPointer('last-success',care+'/last-success.json'):await store.bytes(care+'/last-success.json');
+    if(expected&&sha256(bytes)!==expected)refuse('private_digest');return bytes;
+  };
+  const servingPointer=async()=>{try{return runtime.hosted?await runtime.state.readPointer('code-only-serving',care+'/code-only/last-serving.json')
+    :await store.bytes(care+'/code-only/last-serving.json');}catch(error){if(error.code==='ENOENT')return null;throw error;}};
+  const rememberServing=async success=>{
+    const next={releaseId:success.releaseId,operator:success.operator},previous=await servingPointer();
+    if(!previous||JSON.parse(previous).releaseId!==success.releaseId)
+      await runtime.state.pointer('code-only-serving',care+'/code-only/last-serving.json',next,previous);
+  };
   let record=await store.optional(recordPath);
   const terminal=await codeOnlyTerminal(store,directory,record);if(terminal){console.log(JSON.stringify(terminal));return;}
   if(command==='status'){console.log(JSON.stringify(record?{state:await store.optional(directory+'/success.json')?'published':'prepared',runId:record.runId,source:record.source}:{state:'not_prepared'}));return;}
   if(!record&&command==='recover')refuse('not_prepared');
   const execution=record?await codeOnlyExecution({command,record,operatorRoot:ROOT,operatorSource:codeSha,helperSha256}):null;
-  if(record&&await store.optional(directory+'/success.json')){
-    await cleanupAcceptedPublication({directory:BASE+'/weekly-runs',repository:execution.repository,mode:'resume',runId:record.runId,codeSha:execution.codeSha,
+  const accepted=record&&await store.optional(directory+'/success.json');
+  if(accepted){
+    // A runner can disappear after saving acceptance but before its serving
+    // pointer ACK. Repair that metadata only if THIS release is still live;
+    // replaying a historical label must never rewind a newer serving pointer.
+    if(runtime.hosted){const response=await fetch('https://stupid.gifts/.well-known/catalog-release.json',
+      {redirect:'error',signal:AbortSignal.timeout(15000)});if(!response.ok)refuse('serving_readback');
+      const live=await response.json();if(live.release_id===record.runId&&live.manifest_sha256===accepted.serving.manifestSha256)
+        await rememberServing(accepted);}
+    if(!runtime.hosted)await cleanupAcceptedPublication({directory:BASE+'/weekly-runs',repository:execution.repository,mode:'resume',runId:record.runId,codeSha:execution.codeSha,
       configSha256:record.config.sha256,scope:SCOPE,retention:record.retention,budgetCaps:{httpRequests:record.limits.requests,sqlStatements:record.limits.statements},requestLimit:'observe'},record.runId);
     console.log(JSON.stringify({state:'already_completed',runId:record.runId,historicalAcceptance:true,supplierCalls:0,modelCalls:0}));return;
   }
   if(!record){
     if(command==='resume')refuse('not_prepared');
-    const pointerPath=care+'/last-success.json',pointerBytes=await store.bytes(pointerPath),prior=JSON.parse(pointerBytes.toString('utf8')),
+    const pointerBytes=await catalogPointer(),prior=JSON.parse(pointerBytes.toString('utf8')),
       seal=await store.json(prior.control.path,prior.control.sha256);catalogSuccessorBytes(seal);
-    const token=await resolveWranglerOAuth(),plan=await currentD1Plan(token),limits=routineLimits(plan),capacity=await observeHeadroom(token,undefined,null,fetch,plan),
+    const token=await runtime.token(),plan=await currentD1Plan(token),limits=routineLimits(plan),capacity=await observeHeadroom(token,undefined,null,fetch,plan),
       db=await createCatalogD1ReadOnlyRest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,requestLimit:'observe',
         limits:{requests:20,statements:30,reportedRowsRead:20000,reportedRowsWritten:1}});
     const rows=await db.batch([db.prepare('SELECT coalesce(max(sequence),0) n FROM vector_sync_outbox'),
@@ -139,7 +161,7 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
       ||rows[3].results.length!==1||rows[3].results[0].phase!=='idle'||rows[3].results[0].external_pending!==0
       ||rows[4].results[0].n!==0||rows[5].results[0]?.release_id!==seal.publication.releaseId)refuse('catalog_or_owner_changed');
     await assertNoUnsealedMaintenance(db,seal);
-    const servingPrior=await routineServingPrior(token,seal),latest=await store.optional(care+'/code-only/last-serving.json');
+    const servingPrior=await routineServingPrior(token,seal),latestBytes=await servingPointer(),latest=latestBytes?JSON.parse(latestBytes):null;
     const saved=latest?.releaseId===servingPrior.releaseId?(await store.json(latest.operator.path,latest.operator.sha256)).config.value
       :(await store.json(path.dirname(prior.control.path)+'/config.json')).publication;
     const observedAt=new Date().toISOString(),cutoff=new Date(Date.now()+2*3600000).toISOString(),notAfter=new Date(Date.now()+86400000).toISOString(),
@@ -157,20 +179,21 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
   if(command==='prepare'){console.log(JSON.stringify({state:'prepared',runId:record.runId,source:codeSha,supplierCalls:0,modelCalls:0}));return;}
   if(sha256(JSON.stringify(record.config.value)+'\n')!==record.config.sha256||sha256(JSON.stringify(record.authority.value)+'\n')!==record.authority.sha256)refuse('preparation_changed');
   const config=validatePublicationConfig(record.config.value),authority=record.authority.value,
-    seal=await store.json(record.prior.control.path,record.prior.control.sha256),pointer=await store.bytes(care+'/last-success.json',record.pointerSha256);
+    seal=await store.json(record.prior.control.path,record.prior.control.sha256),pointer=await catalogPointer(record.pointerSha256);
   void pointer;encodeAcceptedCatalogAuthority(authority);
-  const exists=existsSync(BASE+'/weekly-runs/runs/'+record.runId+'/manifest.json');
+  const exists=existsSync(BASE+'/weekly-runs/runs/'+record.runId+'/manifest.json')||Boolean(await runtime.durable?.get('runs/'+record.runId+'/manifest.json'));
   if(config.codeSha!==record.source||authority.request.codeSha!==record.source||command==='recover'&&!exists)refuse('recovery_binding');
   if(execution?.recoveryOperator)await store.put(directory+'/recovery/'+codeSha+'.json',{schemaVersion:1,kind:'serving-only-recovery',runId:record.runId,
     publicSource:record.source,...execution.recoveryOperator,operatorSha256:sha256(await store.bytes(recordPath)),configSha256:record.config.sha256,authoritySha256:record.authority.sha256});
   const workspaceOptions={directory:BASE+'/weekly-runs',repository:execution?.repository??ROOT,mode:exists?'resume':'create',
     runId:record.runId,codeSha:record.source,configSha256:record.config.sha256,scope:SCOPE,retention:record.retention,
-    budgetCaps:{httpRequests:record.limits.requests,sqlStatements:record.limits.statements},requestLimit:'observe'};
+    budgetCaps:{httpRequests:record.limits.requests,sqlStatements:record.limits.statements},requestLimit:'observe',...(runtime.durable?{durable:runtime.durable}:{})};
   let workspace=await openRunWorkspace(workspaceOptions),result,success;
   try{
+    if(runtime.hosted)await(await import('./hosted-cleanup.mjs')).registerHostedWorkspaceCleanup(runtime,workspace.manifest);
     if(command==='recover'){const cp=await workspace.readCheckpoint({controlOnly:true});
       if(!cp||!['freezing','activating'].includes(cp.checkpoint.owner?.phase)&&cp.checkpoint.control?.publication?.stage!=='published')refuse('recovery_checkpoint');}
-    const token=await resolveWranglerOAuth(),budget=await workspace.budget();await observeHeadroom(token,budget,record.capacity,fetch,await currentD1Plan(token));
+    const token=await runtime.token(),budget=await workspace.budget();await observeHeadroom(token,budget,record.capacity,fetch,await currentD1Plan(token));
     const db=await createCatalogD1Rest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,limits:record.limits,requestLimit:'observe',
       accounting:{scope:{accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName},initial:await workspace.budget(),reserve:r=>workspace.reserveBudget(r),settle:(id,value)=>workspace.settleBudget(id,value)}}),
       scope=codeOnlyFetchScope(config),
@@ -206,7 +229,7 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
         ||idle.phase!=='idle'||idle.external_pending!==0||idle.generation!==control.permit.mutationOwner.generation
         ||idle.mutation_epoch!==control.permit.mutationOwner.epoch||serving.releaseId!==record.runId||serving.manifestSha256!==control.intent.manifestSha256
         ||sha256(canonicalJson(original))!==seal.publication.receiptSha256)refuse('acceptance_changed');
-      await store.bytes(care+'/last-success.json',record.pointerSha256);
+      await catalogPointer(record.pointerSha256);
       if(cp.checkpoint.owner!==null)cp=await workspace.writeControlCheckpoint(cp.sha256,{phase:'published',owner:null,control:cp.checkpoint.control});
       success={schemaVersion:1,kind:'serving-only',releaseId:record.runId,source:record.source,...(execution?.recoveryOperator?{recoveryOperator:execution.recoveryOperator}:{}),
         catalogPublication:seal.publication,acceptedCatalogPointerSha256:record.pointerSha256,
@@ -217,8 +240,7 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
     }
   }finally{await workspace.close();workspace=null;}
   if(success){
-    const servingPointer={releaseId:record.runId,operator:success.operator},previous=await store.optional(care+'/code-only/last-serving.json');
-    if(previous?.releaseId!==record.runId){const temporary=directory+'/next-serving.json';await store.put(temporary,servingPointer);await fs.rename(temporary,care+'/code-only/last-serving.json');}
+    await rememberServing(success);
     await cleanupAcceptedPublication({...workspaceOptions,mode:'resume'},record.runId);
   }
   console.log(JSON.stringify({state:success?'published':result.state,runId:record.runId,...(result.errorCode?{errorCode:result.errorCode}:{}),supplierCalls:0,modelCalls:0,catalogPointerChanged:false}));

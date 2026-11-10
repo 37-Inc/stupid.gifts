@@ -73,7 +73,9 @@ export function createD1CatalogTelemetryStore(options:{db:CatalogD1;owner:Mutati
         params:[operationId,hash,owner.epoch,next.epoch]}),mutationAssertion(db,next)];
     if(statements.length>50)throw new Error('telemetry_batch_bound');
     try{await db.batch(statements);}catch{if(await recover())return;throw new Error('telemetry_conflict');}
-    if(!await recover())throw new Error('telemetry_receipt_missing');
+    // A confirmed primary transaction already asserted this exact next owner.
+    // The catch path above retains exact receipt recovery for a lost ACK.
+    cursor.current=Object.freeze(next);
   }
   const runQuery=`SELECT r.*,t.start_json,t.finish_json FROM catalog_runs r LEFT JOIN catalog_run_telemetry t ON t.run_id=r.id`;
   return Object.freeze({

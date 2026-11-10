@@ -119,7 +119,10 @@ this does not change scheduled cadence.
 
 Use the maintained [code-only route](CODE_ONLY_PUBLICATION.md) for code over the
 accepted catalog. Preserve its genuine D1 catalog receipt and accepted pointer.
-No new private per-release publisher or fake catalog receipt.
+After merge, select manual `code` in the existing GitHub Catalog care workflow;
+do not run full maintenance merely to ship a small UI fix. It shares the same
+single-writer queue and resumes only its saved code intent. Pending catalog work
+must finish first. No new private per-release publisher or fake catalog receipt.
 
 Pending work keeps original source/config/owner/checkpoint/review SHA. Do not
 force locks/owners or blindly retry uncertain version/activation writes.

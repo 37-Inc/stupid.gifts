@@ -37,3 +37,12 @@ test('state adapter rejects paths outside its protected base',async t=>{
   const base=await fixture(t),store=createOperatorStateStore(base,memory());
   await assert.rejects(store.put(path.join(base,'../escaped.json'),{}),/path/);
 });
+test('serving-only pointer is separate from the genuine catalog pointer and restores after runner loss',async t=>{
+  const base=await fixture(t),remote=memory(),store=createOperatorStateStore(base,remote),file=base+'/care/code-only/last-serving.json',
+    catalog=base+'/care/last-success.json',original=await store.pointer('last-success',catalog,{release:'genuine-catalog'},null);
+  const first=await store.pointer('code-only-serving',file,{releaseId:'code-one'},null);
+  await store.pointer('code-only-serving',file,{releaseId:'code-two'},first);
+  await rm(base+'/care',{recursive:true});assert.equal(JSON.parse(await store.readPointer('code-only-serving',file)).releaseId,'code-two');
+  assert.deepEqual(await store.readPointer('last-success',catalog),original);
+  await assert.rejects(store.pointer('code-only-serving',file,{releaseId:'stale'},first),/pointer_conflict/);
+});

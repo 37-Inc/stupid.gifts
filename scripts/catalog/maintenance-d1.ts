@@ -235,8 +235,11 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
       if(error instanceof Error&&/^(?:catalog_d1|run_workspace)_[a-z_]+$/.test(error.message))throw error;
       throw new Error('maintenance_conflict');
     }
-    const saved = await currentReceipt(operationId,inputHash); if (!saved) throw new Error('maintenance_receipt_missing');
-    return saved.result as T;
+    // The primary atomic batch ACK includes both the immutable receipt and the
+    // next-owner assertion. Read them back only for an uncertain response.
+    owner=Object.freeze(next);
+    if(options.ownerCursor)options.ownerCursor.current=owner;
+    return result;
   }
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
     const work = tail.then(() => {
