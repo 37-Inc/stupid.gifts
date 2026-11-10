@@ -143,6 +143,19 @@ test('code-only child has Cloudflare/storage access but no supplier or model cre
   assert.equal(child.STUPID_GIFTS_CLOUDFLARE_API_TOKEN,'test-only');assert.equal(child.STUPID_GIFTS_R2_ACCESS_KEY_ID,'test-only');
   assert.equal(Object.keys(child).some(name=>/AMAZON|OPENAI/.test(name)),false);
 });
+for(const journalExists of [false,true])test('new controller resumes original code-only '+(journalExists?'owned checkpoint':'preparation before any journal'),async()=>{
+  const f=fixture(),key='serving-'+SOURCE.slice(0,12),runId='code-'+key+'-'+SOURCE.slice(0,8);
+  await f.run({mode:'code'},{codeOnly:async()=>({state:'pending'})});
+  f.files.set(f.runtime.care+'/code-only/'+key+'/operator.json',bytes({runId}));
+  f.files.set(f.runtime.care+'/code-only/'+key+'/success.json',bytes({kind:'serving-only',source:SOURCE,releaseId:runId,
+    receiptSha256:HASH,idle:{phase:'idle',externalPending:0}}));
+  f.runtime.durable.get=async path=>{assert.equal(path,'runs/'+runId+'/manifest.json');return journalExists?{bytes:bytes({})}:null;};
+  const result=await f.run({mode:'code',source:NEW_SOURCE,environment:{GITHUB_SHA:NEW_SOURCE}},{invoke:async(directory,args)=>{
+    assert.deepEqual(args,['code-only',journalExists?'recover':'start','--run',key]);
+    if(journalExists)assert.notEqual(directory,'/operators/'+SOURCE);else assert.equal(directory,'/operators/'+SOURCE);
+    return{state:'published',runId,supplierCalls:0,modelCalls:0,catalogPointerChanged:false};}});
+  assert.equal(result.state,'accepted');assert.equal(result.resumed,true);assert.deepEqual(f.calls,[]);
+});
 
 test('actual review producer preserves nullable legacy facts through hosted review and publication without refetching',async()=>{
   const f=fixture(),row={id:'B000000001',public_id:'public-gift',slug:'retained-legacy-gift',editorial_status:'pending',
