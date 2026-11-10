@@ -3,6 +3,7 @@ import {lstat,mkdir,open,readFile,realpath} from 'node:fs/promises';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import type {CatalogObjectStore} from './r2-object-store.ts';
+import {readCampaignFeed} from '../../lib/catalog/campaigns.ts';
 
 const hash=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 const json=(value:unknown)=>Buffer.from(JSON.stringify(value)+'\n');
@@ -47,17 +48,51 @@ export async function currentHostedInputs(store:CatalogObjectStore){
   const object=await store.get('pointers/operator-inputs.json');if(!object)throw Error('catalog_hosted_inputs_missing');
   const ref=JSON.parse(Buffer.from(object.bytes).toString('utf8')) as HostedInputsReference;reference(ref);return ref;
 }
-export async function restoreHostedInputs(store:CatalogObjectStore,base:string,ref:HostedInputsReference){
-  reference(ref);if(!path.isAbsolute(base)||path.normalize(base)!==base||base==='/')fail();
+async function readHostedInputFiles(store:CatalogObjectStore,ref:HostedInputsReference){
+  reference(ref);
   const object=await store.get(ref.key);if(!object||hash(object.bytes)!==ref.sha256)fail();
   const manifest=JSON.parse(Buffer.from(object.bytes).toString('utf8')) as HostedInputs;
   if(!manifest||Object.keys(manifest).sort().join(',')!=='files,kind,schemaVersion'||manifest.schemaVersion!==1||manifest.kind!=='catalog-hosted-inputs'
     ||!Array.isArray(manifest.files)||!manifest.files.length||manifest.files.length>20
     ||new Set(manifest.files.map(f=>f.relative)).size!==manifest.files.length)fail();
-  for(const file of manifest.files){
+  return Promise.all(manifest.files.map(async file=>{
     if(!file||Object.keys(file).sort().join(',')!=='key,relative,sha256'||!relative(file.relative)||!HASH.test(file.sha256)
       ||file.key!==`inputs/files/${file.sha256}.json`)fail();
     const value=await store.get(file.key);if(!value||value.bytes.length>10*1024*1024||hash(value.bytes)!==file.sha256)fail();
+    return{...file,bytes:value.bytes};
+  }));
+}
+/** Protected noncredential workflow input, merged into the existing private
+ * feed only before a NEW intent. Pending work retains its original input pin.
+ * This records observations, never enrollment or eligibility by inference. */
+export async function syncHostedCampaignFeed(store:CatalogObjectStore,raw:string){
+  if(typeof raw!=='string'||Buffer.byteLength(raw)>48*1024)fail();
+  const incoming=readCampaignFeed(JSON.parse(raw));
+  const pointer=await store.get('pointers/operator-inputs.json');if(!pointer)fail();
+  const ref=JSON.parse(Buffer.from(pointer.bytes).toString('utf8')) as HostedInputsReference;
+  const files=await readHostedInputFiles(store,ref),name='daily-catalog-care/campaigns/website-feed.json';
+  const old=files.find(f=>f.relative===name),previous=old?readCampaignFeed(JSON.parse(Buffer.from(old.bytes).toString('utf8'))):{...incoming,campaigns:[]};
+  const rows=new Map(previous.campaigns.map(c=>[c.campaignId+'\n'+c.asin,c]));
+  for(const next of incoming.campaigns){
+    const key=next.campaignId+'\n'+next.asin,before=rows.get(key);
+    const merged=before&&Date.parse(before.observedAt)>Date.parse(next.observedAt)?{...before}:{...next};
+    // Content has its own clock: a submission never renews campaign facts,
+    // and an older input cannot erase later verified fulfillment.
+    const content=[before?.content,next.content].filter(c=>c!==undefined).sort((a,b)=>Date.parse(b.observedAt)-Date.parse(a.observedAt))[0];
+    if(content)merged.content=content;
+    rows.set(key,merged);
+  }
+  const feed=readCampaignFeed({...previous,campaigns:[...rows.values()].sort((a,b)=>a.asin.localeCompare(b.asin)||a.campaignId.localeCompare(b.campaignId))});
+  const bytes=Buffer.from(JSON.stringify(feed)+'\n');
+  if(old&&hash(old.bytes)===hash(bytes))return ref;
+  const updated=files.map(f=>({relative:f.relative,bytes:f.relative===name?bytes:f.bytes}));
+  if(!old)updated.push({relative:name,bytes});
+  return publishHostedInputs(store,updated,pointer.bytes);
+}
+export async function restoreHostedInputs(store:CatalogObjectStore,base:string,ref:HostedInputsReference){
+  if(!path.isAbsolute(base)||path.normalize(base)!==base||base==='/')fail();
+  const files=await readHostedInputFiles(store,ref);
+  for(const file of files){
     const destination=path.join(base,file.relative);await mkdir(path.dirname(destination),{recursive:true,mode:0o700});
     if(await realpath(path.dirname(destination))!==path.dirname(destination))fail();
     const directory=await lstat(path.dirname(destination));if(directory.uid!==process.getuid?.()||(directory.mode&0o777)!==0o700)fail();
@@ -65,7 +100,7 @@ export async function restoreHostedInputs(store:CatalogObjectStore,base:string,r
     catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;
       const stat=await lstat(destination);if(!stat.isFile()||stat.isSymbolicLink()||stat.uid!==process.getuid?.()||stat.nlink!==1
         ||(stat.mode&0o777)!==0o600||hash(await readFile(destination))!==file.sha256)fail();continue;}
-    try{await handle.writeFile(value.bytes);await handle.sync();}finally{await handle.close();}
+    try{await handle.writeFile(file.bytes);await handle.sync();}finally{await handle.close();}
   }
-  return manifest.files.map(f=>({relative:f.relative,sha256:f.sha256}));
+  return files.map(f=>({relative:f.relative,sha256:f.sha256}));
 }

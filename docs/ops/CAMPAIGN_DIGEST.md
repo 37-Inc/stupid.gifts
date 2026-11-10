@@ -72,6 +72,15 @@ Drafts, source handoffs, facts and notification receipts stay private in
 commit provider exports. Initial reviewed appeal records live in
 `content/catalog-merchandising.json`; ordinary/unreviewed products stay public.
 
+After hosted cutover, the same schema1 website feed can be supplied as the
+optional Production Actions secret `STUPID_GIFTS_WEBSITE_CAMPAIGNS`. This holds
+private observations, not a new credential. The sole coordinator merges it into
+the existing versioned R2 inputs only before a new intent. Pending runs keep
+their original input version; shadow is read-only. Other campaigns and newer
+content submissions are preserved. Invalid/missing metadata stays neutral and
+never blocks catalog care. Update this protected input after a manually verified
+join/content submission; never commit raw provider exports or rates to Git.
+
 Only current offered/joinable/website-eligible campaigns for actual admitted,
 reviewed gag gifts notify. Outside-catalog products are discovery leads, not an
 extra-batch authorization. Cameron joins manually. Verify accepted participation

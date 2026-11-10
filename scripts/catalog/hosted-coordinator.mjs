@@ -7,7 +7,7 @@ import path from 'node:path';
 import {homedir} from 'node:os';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {automationRuntime,CATALOG_SCOPE} from './automation-runtime.mjs';
-import {currentHostedInputs,restoreHostedInputs} from './hosted-inputs.ts';
+import {currentHostedInputs,restoreHostedInputs,syncHostedCampaignFeed} from './hosted-inputs.ts';
 import {canonicalJson} from '../../lib/catalog/canonical-json.ts';
 import {checkCloudflareRunner} from './check-cloudflare-runner.ts';
 import {catalogD1FailureDetail} from './d1-write-rest.ts';
@@ -166,7 +166,13 @@ function defaults(runtime,environment){
   const stateFile=runKey=>path.join(runtime.care,'runs',runKey);
   const load=async(source,name)=>import(pathToFileURL(path.join(source,name)).href);
   return{
-    currentInputs:()=>currentHostedInputs(runtime.durable),restoreInputs:ref=>restoreHostedInputs(runtime.durable,runtime.base,ref),
+    async currentInputs({refreshCampaigns=false}={}){
+      if(refreshCampaigns&&environment.STUPID_GIFTS_WEBSITE_CAMPAIGNS){
+        try{return await syncHostedCampaignFeed(runtime.durable,environment.STUPID_GIFTS_WEBSITE_CAMPAIGNS);}
+        catch{console.warn(JSON.stringify({notice:'campaign_metadata_unavailable',catalogBlocked:false}));}
+      }
+      return currentHostedInputs(runtime.durable);
+    },restoreInputs:ref=>restoreHostedInputs(runtime.durable,runtime.base,ref),
     shadowCheck:()=>checkHostedProviderShadow(runtime),
     async checkout(source){
       console.log(JSON.stringify({state:'progress',step:'checkout',source}));
@@ -282,7 +288,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
     const runKey=hostedRunKey(mode,capturedDay,source,canaryId,admitAsins);
     const file=runtime.care+'/runs/'+runKey+'/hosted-run.json';let bytes=await optional(()=>runtime.state.bytes(file));
     if(bytes){record=hostedRunRecord(json(bytes));if(record.runKey!==runKey)fail('run_record');resumed=true;}
-    else{record=hostedRunRecord({schemaVersion:1,runKey,source,day:capturedDay,kind:mode,inputsRef:inputsReference(await deps.currentInputs()),...(mode==='canary'?{canaryId}:mode==='admit'?{admitAsins}:{})});
+    else{record=hostedRunRecord({schemaVersion:1,runKey,source,day:capturedDay,kind:mode,inputsRef:inputsReference(await deps.currentInputs({refreshCampaigns:true})),...(mode==='canary'?{canaryId}:mode==='admit'?{admitAsins}:{})});
       bytes=await runtime.state.put(file,record);}
     pointerBytes=await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:{path:file,sha256:hash(bytes)}},pointerBytes);
   }
