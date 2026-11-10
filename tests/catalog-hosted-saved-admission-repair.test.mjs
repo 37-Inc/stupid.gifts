@@ -4,7 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFile,readdir} from 'node:fs/promises';
 import {repairSavedAdmission,retainedFailedAdmission,savedAdmissionRepairProduct} from '../scripts/catalog/saved-admission-repair.mjs';
 import {editorialSourceHash,SHORT_COPY_PROMPT_VERSION} from '../scripts/ops/catalog-editorial-core.mjs';
-import {maintenanceEmbeddingText} from '../scripts/catalog/maintenance-state.ts';
+import {canonicalDescriptionEmbeddingInput} from '../lib/catalog/presentation.ts';
 import {encodePgvectorSendBase64} from '../scripts/catalog/pgvector-binary.ts';
 import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
 import {claimMutationOwnership} from '../lib/catalog/mutation-fence.ts';
@@ -21,7 +21,7 @@ function evidence(){
   add(review,'phase');
   const vector=Array(1536).fill(Math.fround(.1));vector[0]=-0;const nativeBase64=encodePgvectorSendBase64(vector);
   const embedding={schemaVersion:1,kind:'embedding-response',model:'text-embedding-3-small',observedAt:REVIEW,products:[{
-    id:ID,sourceFactsHash:sourceHash,text:maintenanceEmbeddingText({...source,punnyTitle:review.title,wittyDescription:review.description,
+    id:ID,sourceFactsHash:sourceHash,text:canonicalDescriptionEmbeddingInput({...source,punnyTitle:review.title,wittyDescription:review.description,
       editorialStatus:'short_ready',editorialPromptVersion:SHORT_COPY_PROMPT_VERSION}),nativeBase64,
     vectorBytesSha256:sha256(Buffer.from(nativeBase64,'base64'))}]};
   add(embedding,'embedding-response');return{refs,values,kinds,add,observation,review,embedding,nativeBase64};

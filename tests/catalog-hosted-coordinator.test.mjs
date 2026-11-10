@@ -182,6 +182,7 @@ test('failed saved admission repairs its outputs through the maintained helper, 
     }return invoke(dir,args);
   }});
   assert.equal(result.state,'accepted');assert.equal(repairs,1);assert.equal(f.calls.filter(a=>a[0]==='prepare').length,1);
+  assert.equal(f.events.filter(e=>e==='saved-evidence-restored').length,1);
   const config={runId:'original',inputs:{savedAdmission:{}},cadence:{admitAsins},},cp={phase:'phase_failed',owner:{phase:'writing',ownerReference:'original',operationKey:hash('weekly:'+HASH)}};
   assert.equal(routineRecoveryPhase(cp,config,HASH,HASH),'admission-repair');
   assert.throws(()=>routineRecoveryPhase({...cp,phase:'phases_running'},config,HASH,HASH),/provider_replay_forbidden/);

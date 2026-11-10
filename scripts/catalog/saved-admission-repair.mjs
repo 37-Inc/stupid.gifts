@@ -20,7 +20,7 @@ export function savedAdmissionRepairProduct({id,observation,review,embedding,ass
     editorialStatus:'short_ready',editorialSourceHash:source.sourceFactsHash,sourceFactsHash:source.sourceFactsHash,
     editorialQualityScore:review.quality,editorialPromptVersion:SHORT_COPY_PROMPT_VERSION,editorialModel:'gpt-6-luna',
     editorialGeneratedAt:review.reviewedAt,embedding:decodePgvectorSendBase64(vector.nativeBase64)};
-  if(editorialSourceHash(product)!==source.sourceFactsHash||maintenanceEmbeddingText(product)!==vector.text)fail();
+  if(editorialSourceHash(product)!==source.sourceFactsHash||maintenanceEmbeddingText(product,vector.text)!==vector.text)fail();
   return product;
 }
 async function failedTelemetry(db,runId){
