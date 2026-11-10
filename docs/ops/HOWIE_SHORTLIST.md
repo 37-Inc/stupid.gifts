@@ -83,3 +83,14 @@ Verify twelve Matan/eight Billy Ray cards before hydration, loaded photos, mobil
 product navigation, canonical tagged links and Back. Pinch zoom stays enabled.
 Owner review of the actual page precedes any message to Howie; this work does
 not send him a link automatically.
+
+## Fast existing-product lineups
+
+After this serving upgrade is accepted, `/h?ids=<public-UUID>,<public-UUID>`
+opens an ordered custom assortment of up to six already-public gifts without
+another build, model call, catalog mutation or campaign enrollment. Named guest
+routes support the same parameter. Normal search still uses `q`; Clear restores
+the custom assortment. Invalid/unavailable custom lineups show a recovery link,
+never briefly show the wrong saved picks. Without JavaScript the saved picks
+remain available with an explicit notice. Billy Ray's archived default is unchanged.
+New products still require normal admission before public-ID lookup can show them.

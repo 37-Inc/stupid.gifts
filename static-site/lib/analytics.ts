@@ -64,6 +64,7 @@ export function captureRenderedLists() {
   withAnalytics((analytics) => {
     const lists = new Map<string, Array<{ id: string; source: ProductAnalyticsSource }>>();
     for (const element of document.querySelectorAll<HTMLElement>("[data-analytics-card]")) {
+      if (!element.getClientRects().length) continue;
       const item = productData(element);
       if (!item) continue;
       const key = `${item.context}:${item.id}`;
