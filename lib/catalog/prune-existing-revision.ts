@@ -35,6 +35,9 @@ export interface PrunedRevision {
    * Unlike the one-time preservation mode, these coexist with current deltas. */
   nativeHistory?: NativeHistoryBinding[];
 }
+/** UI-only serving input. It authenticates the accepted public projection,
+ * never asserts that mutable unpublished private rows are unchanged. */
+export type AcceptedPublishedRevision = Omit<PrunedRevision,'sourceRows'> & {evidence:'accepted-public-projection'};
 export interface NativeHistoryBinding {
   source: PublishedCatalogBinding['source']; revisionSha256: string; planSha256: string; ids: string[];
 }

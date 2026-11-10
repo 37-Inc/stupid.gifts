@@ -1,7 +1,7 @@
 import type { PublicCatalogProduct } from "../../lib/catalog/types";
-import { isIllustrative } from "./selection";
-import { earliestCatalogExpiry } from "../../lib/catalog/display";
-import { isPersistentImagePath } from "../../lib/catalog/persistent-image";
+import { isIllustrative } from "./selection.ts";
+import { earliestCatalogExpiry } from "../../lib/catalog/display.ts";
+import { isPersistentImagePath } from "../../lib/catalog/persistent-image.ts";
 
 /** Rendering projection, not a second catalog/storage contract. */
 export type CatalogCard = Pick<

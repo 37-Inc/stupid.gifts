@@ -57,7 +57,9 @@ function environment(hostname = "stupid.gifts", enabled = "true", storage = new 
     },
   };
   const navigator = {};
-  class Element {}
+  class Element {
+    getClientRects() { return this.hidden ? [] : [{ x: 0, y: 0, width: 100, height: 100 }]; }
+  }
   const card = new Element();
   card.dataset = { analyticsId: "amazon:123", analyticsSource: "amazon",
     analyticsContext: "home_opening", analyticsExpiry: "2099-01-01T00:00:00.000Z" };
@@ -226,6 +228,29 @@ test("explicit permanent listings preserve list and outbound events without trea
     assert.doesNotMatch(JSON.stringify(env.calls), /private|affiliate|\?q=/);
     cleanup();
   }
+});
+
+test("hidden saved-lineup cards do not count as impressions or suppress their later visible impression", async () => {
+  const env = environment();
+  env.card.hidden = true;
+  env.card.dataset.analyticsContext = "show-curated";
+  const custom = new env.Element();
+  custom.dataset = { ...env.card.dataset, analyticsId: "amazon:new" };
+  env.document.querySelectorAll = () => [env.card, custom];
+  env.analytics.startStaticAnalytics(true);
+  await flush();
+  env.analytics.captureRenderedLists();
+  await flush();
+  let lists = env.calls.filter(call => call[1] === "view_item_list");
+  assert.equal(lists.length, 1);
+  assert.deepEqual(plain(lists[0][2].items.map(item => item.item_id)), ["amazon:new"]);
+  env.card.hidden = false;
+  env.analytics.captureRenderedLists();
+  env.analytics.captureRenderedLists();
+  await flush();
+  lists = env.calls.filter(call => call[1] === "view_item_list");
+  assert.equal(lists.length, 2, "each actually shown gift counts once, not the hidden fallback");
+  assert.deepEqual(plain(lists[1][2].items.map(item => item.item_id)), ["amazon:123"]);
 });
 
 test("explicit Goose static mode preserves canonical page origin, provider destinations and coarse internal attribution", async () => {

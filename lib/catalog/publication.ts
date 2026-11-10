@@ -8,7 +8,7 @@ import { legacyMutationBatch, mutationAssertion, mutationFenceQuery } from './mu
 import type { MutationOwner } from './mutation-fence.ts';
 import type { ActivationPermit, CatalogBuildRequest } from './build-requests.ts';
 import { encodeBuildRequest } from './build-requests.ts';
-import type { PrunedRevision } from './prune-existing-revision.ts';
+import type { PrunedRevision,AcceptedPublishedRevision } from './prune-existing-revision.ts';
 import { pruningCurrentQueries, CATALOG_IDENTITY_LIMITS } from './pruning-current.ts';
 import { approvedBaseChangeLimit } from './owner-base-review.ts';
 import type { OwnerBaseCatalogReview } from './owner-base-review.ts';
@@ -87,8 +87,11 @@ function intentFrom(value: Outbox): PublicationIntent {
   return intent;
 }
 /** All mutable readiness predicates also run within the final receipt transaction. */
-function gate(snapshot: CatalogSnapshot, intent: PublicationIntent) {
-  const visible = visibleRevisionCountQuery(intent.catalogRevision);
+function gate(snapshot: CatalogSnapshot, intent: PublicationIntent,authority?:AcceptedCatalogAuthority) {
+  if(authority){encodeAcceptedCatalogAuthority(authority);if(intent.catalogRevision!==authority.request.sourceRevision
+    ||intent.catalogSnapshotSha256!==authority.request.sourceDigest||intent.priorReleaseId!==authority.publication.releaseId
+    ||intent.codeSha!==authority.request.codeSha)throw Error('accepted_catalog_authority_invalid');}
+  const visible = visibleRevisionCountQuery(intent.catalogRevision,undefined,Boolean(authority));
   return { sql: `EXISTS(SELECT 1 FROM catalog_revisions c JOIN catalog_projection_receipts r
       ON r.catalog_revision=c.revision AND r.source_export_sha256=c.source_export_sha256
       WHERE c.revision=? AND c.status IN ('reconciled','published') AND r.snapshot_sha256=? AND r.product_count=?)
@@ -101,12 +104,13 @@ function gate(snapshot: CatalogSnapshot, intent: PublicationIntent) {
       intent.catalogRevision, intent.nextExpiry, intent.nextExpiry, intent.priorReleaseId, intent.priorReleaseId] };
 }
 /** Same predicates for the explicit reviewed, original-token activation CAS. */
-export { gate as publicationActivationGate };
-async function preflight(db: CatalogD1, snapshot: CatalogSnapshot, intent: PublicationIntent, now: Date): Promise<void> {
+export { gate as publicationActivationGate,preflight as publicationPreflight };
+async function preflight(db: CatalogD1, snapshot: CatalogSnapshot, intent: PublicationIntent, now: Date,authority?:AcceptedCatalogAuthority): Promise<void> {
+  if(authority)await acceptedCatalogReceipt(db,authority);
   const earliest = earliestDisplayExpiry(snapshot.products);
   if (snapshot.dataKind !== 'catalog' || snapshot.catalogRevision !== intent.catalogRevision || intent.nextExpiry !== earliest
-    || !(await rollbackPreflight(db, snapshot, now)).ok) throw new Error('publication_preflight_failed');
-  const check = gate(snapshot, intent);
+    || !(await rollbackPreflight(db, snapshot, now,Boolean(authority))).ok) throw new Error('publication_preflight_failed');
+  const check = gate(snapshot, intent,authority);
   if (!(await db.prepare(`SELECT 1 WHERE ${check.sql}`).bind(...check.params).all()).results.length) throw new Error('publication_preflight_failed');
 }
 function owned(value: Outbox | undefined, token: string, now: Date, state?: string): value is Outbox {
@@ -176,9 +180,9 @@ export async function publicationStatus(db: CatalogD1, releaseId: string, option
   if (value?.state === 'verified') throw new Error('publication_receipt_missing');
   return { state: value?.state || 'missing', attempts: value?.attempts || 0, leaseUntil: value?.lease_until || null, errorCode: value?.error_code || null };
 }
-export async function enqueuePublication(db: CatalogD1, snapshot: CatalogSnapshot, intent: PublicationIntent, now = new Date()): Promise<string> {
+export async function enqueuePublication(db: CatalogD1, snapshot: CatalogSnapshot, intent: PublicationIntent, now = new Date(),authority?:AcceptedCatalogAuthority): Promise<string> {
   const bytes = encode(intent); const id = await digest(bytes);
-  await preflight(db, snapshot, intent, now);
+  await preflight(db, snapshot, intent, now,authority);
   await db.prepare(`INSERT INTO publication_outbox(intent_id,release_id,catalog_revision,intent_json,created_at,updated_at)
     VALUES(?,?,?,?,?,?) ON CONFLICT(release_id) DO NOTHING`)
     .bind(id, intent.releaseId, intent.catalogRevision, bytes, now.toISOString(), now.toISOString()).run();
@@ -186,14 +190,14 @@ export async function enqueuePublication(db: CatalogD1, snapshot: CatalogSnapsho
   if (!value || value.intent_id !== id || value.intent_json !== bytes) throw new Error('publication_intent_conflict');
   return id;
 }
-export async function claimPublication(db: CatalogD1, snapshot: CatalogSnapshot, releaseId: string, now = new Date(), leaseMs = 600_000): Promise<PublicationClaim | null> {
+export async function claimPublication(db: CatalogD1, snapshot: CatalogSnapshot, releaseId: string, now = new Date(), leaseMs = 600_000,authority?:AcceptedCatalogAuthority): Promise<PublicationClaim | null> {
   const value = await row(db, releaseId);
   if (!value) throw new Error('publication_intent_missing');
   const intent = intentFrom(value);
-  await preflight(db, snapshot, intent, now);
+  await preflight(db, snapshot, intent, now,authority);
   const token = crypto.randomUUID();
   const leaseUntil = new Date(Math.min(now.getTime() + Math.max(1000, Math.min(leaseMs, 900_000)), intent.nextExpiry === null ? Infinity : Date.parse(intent.nextExpiry))).toISOString();
-  const check = gate(snapshot, intent);
+  const check = gate(snapshot, intent,authority);
   await db.batch([
     db.prepare(`UPDATE publication_outbox SET state='pending',lease_token=NULL,lease_until=NULL,updated_at=?
       WHERE catalog_revision=? AND state IN ('claimed','dispatched') AND lease_until<=${DATABASE_NOW}`).bind(now.toISOString(), intent.catalogRevision),
@@ -210,14 +214,15 @@ export async function failPublication(db: CatalogD1, releaseId: string, token: s
     WHERE release_id=? AND lease_token=? AND state='claimed' AND lease_until>${DATABASE_NOW}`)
     .bind(now.toISOString(), releaseId, token).run();
 }
-export async function recordPublicationDispatch(db: CatalogD1, snapshot: CatalogSnapshot, claim: PublicationClaim, reference: string, now: Date): Promise<void> {
+export async function recordPublicationDispatch(db: CatalogD1, snapshot: CatalogSnapshot, claim: PublicationClaim, reference: string, now: Date,authority?:AcceptedCatalogAuthority): Promise<void> {
   if (!/^[a-zA-Z0-9._:/-]{1,200}$/.test(reference)) throw new Error('invalid_dispatch_reference');
   // Lost acknowledgement after the original write: exact readback only, even
   // after lease expiry. This grants no activation authority or renewed lease.
   const existing=await row(db,claim.intent.releaseId);
   if(existing?.state==='dispatched'&&existing.intent_id===claim.intentId&&existing.lease_token===claim.token
     &&existing.intent_json===encode(claim.intent)&&existing.dispatch_reference===reference)return;
-  const check = gate(snapshot, claim.intent);
+  if(authority)await preflight(db,snapshot,claim.intent,now,authority);
+  const check = gate(snapshot, claim.intent,authority);
   await db.prepare(`UPDATE publication_outbox SET state='dispatched',dispatch_reference=?,updated_at=?
     WHERE intent_id=? AND lease_token=? AND intent_json=? AND state='claimed' AND lease_until>${DATABASE_NOW} AND ${check.sql}`)
     .bind(reference, now.toISOString(), claim.intentId, claim.token, encode(claim.intent), ...check.params).run();
@@ -431,9 +436,9 @@ export function completeActivatedApprovedCatalogPublication(db:CatalogD1,revisio
   return completeActivated(db,revision,publication,permit,readDeployed,now,undefined,false,true);
 }
 
-/** Compact final CAS after same-owner full catalog/native verification. No
+/** Compact final CAS after same-owner accepted-public/native-anchor verification. No
  * catalog row is inserted/updated; the outbox is serving acceptance only. */
-export async function completeActivatedServingPublication(db:CatalogD1,revision:PrunedRevision,publication:PublicationClaim,permit:ActivationPermit,
+export async function completeActivatedServingPublication(db:CatalogD1,revision:AcceptedPublishedRevision,publication:PublicationClaim,permit:ActivationPermit,
   authority:AcceptedCatalogAuthority,readDeployed:(intent:PublicationIntent)=>Promise<PublicationIntent>,now:()=>Date=()=>new Date()){
   const owner=permit.mutationOwner,intent=publication.intent,snapshot=revision.snapshot;
   const encoded=encodeAcceptedCatalogAuthority(authority),requestBytes=encodeBuildRequest(authority.request);
@@ -442,7 +447,7 @@ export async function completeActivatedServingPublication(db:CatalogD1,revision:
     ||permit.requestId!==await digest(requestBytes)||permit.releaseId!==intent.releaseId||permit.versionReference.length<1
     ||snapshot.products.length<1
     ||snapshot.products.length+snapshot.heldProducts.length!==authority.identityCount
-    ||revision.sourceRows.length!==authority.identityCount||intent.nextExpiry!==earliestDisplayExpiry(snapshot.products)
+    ||revision.evidence!=='accepted-public-projection'||'sourceRows' in revision||intent.nextExpiry!==earliestDisplayExpiry(snapshot.products)
     ||snapshot.catalogRevision!==authority.request.sourceRevision||intent.catalogRevision!==snapshot.catalogRevision
     ||await digest(`${JSON.stringify(snapshot)}\n`)!==authority.request.sourceDigest
     ||intent.catalogSnapshotSha256!==authority.request.sourceDigest||intent.codeSha!==authority.request.codeSha
@@ -462,17 +467,17 @@ export async function completeActivatedServingPublication(db:CatalogD1,revision:
       AND NOT EXISTS(SELECT 1 FROM publication_receipts WHERE release_id=?)
       AND (SELECT coalesce(max(sequence),0) FROM vector_sync_outbox)=?
       AND NOT EXISTS(SELECT 1 FROM vector_sync_outbox WHERE status!='complete')
-      AND (SELECT count(*) FROM products)=?
+      AND (SELECT count(*) FROM catalog_public_products WHERE catalog_revision=?)=?
       AND EXISTS(SELECT 1 FROM catalog_build_requests WHERE request_id=? AND request_json=? AND state='activating'
         AND lease_token=? AND run_reference=? AND release_id=? AND version_reference=?)
       AND EXISTS(SELECT 1 FROM publication_outbox WHERE intent_id=? AND intent_json=? AND state='dispatched'
         AND lease_token=? AND dispatch_reference=?) THEN 'true' ELSE 'serving_publication_fenced' END)`)
       .bind(...columns.map(k=>original[k]),authority.publicationReceiptWatermark,intent.releaseId,authority.globalVectorWatermark,
-        authority.identityCount,permit.requestId,requestBytes,permit.token,permit.runReference,permit.releaseId,permit.versionReference,
+        snapshot.catalogRevision,snapshot.products.length,permit.requestId,requestBytes,permit.token,permit.runReference,permit.releaseId,permit.versionReference,
         publication.intentId,encode(intent),publication.token,`version:${permit.versionReference}`),
   ];
-  await preflight(db,snapshot,intent,now());await db.batch(check());
-  // This trusted callback owns full current-row/native + exact live readback.
+  await preflight(db,snapshot,intent,now(),authority);await db.batch(check());
+  // This trusted callback owns fresh accepted-public/native-anchor + exact live readback.
   // The held owner and compact CAS fence the unchanged catalog on both sides.
   if(encode(await readDeployed(intent))!==encode(intent))throw Error('publication_readback_mismatch');
   await db.batch([...check(),db.prepare(`UPDATE publication_outbox SET state='verified',completed_token=?,lease_token=NULL,

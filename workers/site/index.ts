@@ -10,6 +10,7 @@ import { recordSearchDemand } from './search-demand.ts';
 import { productPresentation } from '../../lib/catalog/presentation.ts';
 import {readMerchandising,productTitleView} from '../../lib/catalog/merchandising.ts';
 import { createCatalogGiftsHandler } from './catalog-gifts.ts';
+import { showPreview } from './show-preview.ts';
 
 export type { SiteEnv, SearchAdapters, SearchStorage, SemanticBudgetScope } from './bindings.ts';
 export interface SiteReleaseIdentity {
@@ -317,6 +318,7 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
         }
         if (path === '/api/search-products') return respond(search ? await search(request, env) : json({ error: 'Search unavailable' }, 503));
         if (path === '/api/catalog-gifts') return respond(catalogGifts(request));
+        if (path === '/api/show-preview') return respond(showPreview(request, now()));
         if (path === '/api/search-demand') return respond(productionOrigin === 'https://stupid.gifts' && manifest.dataKind === 'catalog'
           ? await recordSearchDemand(request, env, now()) : new Response(null, { status: 403 }));
         if (path === '/api/catalog-feed') return respond(await feed(request));

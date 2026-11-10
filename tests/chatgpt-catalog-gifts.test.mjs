@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCatalogGiftsHandler } from '../workers/site/catalog-gifts.ts';
 import { createSiteWorker } from '../workers/site/index.ts';
+import { validateCardShard } from '../static-site/lib/card-shard.ts';
 
 const NOW = Date.parse('2026-11-06T15:00:00Z');
 const UNTIL = new Date(NOW + 60_000).toISOString();
@@ -40,6 +41,33 @@ test('public UUID lookup is independent of search, ordered and explicitly projec
     assert.doesNotMatch(JSON.stringify(body), /private|affiliate|currency|internalNotes|price/);
     assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
   }
+});
+
+test('website card lookup reuses public eligibility and canonical cards without changing the default DTO', async () => {
+  const f = setup();
+  const response = f.request(`ids=${ids[1]},${ids[0]}&view=cards`), body = await response.json();
+  const shard = validateCardShard(body, { catalogRevision: f.snapshot.catalogRevision,
+    version: f.snapshot.catalogRevision, kind: 'feed', now: NOW });
+  assert.deepEqual(shard.products.map(p => p.id), ['private-retailer-1', 'private-retailer-0']);
+  assert.equal(shard.products[0].description, 'A brush for a cat lover.');
+  assert.doesNotMatch(JSON.stringify(body), /affiliateUrl|currency|internalNotes|price/);
+  assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+  for (const query of [`ids=${ids[0]}&view=other`, `ids=${ids[0]}&view=cards&view=cards`,
+    `ids=${ids[0]}&view=cards&limit=100`]) assert.equal(f.request(query).status, 400);
+  const held = setup([product()], { manifest: { routes: { '/': route(), '/gifts/cat-brush-0': route({ state: 'held' }) } } });
+  assert.deepEqual((await held.request(`ids=${ids[0]}&view=cards`).json()).products, []);
+});
+
+test('website cards use the existing 24-card feed bound while default ChatGPT lookup remains six', async () => {
+  const batch=Array.from({length:25},(_,i)=>`00000000-0000-4000-8000-${String(i).padStart(12,'0')}`);
+  const f=setup(batch.map((publicId,i)=>product(0,{id:`fixture-${i}`,publicId,slug:`unique-gift-${i}`})));
+  for(const count of [7,24]) {
+    const r=f.request(`ids=${batch.slice(0,count).join(',')}&view=cards`);
+    assert.equal(r.status,200);
+    assert.equal((await r.json()).products.length,count);
+  }
+  assert.equal(f.request(`ids=${batch.join(',')}&view=cards`).status,413);
+  assert.equal(f.request(`ids=${batch.slice(0,7).join(',')}`).status,413);
 });
 
 test('input is bounded before lookup; arbitrary destinations and writes are unsupported', () => {

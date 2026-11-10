@@ -3,6 +3,8 @@ import { catalogDeadline, persistentPublicProduct, resolvePublicProduct } from '
 import { productPresentation } from '../../lib/catalog/presentation.ts';
 import { productTitleView,readMerchandising } from '../../lib/catalog/merchandising.ts';
 import { isCatalogDisplayEligibleProduct } from '../../lib/db/product-scoring.ts';
+import { projectCard } from '../../static-site/lib/card-shard.ts';
+import { earliestCatalogExpiry } from '../../lib/catalog/display.ts';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -23,18 +25,21 @@ export function createCatalogGiftsHandler({ snapshot, manifest, now = Date.now }
   return (request: Request): Response => {
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
     const query = new URL(request.url).searchParams;
+    const cards = query.get('view') === 'cards';
+    const maximum = cards ? 24 : 6;
     const input = query.get('ids');
-    if (input && input.length > 6 * 37) return json({ error: 'Request too large' }, 413);
-    if (query.getAll('ids').length !== 1 || [...query.keys()].some(key => key !== 'ids'))
+    if (input && input.length > maximum * 37) return json({ error: 'Request too large' }, 413);
+    if (query.getAll('ids').length !== 1 || query.getAll('view').length > 1
+      || query.has('view') && !cards || [...query.keys()].some(key => key !== 'ids' && !(cards && key === 'view')))
       return json({ error: 'Use one ids parameter' }, 400);
     const ids = input?.split(',') ?? [];
-    if (!ids.length || ids.length > 6 || new Set(ids).size !== ids.length || ids.some(id => !UUID.test(id)))
-      return json({ error: 'Supply one to six unique public gift IDs' }, 400);
+    if (!ids.length || ids.length > maximum || new Set(ids).size !== ids.length || ids.some(id => !UUID.test(id)))
+      return json({ error: `Supply one to ${maximum} unique public gift IDs` }, 400);
     const at = now();
     const home = manifest.routes['/'];
     if (!home || home.state === 'held' || !(catalogDeadline(home.eligibleUntil) > at || typeof home.persistentIndexable === 'boolean'))
       return json({ error: 'Catalog temporarily unavailable' }, 503);
-    const results = ids.flatMap(id => {
+    const selected = ids.flatMap(id => {
       const original = products.get(id);
       if (!original || !SLUG.test(original.slug)) return [];
       const base = persistentPublicProduct(original);
@@ -48,10 +53,18 @@ export function createCatalogGiftsHandler({ snapshot, manifest, now = Date.now }
       let image: URL;
       try { image = new URL(view.imageUrl, 'https://stupid.gifts'); } catch { return []; }
       if (image.protocol !== 'https:' || !IMAGE_HOSTS.has(image.hostname) || image.username || image.password) return [];
-      // Never spread the product: merchant IDs, affiliate links, prices and proof stay private.
-      return [{ publicId: view.publicId, slug: view.slug, title: view.title,
-        description: view.description, imageUrl: image.href, humorTags: view.humorTags ?? [] }];
+      return [view];
     });
+    // Website cards use the same minimal projection as existing browse shards.
+    // The default ChatGPT DTO remains unchanged; never spread private proof.
+    if (cards) {
+      const products = selected.map(projectCard);
+      return json({ schemaVersion: 1, status: 'ready', kind: 'feed',
+        catalogRevision: snapshot.catalogRevision, version: snapshot.catalogRevision,
+        eligibleUntil: earliestCatalogExpiry(products), products, next: null });
+    }
+    const results = selected.map(view => ({ publicId: view.publicId, slug: view.slug, title: view.title,
+      description: view.description, imageUrl: new URL(view.imageUrl, 'https://stupid.gifts').href, humorTags: view.humorTags ?? [] }));
     return json({ results, catalogRevision: snapshot.catalogRevision,
       catalogSnapshotSha256: manifest.catalogSnapshotSha256 });
   };

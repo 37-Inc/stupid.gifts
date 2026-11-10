@@ -3,7 +3,7 @@ import type { CatalogD1 } from './storage/d1.ts';
 import { catalogDisplayDeadline, earliestDisplayExpiry } from './display.ts';
 import type { PublicationClaim, PublicationIntent } from './publication.ts';
 import { encodePublicationIntent, publicationStatus, publicationActivationGate, acceptedCatalogReceipt,
-  encodeAcceptedCatalogAuthority, servingPublicationStatus } from './publication.ts';
+  encodeAcceptedCatalogAuthority, servingPublicationStatus,publicationPreflight } from './publication.ts';
 import type {AcceptedCatalogAuthority} from './publication.ts';
 import { rollbackPreflight, visibleRevisionCountQuery } from './d1.ts';
 import { canonicalTime } from './snapshot.ts';
@@ -260,7 +260,7 @@ async function priorMatches(db: CatalogD1, request: CatalogBuildRequest, active:
  */
 export async function beginBuildActivation(db: CatalogD1, claim: CatalogBuildClaim, snapshot: CatalogSnapshot,
   publication: PublicationClaim, versionReference: string, readDeployment: (signal: AbortSignal) => Promise<DeploymentObservation>, now = new Date(), mutationOwner?: MutationOwner,
-  servingPrior?: DeploymentIdentity,continuation?:PermanentPublicationAuthority,options?:{observationTimeoutMs:number;ownedBackground?:true}): Promise<ActivationPermit> {
+  servingPrior?: DeploymentIdentity,continuation?:PermanentPublicationAuthority,options?:{observationTimeoutMs:number;ownedBackground?:true;acceptedCatalog?:AcceptedCatalogAuthority}): Promise<ActivationPermit> {
   if (typeof versionReference !== 'string' || !REFERENCE.test(versionReference)) throw new Error('invalid_build_reference');
   const background=options?.ownedBackground===true;
   if(background&&(!mutationOwner||mutationOwner.phase!=='freezing'))throw Error('build_background_owner_required');
@@ -284,10 +284,11 @@ export async function beginBuildActivation(db: CatalogD1, claim: CatalogBuildCla
   const earliest = earliestDisplayExpiry(snapshot.products);
   if (intent.codeSha !== request.codeSha || intent.priorReleaseId !== request.priorReleaseId || snapshot.catalogRevision !== intent.catalogRevision
     || intent.nextExpiry !== earliest || snapshot.products.some(product => catalogDisplayDeadline(product) <= Date.parse(request.cutoff))
-    || !(await rollbackPreflight(db, snapshot, now)).ok) throw new Error('build_publication_unready');
+    || !(await rollbackPreflight(db, snapshot, now,Boolean(options?.acceptedCatalog))).ok) throw new Error('build_publication_unready');
+  if(options?.acceptedCatalog)await publicationPreflight(db,snapshot,intent,now,options.acceptedCatalog);
   if(continuation&&(!mutationOwner||mutationOwner.phase!=='freezing'))throw Error('build_permanent_continuation_invalid');
   const gate = sourceGate(request,continuation?await permanentPublicationDeadline(request,snapshot,continuation,now):request.cutoff);
-  const visible = visibleRevisionCountQuery(intent.catalogRevision);
+  const visible = visibleRevisionCountQuery(intent.catalogRevision,undefined,Boolean(options?.acceptedCatalog));
   const imports = await unabandonedImportsQuery(db,request.environment);
   const statement = db.prepare(`UPDATE catalog_build_requests SET state='activating',lease_until=NULL,release_id=?,version_reference=?
     WHERE request_id=? AND request_json=? AND lease_token=? AND run_reference=? AND state='building' AND (lease_until>${NOW} OR ?=1)

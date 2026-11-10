@@ -12,7 +12,7 @@ import type { CatalogD1 } from '../../lib/catalog/storage/d1.ts';
 import type { MutationOwner } from '../../lib/catalog/mutation-fence.ts';
 import { mutationAssertion, readMutationOwner } from '../../lib/catalog/mutation-fence.ts';
 import { rollbackPreflight } from '../../lib/catalog/d1.ts';
-import type { PrunedRevision } from '../../lib/catalog/prune-existing-revision.ts';
+import type { PrunedRevision,AcceptedPublishedRevision } from '../../lib/catalog/prune-existing-revision.ts';
 import { prunedVectorIds, prunedVectorPlan } from '../../lib/catalog/prune-existing-revision.ts';
 import type { PermanentCatalogRevision } from '../../lib/catalog/freeze-permanent-catalog.ts';
 import { assertPermanentCatalog } from '../../lib/catalog/freeze-permanent-catalog.ts';
@@ -415,7 +415,7 @@ function intentFrom(manifest:SiteAssetManifest,bytes:Uint8Array):PublicationInte
  * publication predicates. Ambiguous external steps are reconciled, not resent.
  * Credentials never enter checkpoints, artifacts, command args or returned errors.
  */
-export async function executePublication(options:{db:CatalogD1&{providerIdentity:string};owner:MutationOwner;revision:PrunedRevision|null;published?:PublishedCatalogRead;permanent?:PermanentCatalogRevision;approvedCatalog?:ApprovedCohortRevision;requestId:string;runReference:string;
+export async function executePublication(options:{db:CatalogD1&{providerIdentity:string};owner:MutationOwner;revision:PrunedRevision|AcceptedPublishedRevision|null;published?:PublishedCatalogRead;permanent?:PermanentCatalogRevision;approvedCatalog?:ApprovedCohortRevision;requestId:string;runReference:string;
   acceptedCatalog?:AcceptedCodeOnlyRead|AcceptedCodeOnlyControl;
   workspace:PublicationWorkspace;config:PublicationConfig;credentials:{cloudflareToken:string;identityAuthorization?:string};dependencies?:Dependencies;buildRecovery?:BuildRecoveryApproval;
   acceptedReceiptOnly?:true;
@@ -623,7 +623,10 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       if(build.request.codeSha!==config.codeSha||build.request.sourceRevision!==revision.snapshot.catalogRevision
         ||build.request.sourceDigest!==sha256(`${JSON.stringify(revision.snapshot)}\n`)||build.request.environment!==config.environment
         ||build.request.priorReleaseId!==(config.prior?.releaseId??null))throw new Error('publication_build_mismatch');
-      const plan=prunedVectorPlan(revision);const marker=`catalog-${sha256(`${options.requestId}:${config.releaseId}`).slice(0,40)}`;
+      const plan=serving?{...revision.request.scope,catalogRevision:revision.snapshot.catalogRevision,
+        snapshotSha256:revision.packet.receipt.snapshot_sha256,globalWatermark:revision.globalVectorWatermark,
+        products:[],absentIds:[],history:revision.nativeHistory}:prunedVectorPlan(revision as PrunedRevision);
+      const marker=`catalog-${sha256(`${options.requestId}:${config.releaseId}`).slice(0,40)}`;
       control={schemaVersion:1,configSha256,requestId:options.requestId,runReference:options.runReference,stage:'claimed',build,
         publication:null,intent:null,permit:null,vectorPlan:{catalogRevision:plan.catalogRevision,planSha256:sha256(canonicalJson(plan)),
           ids:prunedVectorIds(plan)},packageSha256:null,uploadMarker:marker,
@@ -660,7 +663,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       // immediately before upload/activation under the unchanged owner.
       if(options.approvedCatalog?.persistent&&(options.finishAuthorization||continuation||reviewed?.approval.schemaVersion===5))
         return readOwnedPermanentCohortNative(db,owner,options.approvedCatalog,adapters);
-      return 'approval' in revision.request?readOwnedApprovedCohortVectors(db,owner,revision as ApprovedCohortRevision,adapters):readOwnedPrunedVectors(db,owner,revision,adapters);
+      return 'approval' in revision.request?readOwnedApprovedCohortVectors(db,owner,revision as ApprovedCohortRevision,adapters):readOwnedPrunedVectors(db,owner,revision as PrunedRevision,adapters);
     };
     // Full-catalog scans are sequential owned D1 reads, not a short provider
     // observation. No proof survives this invocation or crosses an owner change.
@@ -729,7 +732,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       retryRecord={schemaVersion:1,approval:reviewed.approval,evidence:reviewed.evidence,oldPending:pendingUpload!,
         oldReview:checkpoint!.checkpoint.pins.publicationUploadReview,owner,control:structuredClone(control),original:{build,publication},
         ...(reviewed.priorApproval?{priorApproval:reviewed.priorApproval}:{}),...(reviewed.transport?{transport:reviewed.transport}:{})};
-      await verifyBuiltPackage();if(!(await rollbackPreflight(db,revision.snapshot,now())).ok)throw new Error('publication_upload_retry_fenced');
+      await verifyBuiltPackage();if(!(await rollbackPreflight(db,revision.snapshot,now(),Boolean(serving))).ok)throw new Error('publication_upload_retry_fenced');
       await vectorProof();if(await api.findVersion(control.uploadMarker)!==null)throw new Error('publication_upload_review_required');
       await permanentProof();
       // The original live prior must still be active BEFORE the retry upload,
@@ -934,11 +937,11 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
           else if(!options.approvedCatalog?.persistent)await permanentProof();
           await observed();await permanentProof();receiptInventoryOwner={...owner};return control!.intent!;
         };
-        if(serving)await completeActivatedServingPublication(db,revision,control.publication!,control.permit,serving.authority,readDeployed,now);
+        if(serving)await completeActivatedServingPublication(db,serving.revision!,control.publication!,control.permit,serving.authority,readDeployed,now);
         else if(options.approvedCatalog||control.publication!.leaseUntil<=now().toISOString())
-          if(options.permanent)await completeActivatedPermanentPublication(db,revision,control.publication!,control.permit,readDeployed,now);
-          else if(options.approvedCatalog)await completeActivatedApprovedCatalogPublication(db,revision,control.publication!,control.permit,readDeployed,now);
-          else await completeActivatedPublication(db,revision,control.publication!,control.permit,readDeployed,now,options.published);
+          if(options.permanent)await completeActivatedPermanentPublication(db,revision as PrunedRevision,control.publication!,control.permit,readDeployed,now);
+          else if(options.approvedCatalog)await completeActivatedApprovedCatalogPublication(db,revision as PrunedRevision,control.publication!,control.permit,readDeployed,now);
+          else await completeActivatedPublication(db,revision as PrunedRevision,control.publication!,control.permit,readDeployed,now,options.published);
         else await completePublication(db,revision.snapshot,config.releaseId,control.publication!.token,readDeployed,now,owner);
       }
       const proof=receipt();
@@ -1050,8 +1053,8 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     if(control.intent&&canonicalJson(control.intent)!==canonicalJson(intent))throw new Error('publication_package_changed');
     if(control.stage==='built'){
       const protectedUpload=isAccountedPublicationUploadCommand(command);
-      await enqueuePublication(db,sealed.snapshot,intent,now());
-      const publication=await claimPublication(db,sealed.snapshot,intent.releaseId,now());if(!publication)throw new Error('publication_claim_unavailable');
+      await enqueuePublication(db,sealed.snapshot,intent,now(),serving?.authority);
+      const publication=await claimPublication(db,sealed.snapshot,intent.releaseId,now(),600_000,serving?.authority);if(!publication)throw new Error('publication_claim_unavailable');
       const pending=protectedUpload?await workspace.putArtifact(uploadBinding(),{kind:'publication',observedAt:now().toISOString()}):undefined;
       // One checkpoint binds the first possible CLI invocation to both its
       // exact publication claim and pending pin, never a preflight-only read.
@@ -1090,7 +1093,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     assertBuildSource(config.sourceRoot,config.codeSha);
     await loadPackage(directory,config,control.packageSha256!,now());
     verifyUploadedVersion(await api.version(control.versionReference!),config,control.versionReference!,control);
-    if(!reviewed)await recordPublicationDispatch(db,sealed.snapshot,control.publication!,`version:${control.versionReference}`,now());
+    if(!reviewed)await recordPublicationDispatch(db,sealed.snapshot,control.publication!,`version:${control.versionReference}`,now(),serving?.authority);
     // Persist exact deployment intent BEFORE the D1 CAS and actual POST. A crash
     // after this point is reconciled from the exact claim, never automatically POSTed.
     if(!reviewed)await save({stage:'activating'});
@@ -1134,7 +1137,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       }else{
         if(continuation)await permanentProof();
         permit=await beginBuildActivation(db,control.build,sealed.snapshot,control.publication!,control.versionReference!,
-          signal=>(observation=readPrior(signal)),now(),owner,config.servingPrior,continuation,{observationTimeoutMs:30_000,...(ownedBackground?{ownedBackground:true as const}:{})});
+          signal=>(observation=readPrior(signal)),now(),owner,config.servingPrior,continuation,{observationTimeoutMs:30_000,...(ownedBackground?{ownedBackground:true as const}:{}),...(serving?{acceptedCatalog:serving.authority}:{})});
       }
     }
     finally{if(observation){
