@@ -5,7 +5,7 @@ export function showLineupIds(search: string): string[] | null {
   const query = new URLSearchParams(search);
   if (!query.has('ids')) return null;
   const ids = (query.get('ids') ?? '').split(',').map(id => id.toLowerCase());
-  if (query.getAll('ids').length !== 1 || !ids.length || ids.length > 6
+  if (query.getAll('ids').length !== 1 || !ids.length || ids.length > 24
     || new Set(ids).size !== ids.length || ids.some(id => !UUID.test(id))) throw new Error('Invalid lineup');
   return ids;
 }

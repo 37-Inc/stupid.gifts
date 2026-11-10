@@ -26,14 +26,15 @@ export function createCatalogGiftsHandler({ snapshot, manifest, now = Date.now }
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405, { Allow: 'GET' });
     const query = new URL(request.url).searchParams;
     const cards = query.get('view') === 'cards';
+    const maximum = cards ? 24 : 6;
     const input = query.get('ids');
-    if (input && input.length > 6 * 37) return json({ error: 'Request too large' }, 413);
+    if (input && input.length > maximum * 37) return json({ error: 'Request too large' }, 413);
     if (query.getAll('ids').length !== 1 || query.getAll('view').length > 1
       || query.has('view') && !cards || [...query.keys()].some(key => key !== 'ids' && !(cards && key === 'view')))
       return json({ error: 'Use one ids parameter' }, 400);
     const ids = input?.split(',') ?? [];
-    if (!ids.length || ids.length > 6 || new Set(ids).size !== ids.length || ids.some(id => !UUID.test(id)))
-      return json({ error: 'Supply one to six unique public gift IDs' }, 400);
+    if (!ids.length || ids.length > maximum || new Set(ids).size !== ids.length || ids.some(id => !UUID.test(id)))
+      return json({ error: `Supply one to ${maximum} unique public gift IDs` }, 400);
     const at = now();
     const home = manifest.routes['/'];
     if (!home || home.state === 'held' || !(catalogDeadline(home.eligibleUntil) > at || typeof home.persistentIndexable === 'boolean'))

@@ -5,9 +5,12 @@ import fs from 'node:fs';
 import { showLineupIds, SHOW_LINEUP_BOOTSTRAP } from '../static-site/lib/show-lineup.ts';
 
 const a='11111111-1111-4111-8111-111111111111',b='abcdefab-1234-4123-8123-123456789abc';
+const batch=Array.from({length:25},(_,i)=>`00000000-0000-4000-8000-${String(i).padStart(12,'0')}`);
 test('custom filming URL is ordered, UUID-only, bounded and separate from real search', () => {
   assert.equal(showLineupIds('?q=goose'),null);
   assert.deepEqual(showLineupIds(`?ids=${b.toUpperCase()},${a}&q=goose&utm_medium=qa`),[b,a]);
+  assert.deepEqual(showLineupIds('?ids='+batch.slice(0,24).join(',')),batch.slice(0,24));
+  assert.throws(()=>showLineupIds('?ids='+batch.join(',')));
   for(const query of ['?ids=', '?ids=not-public-id', `?ids=${a},${a}`, `?ids=${b},${b.toUpperCase()}`,
     `?ids=${a}&ids=${b}`, '?ids='+Array(7).fill(a).join(',')]) assert.throws(()=>showLineupIds(query));
 });

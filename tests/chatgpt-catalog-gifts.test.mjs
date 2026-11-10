@@ -58,6 +58,18 @@ test('website card lookup reuses public eligibility and canonical cards without 
   assert.deepEqual((await held.request(`ids=${ids[0]}&view=cards`).json()).products, []);
 });
 
+test('website cards use the existing 24-card feed bound while default ChatGPT lookup remains six', async () => {
+  const batch=Array.from({length:25},(_,i)=>`00000000-0000-4000-8000-${String(i).padStart(12,'0')}`);
+  const f=setup(batch.map((publicId,i)=>product(0,{id:`fixture-${i}`,publicId,slug:`unique-gift-${i}`})));
+  for(const count of [7,24]) {
+    const r=f.request(`ids=${batch.slice(0,count).join(',')}&view=cards`);
+    assert.equal(r.status,200);
+    assert.equal((await r.json()).products.length,count);
+  }
+  assert.equal(f.request(`ids=${batch.join(',')}&view=cards`).status,413);
+  assert.equal(f.request(`ids=${batch.slice(0,7).join(',')}`).status,413);
+});
+
 test('input is bounded before lookup; arbitrary destinations and writes are unsupported', () => {
   const f = setup();
   for (const query of ['', 'ids=', 'ids=bad', `ids=${ids[0]},${ids[0]}`, `ids=${ids[0]}&ids=${ids[1]}`,
