@@ -3,8 +3,9 @@ import type {SiteEnv} from './bindings.ts';
 import type {SiteReleaseIdentity} from './index.ts';
 import {ContentAdminError,createContentRequestStore} from '../../lib/catalog/content-admin.ts';
 import {readHomepageEdition} from '../../lib/catalog/homepage-edition.ts';
-import {validDisplayTitle,readMerchandising,usableCommissionPriority,merchandisingForProduct} from '../../lib/catalog/merchandising.ts';
+import {validDisplayTitle,readMerchandising,usableCommissionPriority,merchandisingForProduct,productTitleView} from '../../lib/catalog/merchandising.ts';
 import {resolvePublicProduct} from '../../lib/catalog/display.ts';
+import {productPresentation} from '../../lib/catalog/presentation.ts';
 import {contentAdminActor} from './content-admin-auth.ts';
 
 const PREFIX='/api/content-admin';
@@ -27,6 +28,7 @@ async function body(request:Request):Promise<Record<string,unknown>>{
 export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;manifest:SiteAssetManifest;releaseIdentity?:SiteReleaseIdentity;
   showCollections:Record<string,string[]>;activeShow:string;now:()=>number}){
   const {snapshot,manifest,now}=options;
+  const metadata=readMerchandising(manifest.merchandising)??{};
   const identities=new Map([...snapshot.products,...snapshot.heldProducts].map(p=>[p.publicId,p]));
   function validate(resource:string,value:unknown,checkCurrent=true){
     const p=object(value);
@@ -83,7 +85,6 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
             applicationEnabled:false});
         }
         if(path==='/campaigns'){
-          const metadata=readMerchandising(manifest.merchandising)??{};
           return response({scope:'compiled_ranking_only',manualActions:null,privateFeed:'not_connected',
             verifiedPreferences:snapshot.products.filter(p=>usableCommissionPriority(merchandisingForProduct(p,metadata),now())>0)
               .map(p=>({publicId:p.publicId,asin:p.id,until:metadata[p.id].commissionUntil}))});
@@ -94,7 +95,9 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
         }
         if(/^\/products\/[a-zA-Z0-9._-]{1,100}$/.test(path)){
           const product=identities.get(path.slice(10));if(!product)return response({error:'product_not_found'},404);
-          return response({published:product,request:await store.get(path)});
+          const current='eligibleUntil' in product?resolvePublicProduct(product,now()):product;
+          const published=current&&'eligibleUntil' in current?productTitleView(productPresentation(current),metadata):current;
+          return response({published,request:await store.get(path)});
         }
         if(path==='/active-show'||/^\/collections\/[a-z0-9][a-z0-9-]{0,59}$/.test(path)){
           const name=path.slice(13),published=path==='/active-show'?{name:options.activeShow}:name==='homepage'?manifest.homepage??null

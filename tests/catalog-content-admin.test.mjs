@@ -77,6 +77,13 @@ test('private status distinguishes already serving from bookkeeping pending and 
   assert.equal(state.hostedSuccessor,'not_observed');assert.equal(state.canStartAnotherPublisher,false);assert.equal(state.applicationEnabled,false);
   assert.equal(f.counts().writes,0);
 });
+test('admin published preview uses the same permanent fallback, not expired supplier copy',async t=>{
+  const f=await fixture(t),product=f.snapshot.products[0],base=structuredClone(product);
+  product.persistent=base;product.title='EXPIRED SUPPLIER TITLE';product.description='EXPIRED SUPPLIER COPY';
+  product.eligibleUntil=new Date(NOW-1).toISOString();
+  const result=await(await f.call('/products/public-1')).json();assert.equal(result.published.title,base.title);
+  assert.doesNotMatch(JSON.stringify(result),/EXPIRED SUPPLIER/);assert.equal(f.counts().writes,0);
+});
 test('exact-ASIN requests dedup ALL identities and idempotently save without starting a provider job',async t=>{
   const f=await fixture(t),key={'Idempotency-Key':'same-admission-request'},payload=f.edit({asin:'B000000777'});
   for(const asin of ['B000000001','B000000099'])assert.equal((await f.call('/admissions',{method:'POST',payload:f.edit({asin})})).status,409);
