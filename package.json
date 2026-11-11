@@ -91,6 +91,7 @@
   "dependencies": {
     "@vercel/postgres": "^0.10.0",
     "drizzle-orm": "^0.45.2",
+    "jose": "6.2.17",
     "next": "16.4.3",
     "openai": "^7.4.0",
     "posthog-js": "^1.417.1",

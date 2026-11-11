@@ -120,6 +120,11 @@ same publisher and exact-ASIN operator, not permission to run a local fallback.
 
 ## Publication, recovery and acceptance
 
+The [content admin request API](CONTENT_ADMIN.md) is an opt-in, disabled-by-default
+foundation. Its HTTP202 drafts do not start jobs or publish content. Never treat
+an admission request or saved collection as an accepted release; runtime
+application and live Access rollout remain explicit follow-up work.
+
 Use the maintained [code-only route](CODE_ONLY_PUBLICATION.md) for code over the
 accepted catalog. Preserve its genuine D1 catalog receipt and accepted pointer.
 After merge, select manual `code` in the existing GitHub Catalog care workflow;

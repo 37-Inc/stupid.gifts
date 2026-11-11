@@ -8,6 +8,8 @@ on:
       - 'scripts/ops/**'
       - 'lib/catalog/**'
       - 'lib/search-demand.ts'
+      - 'workers/site/content-admin*.ts'
+      - 'migrations/d1/0018_content_admin_requests.sql'
       - 'tests/catalog-*.test.mjs'
       - 'package*.json'
 
@@ -36,6 +38,7 @@ jobs:
           sudo apparmor_parser -r .github/catalog-bwrap.apparmor
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run test:catalog-automation
+      - run: node --import tsx --test tests/catalog-content-admin.test.mjs
       - run: node --import tsx --test tests/catalog-title-repairs.test.mjs tests/catalog-short-copy.test.mjs tests/catalog-provider-evidence.test.mjs
       - run: node --import tsx --test tests/catalog-semantic-delta.test.mjs tests/catalog-photo-vector-reuse.test.mjs tests/catalog-publication-read-fetch.test.mjs
       - run: node --import tsx --test tests/catalog-editorial-equivalence.test.mjs
