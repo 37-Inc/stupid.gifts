@@ -45,7 +45,10 @@ function config(derivedCatalog){return {schemaVersion:1,environment:'production'
 test('publication binds optional prepared artifact and separate index without changing native identity or enabling paid calls',async()=>{
   const f=await derivedFixture(),derived={path:'/fixture/private/search.json',sha256:digest(canonicalJson(f.catalog)),indexName:f.catalog.indexName};
   const c=validatePublicationConfig(config(derived));assert.equal(c.semanticSearch.enabled,false);assert.equal(c.indexName,'original-native-index');
-  await verifyPublicationSemanticCatalog({semanticCatalog:f.catalog},c);
+  // Files may be pretty-printed/newline-terminated. The existing binding is
+  // canonical JSON, not a second raw-file digest invented by runtime loaders.
+  const bytes=JSON.stringify(f.catalog,null,2)+'\n';assert.notEqual(digest(bytes),derived.sha256);
+  assert.deepEqual(await verifyPublicationSemanticCatalog({semanticCatalog:JSON.parse(bytes)},c),f.catalog);
   await assert.rejects(verifyPublicationSemanticCatalog({semanticCatalog:{...f.catalog,indexName:'wrong-index'}},c),/changed/);
   await assert.rejects(verifyPublicationSemanticCatalog({},c));
   const old={...c};delete old.semanticSearch;await verifyPublicationSemanticCatalog({},old);

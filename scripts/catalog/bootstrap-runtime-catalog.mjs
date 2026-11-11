@@ -19,6 +19,7 @@ import {readRuntimeCatalogData} from '../../lib/catalog/runtime-catalog.ts';
 import {deployRuntimeApp} from './deploy-runtime-app.mjs';
 import {createContentRequestStore} from '../../lib/catalog/content-admin.ts';
 import {applyRuntimeCollection} from '../../lib/catalog/runtime-collections.ts';
+import {verifyPublicationSemanticCatalog} from './publish-release.ts';
 import {SHOW_PRESETS,ACTIVE_SHOW_PRESET,selectShowPicks} from '../../static-site/lib/show-rehearsal.ts';
 
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url))),hash=b=>createHash('sha256').update(b).digest('hex'),json=b=>JSON.parse(Buffer.from(b).toString('utf8'));
@@ -100,7 +101,7 @@ export async function bootstrapRuntimeCatalog({runtime,source,root=ROOT,send=fet
       }
       let semanticCatalog;
       if(previous.semanticSearch?.derivedCatalog){const ref=previous.semanticSearch.derivedCatalog,bytes=await runtime.state.bytes(ref.path);
-        if(hash(bytes)!==ref.sha256)fail('semantic_descriptor_changed');semanticCatalog=json(bytes);}
+        semanticCatalog=await verifyPublicationSemanticCatalog({semanticCatalog:json(bytes)},previous);}
       const assets={};
       const registerFinite=ref=>db.batch([mutationAssertion(db,owner,['freezing']),db.prepare('INSERT INTO catalog_runtime_retention(object_key,sha256,not_after,release_id) VALUES(?,?,?,?) ON CONFLICT(object_key) DO NOTHING')
         .bind(ref.key,ref.sha256,ref.notAfter,seal.publication.releaseId)]);
