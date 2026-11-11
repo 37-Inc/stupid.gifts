@@ -23,7 +23,8 @@ import {applyRuntimeCollection} from '../../lib/catalog/runtime-collections.ts';
 /** One atomic data-head transition, under the ORIGINAL catalog mutation fence.
  * No Worker dispatch, lease or activation is invented for a data publication. */
 export async function publishRuntimeCatalog(input:{db:CatalogD1;owner:MutationOwner;revision:ApprovedCohortRevision;
-  config:PublicationConfig;configSha256:string;requestId:string;runReference:string;workspace:RunWorkspace;store:CatalogObjectStore;editHomepage?:boolean;now?:()=>Date}):Promise<PublicationResult>{
+  config:PublicationConfig;configSha256:string;requestId:string;runReference:string;workspace:RunWorkspace;store:CatalogObjectStore;
+  editHomepage?:boolean;retainOriginalFailedTelemetry?:boolean;now?:()=>Date}):Promise<PublicationResult>{
   const {db,config,revision,workspace:ws,owner}=input,policy=config.runtimeCatalog,now=input.now??(()=>new Date());
   if(!policy||owner.phase!=='freezing')throw Error('runtime_publication_invalid');
   let checkpoint=await ws.readCheckpoint();if(!checkpoint)throw Error('runtime_checkpoint_missing');
@@ -61,7 +62,8 @@ export async function publishRuntimeCatalog(input:{db:CatalogD1;owner:MutationOw
       {source:{releaseId:config.releaseId,receiptSha256:sha256(canonicalJson(receipt)),deliveryId:String(native[0].delivery_id),deliverySha256:sha256(canonicalJson(native[0]))},
         revisionSha256:request.revisionSha256,planSha256:request.planSha256,ids:[...plan.products.map(p=>p.publicId),...plan.absentIds]});
     catalogSuccessorBytes(seal);
-    const handoff=Buffer.from(canonicalJson({schemaVersion:1,owner,receipt,seal,summary:await ws.readArtifact(checkpoint.checkpoint.phaseComplete!)})),handoffSha256=sha256(handoff);
+    const handoff=Buffer.from(canonicalJson({schemaVersion:1,owner,receipt,seal,retainOriginalFailedTelemetry:Boolean(input.retainOriginalFailedTelemetry),
+      summary:await ws.readArtifact(checkpoint.checkpoint.phaseComplete!)})),handoffSha256=sha256(handoff);
     await input.store.putImmutable('runtime-handoffs/'+handoffSha256+'.json',handoff);
     control={schemaVersion:1,configSha256:input.configSha256,requestId:input.requestId,runReference:input.runReference,
       releaseId:config.releaseId,dataSha256:exported.dataSha256,sourceSnapshotSha256:exported.sourceSnapshotSha256,
