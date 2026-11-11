@@ -17,6 +17,16 @@ async function queue(runtime){
   return{bytes,value};
 }
 async function save(runtime,q){return runtime.state.pointer('cleanup-runs',runtime.care+'/cleanup-runs.json',q.value,q.bytes);}
+/** Catalog registration and housekeeping now run in separate job queues. CAS
+ * conflicts must merge against a fresh pointer, never overwrite a new run. */
+async function changeQueue(runtime,change){
+  for(let attempt=0;attempt<3;attempt++){
+    const q=await queue(runtime);if(change(q.value.runs)===false)return;
+    try{return await save(runtime,q);}catch(error){
+      if(!['catalog_operator_state_pointer_conflict','catalog_object_store_conflict'].includes(error.message)||attempt===2)throw error;
+    }
+  }
+}
 async function manifestFor(runtime,runId){
   const object=await runtime.durable.get('runs/'+runId+'/manifest.json');if(!object)fail();
   const manifest=json(object.bytes);
@@ -29,11 +39,11 @@ async function manifestFor(runtime,runId){
  * It carries only a hash of the ORIGINAL manifest, never a new retention policy. */
 export async function registerHostedWorkspaceCleanup(runtime,manifest){
   const actual=await manifestFor(runtime,manifest.runId);if(canonicalJson(actual)!==canonicalJson(manifest))fail();
-  const q=await queue(runtime),dueAt=new Date(Math.min(...Object.values(manifest.retention.rules).map(rule=>
+  const dueAt=new Date(Math.min(...Object.values(manifest.retention.rules).map(rule=>
     Math.min(Date.parse(rule.notAfter),Date.parse(manifest.createdAt)+rule.maxAgeMs)))).toISOString();
-  const ref={runId:manifest.runId,source:manifest.codeSha,manifestSha256:hash(canonicalJson(manifest)),dueAt},prior=q.value.runs.find(r=>r.runId===ref.runId);
-  if(prior){if(canonicalJson(prior)!==canonicalJson(ref))fail();return;}
-  q.value.runs.push(ref);await save(runtime,q);
+  const ref={runId:manifest.runId,source:manifest.codeSha,manifestSha256:hash(canonicalJson(manifest)),dueAt};
+  await changeQueue(runtime,runs=>{const prior=runs.find(r=>r.runId===ref.runId);
+    if(prior){if(canonicalJson(prior)!==canonicalJson(ref))fail();return false;}runs.push(ref);});
 }
 export async function registerHostedCleanup(runtime,record){
   const directory=runtime.care+'/runs/'+record.runKey,operator=json(await runtime.state.bytes(directory+'/operator.json'));
@@ -73,11 +83,13 @@ export async function cleanupHostedRuns(runtime,checkout,{now=()=>new Date().toI
         ||success.idle?.phase!=='idle'||success.idle.externalPending!==0)fail();
     }else if(cp?.checkpoint.phase!=='finalized'||cp.checkpoint.owner!==null||!await workspace.catalogSuccessor())fail();
     const purged=(await workspace.purgeExpired()).length,remaining=await workspace.retainedBodies();
-    q.value.runs=q.value.runs.filter(r=>r.runId!==ref.runId);if(remaining)q.value.runs.push(ref);await save(runtime,q);
+    await changeQueue(runtime,runs=>{const index=runs.findIndex(r=>r.runId===ref.runId);if(index<0)return false;
+      if(canonicalJson(runs[index])!==canonicalJson(ref))fail();runs.splice(index,1);if(remaining)runs.push(ref);});
     return{state:'cleaned',runId:ref.runId,purged,remaining};
   }catch(error){
     // One broken historical source must not starve other due registrations.
-    q.value.runs=q.value.runs.filter(r=>r.runId!==ref.runId);q.value.runs.push(ref);
-    try{await save(runtime,q);}catch{/* Original durable registration remains. */}throw error;
+    try{await changeQueue(runtime,runs=>{const index=runs.findIndex(r=>r.runId===ref.runId);if(index<0)return false;
+      if(canonicalJson(runs[index])!==canonicalJson(ref))fail();runs.push(...runs.splice(index,1));});}
+    catch{/* Original durable registration remains. */}throw error;
   }finally{await workspace?.close();}
 }

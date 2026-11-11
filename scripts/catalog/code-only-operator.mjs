@@ -242,7 +242,7 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
   }finally{await workspace.close();workspace=null;}
   if(success){
     await rememberServing(success);
-    await cleanupAcceptedPublication({...workspaceOptions,mode:'resume'},record.runId);
+    if(!runtime.hosted)await cleanupAcceptedPublication({...workspaceOptions,mode:'resume'},record.runId);
   }
   console.log(JSON.stringify({state:success?'published':result.state,runId:record.runId,...(result.errorCode?{errorCode:result.errorCode}:{}),supplierCalls:0,modelCalls:0,catalogPointerChanged:false}));
 }

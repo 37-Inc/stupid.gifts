@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {PassThrough} from 'node:stream';
 import {once} from 'node:events';
-import {coordinateHostedCatalog,hostedRunRecord,hostedInvocationDay,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader,hostedAdmissionAsins,assertUnpreparedHostedAdmission} from '../scripts/catalog/hosted-coordinator.mjs';
+import {coordinateHostedCatalog,hostedRunRecord,hostedInvocationDay,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader,hostedAdmissionAsins,assertUnpreparedHostedAdmission,reportHostedCleanupFailure} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
 import {routineReviewProduct,routineRecoveryPhase,operatorInvocation,routineHostedPending,routineHostedPreparation} from '../scripts/catalog/daily-operator.mjs';
@@ -223,13 +223,39 @@ test('scheduled retry resumes the original exact admission, never starts ordinar
   assert.equal(result.resumed,true);assert.equal(f.calls.slice(before).some(args=>args[0]==='prepare'),false);
   assert.equal(f.calls.filter(args=>args[0]==='prepare').length,1);
 });
-test('historical cleanup runs only after publication acceptance and cleared pending pointer; failure does not undo acceptance',async()=>{
+test('publication acceptance clears pending without awaiting historical cleanup in the deployment job',async()=>{
   const f=fixture();let cleanups=0;
   const result=await f.run({}, {cleanup:async()=>{
     cleanups++;assert.equal(f.phase,'finalized');assert.ok(f.events.includes('publish'));
     assert.deepEqual(JSON.parse(f.pointer()),{schemaVersion:1,pending:null});throw Error('historical cleanup unavailable');
   }});
-  assert.equal(result.state,'accepted');assert.equal(cleanups,1);
+  assert.equal(result.state,'accepted');assert.equal(cleanups,0);
+  assert.deepEqual(JSON.parse(f.pointer()),{schemaVersion:1,pending:null});
+});
+test('standalone cleanup failure remains advisory but emits a safe reason and GitHub warning without raw errors',()=>{
+  for(const message of ['catalog_object_store_write_unknown','catalog_operator_state_pointer_conflict','run_workspace_durable_missing',
+    'catalog_hosted_cleanup_identity','raw secret https://private.invalid/token','catalog_object_store_bad\nsecret']){
+    const warnings=[],report=reportHostedCleanupFailure(Error(message),value=>warnings.push(value)),
+      known=!message.includes('secret'),expected=known?message:'catalog_hosted_cleanup_failed';
+    assert.deepEqual(report,{notice:'catalog_hosted_cleanup_pending',errorCode:expected,catalogBlocked:false});
+    assert.deepEqual(JSON.parse(warnings[0]),report);assert.match(warnings[1],/^::warning::/);assert.ok(warnings[1].includes(expected));
+    assert.doesNotMatch(warnings.join('\n'),/raw secret|private.invalid|\nsecret/);
+  }
+});
+test('accepted catalog and following code-only queue handoff do not wait for a blocked historical cleanup',async t=>{
+  const f=fixture();let releaseCleanup,cleanupCompleted=false;
+  const historicalCleanup=new Promise(resolve=>{releaseCleanup=()=>{cleanupCompleted=true;resolve();};});
+  const started=performance.now();let timeout;
+  try{
+    const accepted=await Promise.race([f.run({}, {cleanup:()=>historicalCleanup}),new Promise((_,reject)=>{
+      timeout=setTimeout(()=>reject(Error('publication waited for historical cleanup')),1000);
+    })]);
+    assert.equal(accepted.state,'accepted');assert.equal(cleanupCompleted,false);
+    const following=await f.run({mode:'code'},{codeOnly:async()=>({state:'published',runId:'code-next',supplierCalls:0,modelCalls:0,catalogPointerChanged:false})});
+    assert.equal(following.state,'accepted');assert.equal(following.codeOnly,true);assert.equal(cleanupCompleted,false);
+    t.diagnostic(JSON.stringify({localFixture:true,queueHandoffMs:Math.round(performance.now()-started),historicalCleanupStillBlocked:true,
+      addedSupplierCalls:0,addedModelCalls:0}));
+  }finally{clearTimeout(timeout);releaseCleanup();await historicalCleanup;}
 });
 
 test('code-only release uses the same pending pointer without invoking any catalog/provider phase',async()=>{
@@ -574,12 +600,22 @@ test('one Pacific workflow remains main-only, protected, serialized and has no P
   assert.match(yaml,/inputs.mode \|\| \(\(github.event.schedule == '30 20 \* \* \*' \|\| github.event.schedule == '30 22 \* \* \*'\) && 'photos' \|\| 'full'\)/);
   assert.match(yaml,/CATALOG_SCHEDULE: \$\{\{ github.event.schedule \|\| '' \}\}/);
   assert.match(yaml,/group: catalog-production/);assert.match(yaml,/cancel-in-progress: false/);assert.match(yaml,/environment: Production/);
+  assert.doesNotMatch(yaml,/\nconcurrency:/,'Whole-workflow concurrency would keep historical cleanup in the publication queue');
+  const cleanup=yaml.slice(yaml.indexOf('\n  cleanup:'));
+  assert.match(cleanup,/needs: catalog/);assert.match(cleanup,/group: catalog-cleanup/);
+  assert.doesNotMatch(cleanup,/group: catalog-production|CLOUDFLARE_API_TOKEN|AMAZON_|OPENAI_|WEBSITE_CAMPAIGNS/);
+  assert.match(cleanup,/R2_ACCESS_KEY_ID/);assert.match(cleanup,/R2_SECRET_ACCESS_KEY/);
+  assert.match(cleanup,/hosted-coordinator.mjs cleanup/);
   assert.match(yaml,/timeout-minutes: 360/);
   const source=await readFile(new URL('../scripts/catalog/hosted-coordinator.mjs',import.meta.url),'utf8');
   assert.doesNotMatch(source.slice(source.indexOf('async invoke('),source.indexOf('async inspect(')),/\btimeout:/);
   assert.match(yaml,/if: github.ref == 'refs\/heads\/main'/);assert.match(yaml,/runs-on: ubuntu-24.04/);assert.match(yaml,/node-version: '22.23.1'/);
   assert.match(yaml,/persist-credentials: false/);assert.match(yaml,/apparmor_parser -r \.github\/catalog-bwrap.apparmor/);
   assert.doesNotMatch(yaml,/sysctl|--privileged|curl.*secret/i);assert.match(yaml,/npm ci --ignore-scripts/);
+  const daily=await readFile(new URL('../scripts/catalog/daily-operator.mjs',import.meta.url),'utf8'),
+    code=await readFile(new URL('../scripts/catalog/code-only-operator.mjs',import.meta.url),'utf8');
+  assert.match(daily,/result.state==='finalized'&&!RUNTIME.hosted/);
+  assert.match(code,/if\(!runtime.hosted\)await cleanupAcceptedPublication\(\{\.\.\.workspaceOptions/);
 });
 
 test('evening photo retries and delayed-after-midnight dispatch share one UTC slot without consuming the next evening',()=>{

@@ -35,13 +35,12 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: catalog-production
-  cancel-in-progress: false
-
 jobs:
   catalog:
     if: github.ref == 'refs/heads/main'
+    concurrency:
+      group: catalog-production
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     environment: Production
     timeout-minutes: 360
@@ -80,3 +79,37 @@ jobs:
         run: |
           umask 077
           node --import tsx scripts/catalog/hosted-coordinator.mjs "$CATALOG_MODE" "$CATALOG_CANARY_ASIN" "$CATALOG_ADMIT_ASINS" "$CATALOG_ADMIT_SAVED_RUN"
+
+  cleanup:
+    name: Stupid Gifts — Expired cleanup
+    needs: catalog
+    if: >-
+      github.ref == 'refs/heads/main' && needs.catalog.result == 'success' &&
+      (github.event_name == 'schedule' || inputs.mode == 'code' || inputs.mode == 'full' ||
+       inputs.mode == 'photos' || inputs.mode == 'canary' || inputs.mode == 'admit')
+    runs-on: ubuntu-24.04
+    environment: Production
+    timeout-minutes: 360
+    concurrency:
+      group: catalog-cleanup
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.23.1'
+      - name: Install cleanup dependencies without application credentials
+        run: >-
+          env -i HOME=/home/runner PATH="$PATH" CI=true
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Clean one due original workspace
+        env:
+          STUPID_GIFTS_OPERATOR_MODE: hosted
+          STUPID_GIFTS_R2_ACCESS_KEY_ID: ${{ secrets.STUPID_GIFTS_R2_ACCESS_KEY_ID }}
+          STUPID_GIFTS_R2_SECRET_ACCESS_KEY: ${{ secrets.STUPID_GIFTS_R2_SECRET_ACCESS_KEY }}
+        run: |
+          umask 077
+          node --import tsx scripts/catalog/hosted-coordinator.mjs cleanup

@@ -124,6 +124,13 @@ export function hostedOperatorFailure(error){
   return{state:'attention',errorCode:code??(error.killed?'catalog_hosted_operator_timeout':'catalog_hosted_operator_failed'),
     ...(diagnostic?{diagnostic}:{}),...(causeCode?{causeCode}:{})};
 }
+export function reportHostedCleanupFailure(error,warn=console.warn){
+  const code=error instanceof Error?error.message:'',errorCode=/^(?:catalog_(?:hosted_cleanup|operator_state|object_store)|run_workspace)_[a-z0-9_]{1,100}$/.test(code)
+    ?code:'catalog_hosted_cleanup_failed';
+  const report={notice:'catalog_hosted_cleanup_pending',errorCode,catalogBlocked:false};
+  warn(JSON.stringify(report));warn(`::warning::Expired catalog cleanup needs attention (${errorCode}); original registration retained.`);
+  return report;
+}
 export function validateHostedProposal({bytes,sha256,runId,catalogRevision,summary,approvalPin}){
   if(!HASH.test(sha256)||hash(bytes)!==sha256)fail('proposal_digest');const value=json(bytes);
   if(!exact(value,'schemaVersion,runId,catalogRevision,changes')||value.schemaVersion!==1||value.runId!==runId
@@ -254,7 +261,6 @@ function defaults(runtime,environment){
       return result;
     },
     registerCleanup:async record=>(await import('./hosted-cleanup.mjs')).registerHostedCleanup(runtime,record),
-    cleanup:async checkout=>(await import('./hosted-cleanup.mjs')).cleanupHostedRuns(runtime,checkout),
   };
 }
 
@@ -319,10 +325,9 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
   const finish=async result=>{
     if(result.state==='accepted'&&record.kind!=='code')await deps.registerCleanup(record);
     await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:null},pointerBytes);
-    // Historical supplier-body housekeeping follows actual acceptance/skip.
-    // It retains the original source/lease/deadlines, but cannot delay a new
-    // catalog's supplier phases, activation, or accepted-successor handoff.
-    try{await deps.cleanup(deps.checkout);}catch{console.warn(JSON.stringify({notice:'catalog_hosted_cleanup_pending',catalogBlocked:false}));}
+    // A dependent job handles expired bodies after catalog-production releases.
+    // Generated checkout output belongs to this ephemeral runner; no full
+    // workspace rehydration is needed merely to delete a departed runner's files.
     return{...result,runKey:record.runKey,kind:record.kind,resumed};};
   if(record.kind==='code'){
     const result=await deps.codeOnly(record,directory);
@@ -420,6 +425,14 @@ async function main(){
   if((await exec('git',['rev-parse','HEAD'],{cwd:ROOT,env:hostedCommandEnvironment(process.env,{credentials:false})})).stdout.trim()!==source)fail('reviewed_source');
   const now=new Date(),capturedDay=hostedInvocationDay(mode,now);
   console.log(JSON.stringify({state:'started',mode,scheduledEvent:process.env.CATALOG_SCHEDULE||null,runDay:capturedDay,startedAt:now.toISOString()}));
+  if(mode==='cleanup'){
+    if(canaryId||admissionList||savedRun)fail('invocation');
+    const {cleanupHostedRuns}=await import('./hosted-cleanup.mjs'),checkout=defaults(runtime,process.env).checkout;
+    try{
+      console.log(JSON.stringify(await cleanupHostedRuns(runtime,checkout)));
+    }catch(error){reportHostedCleanupFailure(error);}
+    return;
+  }
   if(mode==='activate'){
     const {activateHostedPolicy}=await import('./hosted-policy.mjs');
     console.log(JSON.stringify(await activateHostedPolicy(runtime,canaryId)));return;

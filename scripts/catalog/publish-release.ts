@@ -46,7 +46,7 @@ import { createVectorizeRestAdapters } from './vectorize-rest.ts';
 import type { RunWorkspace, PublicationControl, ArtifactRef } from './run-workspace.ts';
 import { semanticBudgetConfig } from '../../workers/site/semantic-budget.ts';
 import { verifySemanticCatalogIdentities, DERIVED_SEARCH_PROFILE } from '../../lib/catalog/semantic-profile.ts';
-import {assertAcceptedCodeOnlyBinding,readAcceptedCodeOnlyCatalog,acceptedCodeOnlyOperationKey} from './accepted-code-only.ts';
+import {assertAcceptedCodeOnlyBinding,recheckAcceptedCodeOnlyCatalog,acceptedCodeOnlyOperationKey} from './accepted-code-only.ts';
 import type {AcceptedCodeOnlyRead,AcceptedCodeOnlyControl} from './accepted-code-only.ts';
 
 /** Explicit protected local operator path, NOT a scheduler or a cross-host lock.
@@ -649,8 +649,8 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       // The accepted seal authenticates immutable native delivery bytes. An
       // unchanged global watermark/no-pending barrier under this sole owner is
       // sufficient for code-only reuse; do not download/rewrite the vectors.
-      if(serving){signal?.throwIfAborted();const proof=await readAcceptedCodeOnlyCatalog({db,owner,seal:serving.seal,
-        authority:serving.authority,runReference:options.runReference});signal?.throwIfAborted();return proof;}
+      if(serving){signal?.throwIfAborted();const proof=await recheckAcceptedCodeOnlyCatalog({db,owner,input:serving as AcceptedCodeOnlyRead,
+        runReference:options.runReference});signal?.throwIfAborted();return proof;}
       const adapters=createVectorizeRestAdapters({environment:config.environment,indexName:config.indexName,
         accountId:config.accountId,token:options.credentials.cloudflareToken,fetch:observationSend});
       if(options.permanent){
@@ -668,7 +668,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // Full-catalog scans are sequential owned D1 reads, not a short provider
     // observation. No proof survives this invocation or crosses an owner change.
     const permanentProof=async()=>{
-      if(serving){await readAcceptedCodeOnlyCatalog({db,owner,seal:serving.seal,authority:serving.authority,runReference:options.runReference});return;}
+      if(serving){await recheckAcceptedCodeOnlyCatalog({db,owner,input:serving as AcceptedCodeOnlyRead,runReference:options.runReference});return;}
       if(!options.permanent&&!options.approvedCatalog?.persistent)return;
       const remaining=control!.permit?(options.routineCare?900_000:120_000):Date.parse(activationDeadline??control!.build.request.cutoff)-now().getTime();
       await withPublicationInventorySignal(Boolean(options.routineCare),remaining,async signal=>{
@@ -1051,6 +1051,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       return executePublication({...options,owner,dependencies:options.dependencies});
     const intent=intentFrom(sealed.manifest,sealed.bytes);
     if(control.intent&&canonicalJson(control.intent)!==canonicalJson(intent))throw new Error('publication_package_changed');
+    if(serving&&control.stage==='built')await permanentProof();
     if(control.stage==='built'){
       const protectedUpload=isAccountedPublicationUploadCommand(command);
       await enqueuePublication(db,sealed.snapshot,intent,now(),serving?.authority);
@@ -1093,6 +1094,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     assertBuildSource(config.sourceRoot,config.codeSha);
     await loadPackage(directory,config,control.packageSha256!,now());
     verifyUploadedVersion(await api.version(control.versionReference!),config,control.versionReference!,control);
+    if(serving)await permanentProof();
     if(!reviewed)await recordPublicationDispatch(db,sealed.snapshot,control.publication!,`version:${control.versionReference}`,now(),serving?.authority);
     // Persist exact deployment intent BEFORE the D1 CAS and actual POST. A crash
     // after this point is reconciled from the exact claim, never automatically POSTed.

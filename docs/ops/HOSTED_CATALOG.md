@@ -150,11 +150,17 @@ alternate daily commands; use the maintained same-run recovery path below.
   mandatory. Legacy dispatchers and explicit historical recoveries keep their
   existing timed-lease rules; uncertain uploads are never bypassed.
 - Completed hosted runs enter a small `cleanup-runs` housekeeping pointer before
-  their pending intent is cleared. Each existing wake revisits one due original
-  workspace using its immutable source/config and registered deadlines. Only
+  their pending intent is cleared. Each existing wake has a dependent cleanup
+  job, separately serialized from the `catalog-production` publication job; it
+  revisits one due original workspace using immutable source/config and original
+  registered deadlines. Concurrent registration/cleanup pointer CAS conflicts
+  merge fresh state, never drop a newer registration. Only
   expired body/package bytes are purged; source bindings, controls and charges
   remain. A cleanup failure retains its registration and alerts without blocking
-  a new catalog run. This is not another publisher or scheduled service.
+  a new catalog run. Local generated build directories disappear with the hosted
+  ephemeral runner; there is no new-runner restoration merely to clean them.
+  Persistent local operators retain source-only output cleanup. This is not
+  another publisher or scheduled service, and no retention clock is renewed.
 - Provider header/body timeouts exclude the coordinator's own durable journal
   reservation and settlement. Those writes retain their separate bounded R2
   transport and must finish before the caller releases ownership. A slow journal
