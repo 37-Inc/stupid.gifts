@@ -168,7 +168,7 @@ export type { PublicationControl } from './run-workspace.ts';
 export interface PublicationCommand { file:string;args:string[];cwd:string;env:NodeJS.ProcessEnv;timeoutMs:number }
 // A separate READ-only sender never receives upload/activation dispatches.
 type Dependencies={fetch?:typeof fetch;observationFetch?:typeof fetch;command?:(command:PublicationCommand)=>Promise<void>;now?:()=>Date};
-export type PublicationResult={state:'pending';owner:MutationOwner;errorCode:string}|{
+export type PublicationResult={state:'pending';owner:MutationOwner;errorCode:string;phase?:string}|{
   state:'published';owner:null;releaseId:string;receiptSha256:string;receipt:Record<string,unknown>;
 };
 /** A trusted operator's actual retained bridge ledger/log + one independently
@@ -1218,7 +1218,16 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // exact durable control/package and has no second activation path.
     return executePublication({...options,owner,dependencies:options.dependencies});
   }catch(error){
-    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_|vector_|accepted_code_only_|accepted_catalog_|serving_publication_|serving_observation_)[a-z_]+$/.test(error.message)?error.message:'publication_pending';
-    return{state:'pending',owner,errorCode:code};
+    const known:Record<string,string>={
+      'Prepared feed changed after the release was built':'publication_saved_feed_changed',
+      'Release context changed after the release was built':'publication_saved_context_changed',
+      'Site identity changed or disagrees with the reviewed source mode':'publication_saved_site_identity_changed',
+      'Release build context is malformed or incompatible':'publication_saved_context_incompatible',
+      'Invalid homepage edition':'publication_saved_homepage_invalid',
+      'Invalid merchandising signals':'publication_saved_merchandising_invalid',
+    };
+    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_|vector_|accepted_code_only_|accepted_catalog_|serving_publication_|serving_observation_)[a-z_]+$/.test(error.message)?error.message
+      :error instanceof Error&&known[error.message]||'publication_pending';
+    return{state:'pending',owner,errorCode:code,phase:control?.stage??'preflight'};
   }
 }

@@ -337,7 +337,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
       &&(result.state==='already_completed'||result.catalogPointerChanged===false))
       return finish({state:'accepted',releaseId:result.runId,codeOnly:true,historicalAcceptance:result.historicalAcceptance===true,
         supplierCalls:0,modelCalls:0,catalogPointerChanged:false});
-    return{state:'attention',runKey:record.runKey,errorCode:result.errorCode??'catalog_hosted_code_pending'};
+    return{state:'attention',runKey:record.runKey,...(result.phase?{phase:result.phase}:{}),errorCode:result.errorCode??'catalog_hosted_code_pending'};
   }
   const invoke=(command,extra=[])=>deps.invoke(directory,[command,...extra,'--run',record.runKey]);
   const publish=(status,sha)=>record.source!==source
