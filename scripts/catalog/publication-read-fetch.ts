@@ -82,11 +82,17 @@ function accountedFetch(ws:Pick<RunWorkspace,'reserveBudget'|'settleBudget'>,sen
       &&url.pathname===`${worker}/versions`&&[...url.searchParams.keys()].sort().join(',')==='page,per_page'
       &&/^(?:[1-9]|10)$/.test(url.searchParams.get('page')??'')&&url.searchParams.get('per_page')==='10';
     let native=false,mutation=false;
+    if(!readOnly&&method==='POST'&&url.origin==='https://api.cloudflare.com'&&url.pathname===`${vector}/upsert`
+      &&typeof init.body==='string'&&Buffer.byteLength(init.body)<=384*1024){
+      try{const rows=init.body.trim().split('\n').map(line=>JSON.parse(line));
+        mutation=rows.length>0&&rows.length<=8&&rows.every(row=>mutationBody(row,'upsert'))&&new Set(rows.map(row=>row.id)).size===rows.length;
+      }catch{}
+    }
     if(method==='POST'&&url.origin==='https://api.cloudflare.com'&&typeof init.body==='string'&&Buffer.byteLength(init.body)<=128*1024){
       try{const body=JSON.parse(init.body);
         native=url.pathname===`${vector}/get_by_ids`&&Buffer.byteLength(init.body)<=4096&&ids(body);
         if(derived&&url.pathname===`${derived}/get_by_ids`&&Buffer.byteLength(init.body)<=4096&&derivedIds(body))native=true;
-        mutation=!readOnly&&(url.pathname===`${vector}/delete_by_ids`&&ids(body)
+        mutation=mutation||!readOnly&&(url.pathname===`${vector}/delete_by_ids`&&ids(body)
           ||url.pathname===`${vector}/upsert`&&mutationBody(body,'upsert')
           ||!!derived&&url.pathname===`${derived}/upsert`&&derivedVector(body)
           ||url.pathname===`${worker}/deployments`&&mutationBody(body,'deploy'));

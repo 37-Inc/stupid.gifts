@@ -19,7 +19,7 @@ import { editorialSourceHash } from '../scripts/ops/catalog-editorial-core.mjs';
 import { nativeHash, payloadVector } from '../scripts/catalog/vector-outbox.ts';
 import { abandonExpiredPrunedRevision, deliverOwnedOutboxEvent, deliverOwnedApprovedCohortVector, readOwnedApprovedCohortVectors,
   reuseOwnedApprovedCohortVectorProof, readActivatedCatalogVectors, settleOwnedApprovedCohortVectorProof, prepareOwnedApprovedCohortPlan,
-  resumeOwnedPrunedDelete } from '../scripts/catalog/owned-vector-delivery.ts';
+  resumeOwnedPrunedDelete,deliverOwnedApprovedCohortBatch } from '../scripts/catalog/owned-vector-delivery.ts';
 import { claimBuildRequest, beginBuildActivation, resolveBuildActivation } from '../lib/catalog/build-requests.ts';
 import { enqueuePublication, claimPublication, recordPublicationDispatch, completeActivatedApprovedCatalogPublication } from '../lib/catalog/publication.ts';
 import { approvedRevisionControl, hydrateApprovedRevision, createApprovedCatalogSeal, readApprovedPrior } from '../scripts/catalog/approved-catalog-seal.ts';
@@ -30,6 +30,68 @@ import { createVectorizeRestAdapters } from '../scripts/catalog/vectorize-rest.t
 import { accountedPublicationReadFetch } from '../scripts/catalog/publication-read-fetch.ts';
 
 const AT = Date.parse('2026-10-20T12:00:00.000Z');
+async function batchFixture(t,count=4){
+  const f=await setup(t,{initial:count}),claim=await f.freeze();
+  const prepared=await prepareOwnedApprovedCohortPlan({db:f.db,...claim,adapters:f.adapters});
+  let sends=0,unknown=false,visible=true;
+  const adapters={...f.adapters,async dispatchBatch(items){sends++;for(const p of items)f.index.set(p.publicId,structuredClone(p.vector));
+    if(unknown)throw Error('lost ack');return{reference:'batch-reference'};},
+    async readbacks(ids){return ids.map(id=>visible?structuredClone(f.index.get(id)):null);},
+    async resolve({reference}){return reference?{state:'settled',reference}:{state:'pending'};}};
+  const options={db:f.db,owner:prepared.owner,revision:prepared.revision,publicIds:prepared.remainingIds,adapters,originals:Object.fromEntries(f.originals)};
+  return{f,options,sends:()=>sends,unknown:()=>{unknown=true;},hide:()=>{visible=false;},show:()=>{visible=true;}};
+}
+test('eight-product native batch stays inside existing D1 wire bounds',async t=>{
+  const b=await batchFixture(t,8),wire=new WeakMap(),metrics={maxBytes:0,maxStatements:0},original=b.f.db;
+  const db={...original,prepare(sql){const statement=original.prepare(sql),bind=statement.bind;
+    wire.set(statement,{sql,params:[]});statement.bind=function(...params){wire.set(statement,{sql,params});return bind.apply(this,params);};return statement;},
+    async batch(statements){const bytes=Buffer.byteLength(JSON.stringify({batch:statements.map(s=>wire.get(s))}));
+      metrics.maxBytes=Math.max(metrics.maxBytes,bytes);metrics.maxStatements=Math.max(metrics.maxStatements,statements.length);
+      assert.ok(bytes<=512*1024,`D1 wire bytes: ${bytes}`);return original.batch(statements);}};
+  const first=await deliverOwnedApprovedCohortBatch({...b.options,db});assert.equal(first.state,'pending');
+  const next=await deliverOwnedApprovedCohortBatch({...b.options,db,owner:first.owner});assert.equal(next.state,'complete');
+  assert.equal(b.sends(),1);assert.ok(metrics.maxBytes>0);assert.ok(first.publicIds.length<8);
+  assert.deepEqual(next.publicIds,first.publicIds);
+  const remaining=b.options.publicIds.slice(next.publicIds.length);
+  const rest=await deliverOwnedApprovedCohortBatch({...b.options,db,owner:next.owner,publicIds:remaining});
+  const done=await deliverOwnedApprovedCohortBatch({...b.options,db,owner:rest.owner,publicIds:remaining});
+  assert.equal(done.state,'complete');assert.equal(b.sends(),2);
+  assert.equal((await readOwnedApprovedCohortVectors(db,done.owner,b.options.revision,b.options.adapters)).settled,true);
+  t.diagnostic(JSON.stringify(metrics));
+});
+test('native batch uses one real dispatch for four gifts, survives completion ACK loss and retains existing full proof',async t=>{
+  const b=await batchFixture(t),first=await deliverOwnedApprovedCohortBatch(b.options);
+  assert.equal(first.state,'pending');assert.equal(b.sends(),1);
+  assert.equal(b.f.sql.prepare('SELECT external_pending n FROM catalog_mutation_scopes').get().n,1);
+  const rows=b.f.sql.prepare("SELECT * FROM catalog_vector_deliveries WHERE generation=? AND json_extract(request_json,'$.kind')='prune'").all(first.owner.generation);
+  assert.equal(rows.length,4);assert.equal(new Set(rows.map(r=>r.mutation_reference)).size,1);
+  for(const r of rows)assert.ok(Object.is(b.f.index.get(JSON.parse(r.request_json).publicId).values[0],-0));
+  await assert.rejects(deliverOwnedApprovedCohortVector({...b.options,owner:first.owner,publicId:b.options.publicIds[0],original:b.options.originals[b.options.publicIds[0]]}),/vector_batch_resume_required/);
+  b.f.lose(statements=>statements.some(s=>s.query.includes("SET status='complete'")));
+  const next=await deliverOwnedApprovedCohortBatch({...b.options,owner:first.owner});assert.equal(next.state,'complete');assert.equal(b.sends(),1);
+  const repeat=await deliverOwnedApprovedCohortBatch({...b.options,owner:next.owner});assert.equal(repeat.state,'complete');assert.equal(b.sends(),1);
+  assert.equal((await readOwnedApprovedCohortVectors(b.f.db,next.owner,b.options.revision,b.options.adapters)).settled,true);
+  assert.equal(b.f.sql.prepare('SELECT external_pending n FROM catalog_mutation_scopes').get().n,0);
+});
+test('native batch missing visibility and unknown provider ACK never repeat the dispatch or release ownership',async t=>{
+  const b=await batchFixture(t);b.unknown();const first=await deliverOwnedApprovedCohortBatch(b.options);
+  const retry=await deliverOwnedApprovedCohortBatch({...b.options,owner:first.owner});assert.equal(retry.errorCode,'mutation_unknown');assert.equal(b.sends(),1);
+  const c=await batchFixture(t),sent=await deliverOwnedApprovedCohortBatch(c.options);c.hide();
+  assert.equal((await deliverOwnedApprovedCohortBatch({...c.options,owner:sent.owner})).errorCode,'not_visible');assert.equal(c.sends(),1);
+  c.show();assert.equal((await deliverOwnedApprovedCohortBatch({...c.options,owner:sent.owner})).state,'complete');assert.equal(c.sends(),1);
+});
+test('lost batch intent ACK is recovered only by its original live dispatch token',async t=>{
+  const b=await batchFixture(t);b.f.lose(statements=>statements.some(s=>s.query.startsWith('INSERT INTO catalog_vector_deliveries')));
+  const sent=await deliverOwnedApprovedCohortBatch(b.options);assert.equal(sent.state,'pending');assert.equal(b.sends(),1);
+  assert.equal((await deliverOwnedApprovedCohortBatch({...b.options,owner:sent.owner})).state,'complete');assert.equal(b.sends(),1);
+});
+test('native batch rejects altered membership, source rows and foreign owners without redispatch',async t=>{
+  const b=await batchFixture(t),first=await deliverOwnedApprovedCohortBatch(b.options);
+  await assert.rejects(deliverOwnedApprovedCohortBatch({...b.options,owner:first.owner,publicIds:b.options.publicIds.slice(1)}),/vector_batch_changed|vector_owner_changed/);
+  await assert.rejects(deliverOwnedApprovedCohortBatch({...b.options,owner:{...first.owner,token:'foreign'}}),/vector_owner_changed/);
+  b.f.sql.prepare('UPDATE products SET title=? WHERE public_id=?').run('changed',b.options.publicIds[0]);
+  await assert.rejects(deliverOwnedApprovedCohortBatch({...b.options,owner:first.owner}));assert.equal(b.sends(),1);
+});
 test('atomic multi-product receipt is read once when resuming automated catalog work',async t=>{
   const f=await setup(t);
   await f.markUnavailable([id(1),id(2)]);
@@ -47,7 +109,8 @@ const id = n => `B${String(n).padStart(9,'0')}`;
 const uuid = n => `00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const source = 'b'.repeat(64);
 const values = Array(1536).fill(Math.fround(.1)); values[0]=-0;
-const names = ['Brass lobster desk bell','Velvet mushroom reading lamp','Cosmic pickle kayak anchor','Glass cactus snow globe','Rubber flamingo bath mat'];
+const names = ['Brass lobster desk bell','Velvet mushroom reading lamp','Cosmic pickle kayak anchor','Glass cactus snow globe','Rubber flamingo bath mat',
+  'Wooden octopus pencil stand','Ceramic rocket flower vase','Copper hedgehog book holder'];
 function product(n, overrides={}) {
   return { id:id(n),title:names[n-1]||`Fixture object ${n}`,price:19.99,currency:'USD',source:'amazon',
     imageUrl:`https://example.invalid/owned-${n}.jpg`,affiliateUrl:`https://www.amazon.com/dp/${id(n)}?tag=fixture-20`,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createVectorizeRestAdapters, hasAccountedVectorReadback,hasAccountedVectorTransport } from '../scripts/catalog/vectorize-rest.ts';
-import { accountedPublicationReadFetch } from '../scripts/catalog/publication-read-fetch.ts';
+import { accountedPublicationReadFetch,accountedPublicationFetch } from '../scripts/catalog/publication-read-fetch.ts';
 import { nativeHash, visible } from '../scripts/catalog/vector-outbox.ts';
 
 const accountId='a'.repeat(32);const publicId='00000000-0000-4000-8000-000000000001';
@@ -12,6 +12,18 @@ const signal=()=>new AbortController().signal;
 const ok=result=>new Response(JSON.stringify({success:true,result}),{headers:{'Content-Type':'application/json'}});
 const config={environment:'staging',indexName:'test-index',accountId,token:'TEST_ONLY_NOT_A_CREDENTIAL'};
 const delivery={deliveryId:'b'.repeat(64),attempt:1,publicId,vector};
+test('bounded native NDJSON batch gets one accounted mutation ACK and preserves signed zero',async()=>{
+  let sent=0,reserved=0,settled=0;
+  const scope={accountId,workerName:'fixture',indexName:config.indexName,databaseId:publicId,identityOrigin:'https://fixture.invalid'};
+  const send=accountedPublicationFetch({async reserveBudget(){reserved++;},async settleBudget(){settled++;}},async(url,init)=>{
+    sent++;assert.ok(url.endsWith('/upsert'));const rows=init.body.trim().split('\n').map(line=>JSON.parse(line));
+    assert.equal(rows.length,8);assert.ok(rows.every(r=>Object.is(r.values[0],-0)));return ok({mutationId});},scope);
+  const api=createVectorizeRestAdapters({...config,fetch:send});
+  const batch=Array.from({length:8},(_,i)=>{const id=`00000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`;return{...delivery,publicId:id,vector:{...vector,id}};});
+  assert.deepEqual(await api.dispatchBatch(batch,signal()),{reference:mutationId});assert.equal(sent,1);assert.equal(reserved,1);assert.equal(settled,1);
+  await assert.rejects(api.dispatchBatch([...batch,batch[0]],signal()),/invalid_id/);
+  await assert.rejects(api.dispatchBatch([batch[0],batch[0]],signal()),/invalid_id/);assert.equal(sent,1);
+});
 test('owned cleanup joins only the actual factory single AND optional batched readers, not a spread override',()=>{
   const send=accountedPublicationReadFetch({async reserveBudget(){},async settleBudget(){}},async()=>ok([]),
     {accountId,workerName:'test-worker',indexName:config.indexName,databaseId:publicId,identityOrigin:'https://fixture.example.invalid'});

@@ -54,6 +54,8 @@ export interface OwnedVectorAdapters extends MutationScope {
   /** Immutable account/index identity, checked again when recovering a journal. */
   providerIdentity: string;
   dispatch(input: Readonly<VectorDispatch>, signal: AbortSignal): Promise<{ reference: string }>;
+  /** One acknowledged native mutation for a homogeneous, bounded cohort. */
+  dispatchBatch?(input: ReadonlyArray<Readonly<VectorDispatch>>, signal:AbortSignal):Promise<{reference:string}>;
   resolve(input: Readonly<{ deliveryId: string; attempt: number; reference: string | null }>, signal: AbortSignal): Promise<
     { state: 'pending' } | { state: 'settled' | 'not_submitted'; reference: string }>;
   readback(publicId: string, signal: AbortSignal): Promise<SyncVector | null>;
@@ -80,6 +82,8 @@ interface Request {
    * journals without this field keep their original exact-row replay format. */
   pruneDeleteControl?: { schemaVersion:1; productSha256:string; sourceSha256:string };
   historicalRestore?: {original:Row;deletion:Row};
+  /** All members share one real provider mutation and atomic owner transition. */
+  batchIds?:string[];
 }
 interface PruneDeleteSource { planSha256:string; current:Row; projectionReceipt:Row }
 interface Journal extends Row {
@@ -251,8 +255,9 @@ async function execute(options: { db: CatalogD1; owner: MutationOwner; id: strin
     row = await journal(db, id);
     if (!row || row.request_json !== requestBytes || row.product_json !== productBytes) throw new Error('vector_intent_unconfirmed');
   }
-  let owner = await recoveredOwner(db, input, row);
   const saved = decodeRequest(row.request_json);
+  if(saved.batchIds)throw Error('vector_batch_resume_required');
+  let owner = await recoveredOwner(db, input, row);
   if (saved.providerIdentity !== adapters.providerIdentity) throw new Error('vector_provider_scope_mismatch');
   if (options.expectedPayloadSha256 !== undefined && saved.payloadSha256 !== options.expectedPayloadSha256)
     throw new Error('vector_original_changed');
@@ -415,6 +420,12 @@ async function pruneDelivery(options: { db: CatalogD1; owner: MutationOwner; rev
     else {const rebuilt = approved ? await prepareApprovedCohort(db,owner,(revision as ApprovedCohortRevision).request)
       : await pruneExistingRevision(db,owner,revision.request);
       if (rebuilt.state === 'unchanged' || canonicalJson(rebuilt.revision) !== canonicalJson(revision)) throw new Error('vector_prune_changed');}
+    return preparePruneRequest(options,approved);
+  } });
+}
+async function preparePruneRequest(options:Parameters<typeof pruneDelivery>[0],approved:boolean):Promise<{product:Row;request:Omit<Request,'providerIdentity'>}>{
+    const {db,revision,publicId}=options,plan=prunedVectorPlan(revision),planHash=sha256(canonicalJson(plan));
+    const captured=revision.sourceRows.find(row=>row.public_id===publicId),member=plan.products.find(p=>p.publicId===publicId);
     // Captured rows also have archived_* JSON aliases, not physical columns.
     // Bind those through the canonical pruning predicate and separately capture
     // the complete operational row for the delivery's final exact-row CAS.
@@ -422,7 +433,7 @@ async function pruneDelivery(options: { db: CatalogD1; owner: MutationOwner; rev
     if (!captured || !product) throw new Error('vector_product_changed');
     let vector: SyncVector | null = null;
     if (member) {
-      const original = await bounded(signal => options.original!.load(signal),timeout);
+      const original = await bounded(signal => options.original!.load(signal),timeoutOf(options.timeoutMs));
       if (sha256(canonicalJson(original)) !== options.original!.sha256 || original.publicId !== publicId
         || original.catalogRevision !== (approved && (revision as ApprovedCohortRevision).request.approval.changes.some(change=>change.publicId===publicId)
           ? revision.snapshot.catalogRevision : revision.request.previous.catalogRevision)
@@ -440,7 +451,6 @@ async function pruneDelivery(options: { db: CatalogD1; owner: MutationOwner; rev
       payloadSha256:options.original?.sha256 ?? null,planSha256:planHash,globalWatermark:plan.globalWatermark,
       projectionReceipt:revision.packet.receipt,pruneCurrent:captured,
       eligibleUntil:revision.snapshot.products.find(value => value.publicId === publicId)?.eligibleUntil ?? null } };
-  } });
 }
 
 /** Concrete read-only proof callback for settlePrunedRevision. Invoke only after
@@ -570,18 +580,22 @@ export function resumeOwnedPrunedDelete(options:{db:CatalogD1;owner:MutationOwne
  */
 export function deliverOwnedApprovedCohortVector(options: Omit<Parameters<typeof pruneDelivery>[0],'revision'> & { revision:ApprovedCohortRevision }): Promise<DeliveryResult> {
   return safe(async()=>{
-    const change=options.revision.request.approval.changes.find(value=>value.publicId===options.publicId);
     const plan=prunedVectorPlan(options.revision);
     const policy=await policyReceipt(options.db,options.owner,options.revision,options.adapters.providerIdentity);
     if(policy?.sources.some(s=>s.publicId===options.publicId))throw new Error('vector_plan_already_reused');
     if(plan.products.length+plan.absentIds.length>(policy?SNAPSHOT_READ_LIMITS.identities:OWNED_VECTOR_PROOF_LIMIT))throw new Error('vector_plan_invalid');
-    if(!change || !plan.products.some(value=>value.publicId===options.publicId)) return pruneDelivery(options,true,policy??undefined);
+    return pruneDelivery(await approvedVectorOptions(options),true,policy??undefined);
+  });
+}
+async function approvedVectorOptions(options:Omit<Parameters<typeof pruneDelivery>[0],'revision'>&{revision:ApprovedCohortRevision}){
+    const change=options.revision.request.approval.changes.find(value=>value.publicId===options.publicId),plan=prunedVectorPlan(options.revision);
+    if(!change || !plan.products.some(value=>value.publicId===options.publicId))return options;
     if(options.original)throw new Error('vector_original_unproven');
     const product=(await options.db.prepare('SELECT * FROM products WHERE public_id=?').bind(options.publicId).all()).results[0];
     if(!product)throw new Error('vector_product_changed');
     if(sha256(canonicalJson(product))!==change.productSha256){
       const original=await repairedSlugOriginalVector(options.db,options.owner,options.revision,change,product);
-      return pruneDelivery({...options,original:{sha256:sha256(canonicalJson(original)),async load(){return original;}}},true,policy??undefined);
+      return {...options,original:{sha256:sha256(canonicalJson(original)),async load(){return original;}}};
     }
     const rows=(await options.db.prepare(`SELECT o.* FROM catalog_maintenance_vector_payloads p CROSS JOIN vector_sync_outbox o
       ON o.sequence=p.sequence WHERE p.operation_id=? AND o.public_id=? AND o.source_revision=? AND o.status='complete' AND o.operation='upsert' LIMIT 2`)
@@ -591,7 +605,7 @@ export function deliverOwnedApprovedCohortVector(options: Omit<Parameters<typeof
       if(state.length!==1)throw Error('vector_original_unproven');
       const original=await readPreservedPhotoVector(options.db,product,state[0],options.revision.request.previous,
         plan.products.find(p=>p.publicId===options.publicId)!,options.revision.snapshot.catalogRevision);
-      return pruneDelivery({...options,original:{sha256:sha256(canonicalJson(original)),async load(){return original;}}},true,policy??undefined);
+      return {...options,original:{sha256:sha256(canonicalJson(original)),async load(){return original;}}};
     }
     if(rows.length!==1)throw new Error('vector_original_unproven');
     const row=rows[0];const event:VectorEvent={sequence:Number(row.sequence),publicId:String(row.public_id),catalogRevision:String(row.source_revision),
@@ -603,11 +617,129 @@ export function deliverOwnedApprovedCohortVector(options: Omit<Parameters<typeof
     const original:OriginalVector={publicId:options.publicId,catalogRevision:event.catalogRevision,
       sourceFactsHash:String(product.source_facts_hash),embeddingTextHash:event.embeddingTextHash,values:vector.values,
       vectorBytesSha256:nativeHash(vector.values)};
-    return pruneDelivery({...options,original:{sha256:sha256(canonicalJson(original)),async load(){return original;}}},true,policy??undefined);
-  });
+    return {...options,original:{sha256:sha256(canonicalJson(original)),async load(){return original;}}};
 }
 
 interface ReusedSource { publicId:string; operationId:string; sequence:number; deliveryId:string; reference:string|null; sha256:string }
+
+/** Homogeneous native UPSERTs share one provider ACK and atomic owner transition.
+ * Per-product original journals remain genuine and readable by existing proof/
+ * history readers. An uncertain batch is never retried as individual writes.
+ * Deletions and frozen single-item intents retain the original path.
+ */
+export function deliverOwnedApprovedCohortBatch(options:{db:CatalogD1;owner:MutationOwner;revision:ApprovedCohortRevision;
+  publicIds:string[];adapters:OwnedVectorAdapters;originals?:Record<string,OriginalVectorSource>}):Promise<DeliveryResult&{publicIds:string[]}>{
+  return safe(async()=>{
+    const {db,adapters,revision}=options,input=structuredClone(options.owner);
+    let ids=[...options.publicIds];
+    adapterScope(input,adapters);
+    if(!adapters.dispatchBatch||!adapters.readbacks||ids.length<1||ids.length>8||new Set(ids).size!==ids.length
+      ||input.phase!=='freezing')throw Error('vector_batch_invalid');
+    const plan=prunedVectorPlan(revision),planHash=sha256(canonicalJson(plan));
+    let keys=ids.map(publicId=>idFor(input,{kind:'prune',planHash,publicId}));
+    if(ids.some(id=>!plan.products.some(p=>p.publicId===id)))throw Error('vector_batch_invalid');
+    const existing=await journal(db,keys[0]);
+    if(existing){
+      const saved=decodeRequest(existing.request_json).batchIds;
+      if(!saved?.length||canonicalJson(ids.slice(0,saved.length))!==canonicalJson(saved))throw Error('vector_batch_changed');
+      ids=saved;keys=keys.slice(0,ids.length);
+    }
+    const load=async()=> (await db.prepare('SELECT * FROM catalog_vector_deliveries WHERE delivery_id IN(SELECT value FROM json_each(?))')
+      .bind(JSON.stringify(keys)).all<Journal>()).results.sort((a,b)=>keys.indexOf(a.delivery_id)-keys.indexOf(b.delivery_id));
+    const batchOwner=async(journals:Journal[])=>{
+      const first=journals[0],base=JSON.parse(first.owner_json) as MutationOwner,actual=await readMutationOwner(db,input);
+      const expected={...base,epoch:base.epoch+ids.length+(first.status==='complete'?1:0)};
+      if(journals.length!==ids.length||canonicalJson({...input,epoch:base.epoch})!==canonicalJson(base)
+        ||input.epoch!==base.epoch&&input.epoch!==expected.epoch&&!(first.status==='complete'&&input.epoch===expected.epoch-1)||canonicalJson(actual)!==canonicalJson(expected)
+        ||journals.some((r,i)=>r.prior_epoch!==base.epoch+i||r.generation!==base.generation
+          ||r.owner_json!==canonicalJson({...base,epoch:base.epoch+i})||r.status!==first.status))throw Error('vector_owner_changed');
+      await db.batch([owned(db,expected,first.status==='pending')]);return expected;
+    };
+    const pending=async(journals:Journal[],errorCode:Code):Promise<DeliveryResult&{publicIds:string[]} >=>({deliveryId:journals[0].delivery_id,publicIds:ids,
+      owner:await batchOwner(journals),state:'pending',errorCode});
+    let rows=await load();
+    if(!rows.length){
+      const policy=await policyReceipt(db,input,revision,adapters.providerIdentity);
+      if(!policy||ids.some(id=>policy.sources.some(s=>s.publicId===id)))throw Error('vector_batch_invalid');
+      await db.batch(planChecks(db,input,revision));
+      const prepared:Array<{product:Row;request:Request;requestBytes:string;productBytes:string}>=[];
+      for(const publicId of ids){
+        const original=await approvedVectorOptions({...options,publicId,original:options.originals?.[publicId]});
+        const p=await preparePruneRequest(original,true);
+        if(!p.request.vector)throw Error('vector_batch_invalid');
+        const request:Request={...p.request,providerIdentity:adapters.providerIdentity,batchIds:ids};
+        prepared.push({product:p.product,request,requestBytes:encodeRequest(request),productBytes:canonicalJson(p.product)});
+      }
+      // Keep both intent and completion below the existing 512KB D1 payload
+      // bound. This conservative bound includes duplicate CAS values/escaping;
+      // large rows use smaller batches, never truncate source or vector bytes.
+      while(ids.length>1&&prepared.reduce((n,p)=>n+Buffer.byteLength(JSON.stringify(p.productBytes))*2
+        +Buffer.byteLength(JSON.stringify(p.requestBytes))*2+16384,0)>480*1024){
+        ids=ids.slice(0,Math.ceil(ids.length/2));keys=keys.slice(0,ids.length);prepared.length=ids.length;
+      }
+      for(const p of prepared){p.request.batchIds=ids;p.requestBytes=encodeRequest(p.request);}
+      // Reserve one epoch per immutable member within ONE transaction. This
+      // retains the existing unique generation/epoch identity and old readers.
+      const token=randomUUID(),next={...input,epoch:input.epoch+ids.length},fence=gate(input,false);
+      // The token is generated by this live caller before any provider call.
+      // Exact readback can recover a lost intent ACK; a restarted caller has no
+      // such token and can only observe, never resend an uncertain mutation.
+      try{await db.batch([owned(db,input,false),...prepared.flatMap(p=>[productAssertion(db,p.product,p.request),...requestAssertions(db,p.request)]),
+        ...prepared.map((p,i)=>db.prepare(`INSERT INTO catalog_vector_deliveries(delivery_id,environment,index_name,generation,prior_epoch,
+          owner_json,request_json,product_json,dispatch_token,attempts) VALUES(?,?,?,?,?,?,?,?,?,1)`)
+          .bind(keys[i],input.environment,input.indexName,input.generation,input.epoch+i,canonicalJson({...input,epoch:input.epoch+i}),p.requestBytes,p.productBytes,token)),
+        db.prepare(`UPDATE catalog_mutation_scopes SET mutation_epoch=mutation_epoch+?,external_pending=1 WHERE environment=? AND index_name=? AND ${fence.sql}`)
+          .bind(ids.length,input.environment,input.indexName,...fence.params),owned(db,next,true)]);
+      }catch{/* Recover only this live caller's exact unique intent below. */}
+      rows=await load();
+      if(rows.length!==ids.length||rows.some((r,i)=>r.request_json!==prepared[i].requestBytes||r.product_json!==prepared[i].productBytes||r.dispatch_token!==token))
+        throw Error('vector_intent_unconfirmed');
+      {
+        await batchOwner(rows);
+        let ack;
+        try{ack=await bounded(signal=>adapters.dispatchBatch!(prepared.map((p,i)=>({deliveryId:keys[i],attempt:1,publicId:ids[i],vector:p.request.vector})),signal),30000,hasAccountedVectorTransport(adapters));}
+        catch{return pending(rows,'mutation_unknown');}
+        if(!ack||!REF.test(ack.reference))return pending(rows,'mutation_unknown');
+        try{await db.batch([owned(db,next,true),...rows.map(r=>db.prepare(`UPDATE catalog_vector_deliveries SET mutation_reference=?
+          WHERE delivery_id=? AND dispatch_token=? AND mutation_reference IS NULL`).bind(ack.reference,r.delivery_id,token)),
+          assertion(db,`(SELECT count(*) FROM catalog_vector_deliveries WHERE delivery_id IN(SELECT value FROM json_each(?)) AND mutation_reference=? AND dispatch_token=?)=?`,
+          [JSON.stringify(keys),ack.reference,token,ids.length]),owned(db,next,true)]);}catch{/* Exact readback retains any acknowledged batch. */}
+        rows=await load();
+      }
+      return pending(rows,'mutation_unknown');
+    }
+    if(rows.length!==ids.length)throw Error('vector_batch_changed');
+    const first=rows[0],owner=await batchOwner(rows),requests=rows.map(r=>decodeRequest(r.request_json));
+    if(rows.some((r,i)=>r.status!==first.status||r.attempts!==1||r.dispatch_token!==first.dispatch_token
+      ||!r.dispatch_token||r.mutation_reference!==first.mutation_reference||r.evidence_json!==first.evidence_json
+      ||requests[i].kind!=='prune'||requests[i].providerIdentity!==adapters.providerIdentity||requests[i].publicId!==ids[i]
+      ||requests[i].planSha256!==planHash||canonicalJson(requests[i].batchIds)!==canonicalJson(ids)||!requests[i].vector))throw Error('vector_batch_changed');
+    if(first.status==='complete')return{deliveryId:first.delivery_id,publicIds:ids,owner,state:rows.every(r=>r.disposition==='verified')?'complete':'expired',errorCode:null};
+    const checks=()=>[owned(db,owner,true),...rows.flatMap((r,i)=>[productAssertion(db,JSON.parse(r.product_json),requests[i],false),...requestAssertions(db,requests[i]),
+      assertion(db,'EXISTS(SELECT 1 FROM catalog_vector_deliveries WHERE delivery_id=? AND request_json=? AND product_json=? AND dispatch_token=? AND mutation_reference IS ? AND status=?)',
+        [r.delivery_id,r.request_json,r.product_json,r.dispatch_token,r.mutation_reference,'pending'])])];
+    await db.batch(checks());
+    if(!first.mutation_reference)return pending(rows,'mutation_unknown');
+    try{
+      const settled=await bounded(signal=>adapters.resolve({deliveryId:first.delivery_id,attempt:1,reference:first.mutation_reference},signal),30000,hasAccountedVectorTransport(adapters));
+      if(settled.state!=='settled')return pending(rows,'not_visible');
+      if(settled.reference!==first.mutation_reference)throw Error('vector_resolution_invalid');
+      for(let i=0;i<ids.length;i+=2){
+        const actual=await bounded(signal=>adapters.readbacks!(ids.slice(i,i+2),signal),30000,hasAccountedVectorTransport(adapters));
+        if(actual.length!==Math.min(2,ids.length-i)||actual.some((v,j)=>!visible(requests[i+j].vector,v)))return pending(rows,'not_visible');
+      }
+    }catch(error){if(error instanceof Error&&error.message==='vector_resolution_invalid')throw error;return pending(rows,'provider_failed');}
+    const next={...owner,epoch:owner.epoch+1},fence=gate(owner,true),evidence=canonicalJson([{attempt:1,state:'settled_visible',reference:first.mutation_reference}]);
+    try{await db.batch([...checks(),...rows.map((r,i)=>db.prepare(`UPDATE catalog_vector_deliveries SET status='complete',completed_at=${NOW},evidence_json=?,
+      disposition=CASE WHEN ?<=${NOW} THEN 'expired' ELSE 'verified' END WHERE delivery_id=? AND status='pending' AND dispatch_token=?`)
+        .bind(evidence,requests[i].eligibleUntil,r.delivery_id,first.dispatch_token)),
+      assertion(db,`(SELECT count(*) FROM catalog_vector_deliveries WHERE delivery_id IN(SELECT value FROM json_each(?)) AND status='complete' AND evidence_json=?)=?`,[JSON.stringify(keys),evidence,ids.length]),
+      db.prepare(`UPDATE catalog_mutation_scopes SET external_pending=0,mutation_epoch=mutation_epoch+1 WHERE environment=? AND index_name=? AND ${fence.sql}`)
+        .bind(owner.environment,owner.indexName,...fence.params),owned(db,next,false)]);}catch{/* Read back the exact atomic completion. */}
+    rows=await load();const actualOwner=await batchOwner(rows);
+    return{deliveryId:first.delivery_id,publicIds:ids,owner:actualOwner,state:rows.every(r=>r.status==='complete')?(rows.every(r=>r.disposition==='verified')?'complete':'expired'):'pending',errorCode:rows.every(r=>r.status==='complete')?null:'not_visible'};
+  });
+}
 interface ReuseRequest {
   schemaVersion:1; kind:'approved-cohort-reuse'; catalogRevision:string; providerIdentity:string;
   plan:PrunedVectorPlan; planSha256:string; projectionReceipt:Row; approval:ApprovedCohortEnvelope; approvalSha256:string;

@@ -31,6 +31,10 @@ on:
         description: Optional accepted admission run key to reuse ORIGINAL saved observations; no supplier fetch
         type: string
         default: ''
+      scheduled_at:
+        description: Original Pacific due slot as UTC ISO timestamp; Cloudflare clock only
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -68,6 +72,7 @@ jobs:
         env:
           CATALOG_MODE: ${{ inputs.mode || ((github.event.schedule == '30 20 * * *' || github.event.schedule == '30 22 * * *') && 'photos' || 'full') }}
           CATALOG_SCHEDULE: ${{ github.event.schedule || '' }}
+          CATALOG_SCHEDULED_AT: ${{ inputs.scheduled_at || '' }}
           CATALOG_CANARY_ASIN: ${{ inputs.canary_asin }}
           CATALOG_ADMIT_ASINS: ${{ inputs.admit_asins }}
           CATALOG_ADMIT_SAVED_RUN: ${{ inputs.admit_saved_run }}

@@ -199,20 +199,42 @@ export function readPermanentCatalogPrior(options:Parameters<typeof readCatalogP
   adapters:Pick<OwnedVectorAdapters,'readback'|'environment'|'indexName'|'providerIdentity'>}){
   return readCatalogPredecessor(options);
 }
-/** Full private-source CAS outside short native/provider observations. */
+const inventoryProofs=new WeakMap<CatalogD1,{key:string;version:number}>();
+/** The counter is updated transactionally by source-table triggers. Missing
+ * migration keeps the original scan path; caches never survive a process. */
+async function sourceVersion(db:CatalogD1,owner:MutationOwner,signal?:AbortSignal){
+  const schema=await db.prepare(`SELECT count(*) n FROM sqlite_master WHERE (name='catalog_source_version' AND type='table')
+    OR (type='trigger' AND name IN('catalog_source_products_insert','catalog_source_products_update','catalog_source_products_delete',
+      'catalog_source_private_insert','catalog_source_private_update','catalog_source_private_delete',
+      'catalog_source_operations_insert','catalog_source_operations_update','catalog_source_operations_delete'))`).all<{n:number}>({signal});
+  if(schema.results[0]?.n!==10)return null;
+  const fence=pendingVectorReadFence(owner);
+  const row=(await db.prepare(`SELECT version,json(CASE WHEN ${fence.sql} THEN 'true' ELSE 'mutation_fenced' END) owned
+    FROM catalog_source_version WHERE singleton=1`).bind(...fence.params).all<{version:number}>({signal})).results;
+  if(row.length!==1||!Number.isSafeInteger(row[0].version)||row[0].version<0)fail();
+  return row[0].version;
+}
+/** Full private-source CAS once per unchanged source and owner. Native journal
+ * writes do not invalidate it; any product/private-source write does. */
 export async function assertApprovedCatalogInventory(db:CatalogD1,owner:MutationOwner,revision:ApprovedCohortRevision,signal?:AbortSignal){
   if(!revision.persistent)return;
-  const started=Date.now(),products=revision.persistent.inventory.length,progress=(stage:'start'|'complete')=>console.info(JSON.stringify({state:'publication_progress',phase:'inventory',
+  const started=Date.now(),products=revision.persistent.inventory.length,progress=(stage:'start'|'complete'|'reused')=>console.info(JSON.stringify({state:'publication_progress',phase:'inventory',
     stage,products,elapsedMs:Date.now()-started}));
   progress('start');
   signal?.throwIfAborted();
   if(owner.generation!==revision.persistent.generation||owner.operationKey!==revision.operationKey
     ||!same(revision.nativeHistory,revision.persistent.nativeHistory)
     ||!['freezing','activating'].includes(owner.phase))fail();
+  const key=sha256(canonicalJson({owner:{...owner,epoch:0,phase:'inventory'},inventory:revision.persistent.inventory})),
+    version=await sourceVersion(db,owner,signal),prior=inventoryProofs.get(db);
+  if(version!==null&&prior?.key===key&&prior.version===version){progress('reused');return;}
   const actual=await readOwnedLogicalRows(db,owner,{phase:owner.phase as 'freezing'|'activating',signal,
     tables:['products','catalog_maintenance_products','catalog_maintenance_operations'],...(owner.phase==='freezing'?{pendingVector:true as const}:{})});
   if(!same(permanentSourceInventory(permanentSourceRows(actual)),revision.persistent.inventory))fail();
   const fence=pendingVectorReadFence(owner);
   await db.prepare(`SELECT json(CASE WHEN ${fence.sql} THEN 'true' ELSE 'mutation_fenced' END)`).bind(...fence.params).all({signal});
+  const after=await sourceVersion(db,owner,signal);
+  if(version!==after)fail();
+  if(after!==null)inventoryProofs.set(db,{key,version:after});
   progress('complete');
 }

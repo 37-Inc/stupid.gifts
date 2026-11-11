@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {permanentCatalogFixture} from './helpers/permanent-catalog-fixture.mjs';
 import {scope,uuid} from './helpers/published-vector-fixture.mjs';
 import {preparePermanentCatalog,settlePermanentCatalog} from '../lib/catalog/freeze-permanent-catalog.ts';
@@ -9,7 +10,7 @@ import {claimBuildRequest,beginBuildActivation,resolveBuildActivation,permanentP
 import {enqueuePublication,claimPublication,recordPublicationDispatch,completePublication,completeActivatedApprovedCatalogPublication} from '../lib/catalog/publication.ts';
 import {prunedVectorPlan,prunedVectorIds} from '../lib/catalog/prune-existing-revision.ts';
 import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
-import {createPermanentCatalogSeal} from '../scripts/catalog/permanent-catalog-seal.ts';
+import {createPermanentCatalogSeal,assertApprovedCatalogInventory} from '../scripts/catalog/permanent-catalog-seal.ts';
 import {createSealedSnapshotEnvelope,readApprovedCurrentRows} from '../scripts/catalog/export-d1-snapshot.ts';
 import {prepareOwnedApprovedCohortPlan,readOwnedApprovedCohortVectors,readOwnedPermanentCohortNative,readActivatedCatalogVectors,
   approvedCatalogPlanChecks,readHistoricalNativePreservation,readNativeHistory} from '../scripts/catalog/owned-vector-delivery.ts';
@@ -95,6 +96,38 @@ test('approved permanent continuation reclaims an expired build and publishes wi
   assert.equal(await resolveBuildActivation(f.db,permit,async()=>{await read();return{environment:scope.environment,settled:true,
     active:{...intent,versionReference:'continued-version'}};}),'resolved');
   assert.equal(canonicalJson(build.request),original);assert.equal(f.dispatches(),dispatches);
+});
+
+test('unchanged source proof reuses one scan; source edits, owner drift and absent migration do not',async t=>{
+  const f=await fixture(t),queries=[],db={...f.db,prepare(sql){queries.push(sql);return f.db.prepare(sql);}};
+  f.sql.exec(await readFile(new URL('../migrations/d1/0020_catalog_source_version.sql',import.meta.url),'utf8'));
+  const scan=()=>queries.filter(q=>q.includes('WITH bounded AS')).length;
+  await assertApprovedCatalogInventory(db,f.owner,f.revision);const first=scan();assert.ok(first>0);
+  await assertApprovedCatalogInventory(db,f.owner,f.revision);assert.equal(scan(),first);
+  await assert.rejects(assertApprovedCatalogInventory(db,{...f.owner,epoch:f.owner.epoch+1},f.revision));
+  // A harmless same-value write still invalidates the proof, conservatively.
+  f.sql.exec('UPDATE products SET title=title');
+  await assertApprovedCatalogInventory(db,f.owner,f.revision);assert.equal(scan(),first*2);
+  f.sql.exec('DROP TRIGGER catalog_source_products_insert');
+  await assertApprovedCatalogInventory(db,f.owner,f.revision);assert.equal(scan(),first*3,'partial migration cannot reuse cached proof');
+  f.sql.prepare('UPDATE products SET title=? WHERE public_id=?').run('tampered title',uuid(1));
+  await assert.rejects(assertApprovedCatalogInventory(db,f.owner,f.revision),/permanent_seal_changed/);
+  const g=await fixture(t),oldQueries=[],legacy={...g.db,prepare(sql){oldQueries.push(sql);
+    if(sql.includes("name='catalog_source_version'"))return{all:async()=>({results:[{n:0}]})};
+    return g.db.prepare(sql);}};
+  await assertApprovedCatalogInventory(legacy,g.owner,g.revision);const oldCount=oldQueries.filter(q=>q.includes('WITH bounded AS')).length;
+  await assertApprovedCatalogInventory(legacy,g.owner,g.revision);assert.equal(oldQueries.filter(q=>q.includes('WITH bounded AS')).length,oldCount*2);
+});
+
+test('source counter covers all source tables and rolls back with the original write',async t=>{
+  const f=await fixture(t),read=()=>f.sql.prepare('SELECT version FROM catalog_source_version').get().version;
+  f.sql.exec(await readFile(new URL('../migrations/d1/0020_catalog_source_version.sql',import.meta.url),'utf8'));
+  for(const [table,column] of [['products','title'],['catalog_maintenance_products','product_id']]){
+    const n=read();f.sql.exec(`UPDATE ${table} SET ${column}=${column}`);assert.ok(read()>n,table);
+    const next=read();f.sql.exec(`BEGIN; UPDATE ${table} SET ${column}=${column}; ROLLBACK;`);assert.equal(read(),next);
+  }
+  const triggers=f.sql.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND name LIKE 'catalog_source_%'").all();
+  assert.equal(triggers.length,9);for(const action of ['INSERT','UPDATE','DELETE'])assert.equal(triggers.filter(t=>t.sql.includes('AFTER '+action)).length,3);
 });
 
 test('native-only permanent proof retains exact policy/bits/history after context expiry without repeating full source scans or mutations',async t=>{

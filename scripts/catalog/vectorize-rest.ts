@@ -78,6 +78,17 @@ export function createVectorizeRestAdapters(options: MutationScope & {
     return ids.map(id=>found.get(id)??null);
   }
   const adapters:OwnedVectorAdapters={environment,indexName,providerIdentity:`cloudflare:${accountId}:${indexName}`,
+    async dispatchBatch(inputs,signal){
+      if(!inputs.length||inputs.length>8||new Set(inputs.map(p=>p.publicId)).size!==inputs.length)throw Error('vector_provider_invalid_id');
+      const lines=inputs.map(input=>{id(input.publicId);const v=vector(input.vector);
+        if(v.id!==input.publicId)throw Error('vector_provider_invalid_id');
+        return `{"id":${JSON.stringify(v.id)},"values":[${v.values.map(n=>Object.is(n,-0)?'-0':JSON.stringify(n)).join(',')}],"metadata":${JSON.stringify(v.metadata)}}`;
+      });
+      const body=lines.join('\n')+'\n';if(Buffer.byteLength(body)>384*1024)throw Error('vector_payload_bound');
+      const result=await request('upsert',signal,body,true) as {mutationId?:unknown};
+      if(typeof result?.mutationId!=='string'||!UUID.test(result.mutationId))throw Error('vector_provider_failed');
+      return{reference:result.mutationId};
+    },
     async dispatch(input,signal){
       id(input.publicId);let body:string;
       if(input.vector){const v=vector(input.vector);if(v.id!==input.publicId)throw new Error('vector_provider_invalid_id');

@@ -20,6 +20,39 @@ See [HOSTED_CATALOG.md](HOSTED_CATALOG.md)
 for shadow, canary, explicit activation and single-writer recovery, and
 [the approved spec](CATALOG_AUTOMATION_SPEC.md) for successor behavior.
 
+### November 11 speed and clock changes
+
+- Data-only care no longer installs the isolated legacy uploader. Only explicit
+  `code` recovery needs it. Application deployments remain separate.
+- New runtime-data runs group native upserts (at most eight, reduced by encoded
+  payload size). One acknowledged mutation covers each group; every original
+  product journal, exact native bytes, source check and owner fence remains.
+  Pending groups resume as groups, never individual re-dispatches. Deletes and
+  frozen historical runs retain their original path.
+- Migration `0020` adds a source-change counter maintained by database triggers.
+  A full inventory proof is reused in the same process only while that counter,
+  owner and inventory digest match. Any source write forces another scan; an
+  absent migration keeps the original full-scan behavior. Accounting remains
+  durable and unchanged; fewer requests mean fewer accounting round trips.
+- The separate `stupid-gifts-catalog-clock` Worker is initially **disabled** with
+  no cron. Its only secret can dispatch Actions on `37-Inc/stupid.gifts` (plus
+  GitHub's mandatory Metadata read); it has no catalog/provider/storage binding
+  and no public trigger. Token expiry: **2027-02-09**. Renew before that date.
+  At cutover, disable GitHub cron before enabling Cloudflare's UTC/DST-filtered
+  clock. Keep the existing morning/evening and two-hour catch-up slots, passing
+  the original `scheduled_at` to the same coordinator. Never run two clocks.
+- Log intended slot, actual start/delay, inventory `complete` versus `reused`,
+  and native batch size/duration. A dispatch ACK is not a catalog acceptance.
+
+Measured baseline: November 11 run `43016472526` started 7h29m late and the
+catalog job took 3h47m48s. Forty serial native updates spanned 111m03s; four
+3,430-identity scans totaled 19m01s; separate cleanup took 29m50s. Local tests
+prove four native gifts share one mutation and repeated unchanged inventory
+checks avoid another full scan. These are operation-count improvements, **not**
+yet a measured production-duration claim. Use the next normal due-work run;
+do not fetch an extra batch just to benchmark. Beads: `roadmap-lbbz1.36` and
+the existing unattended observation task `roadmap-lbbz1.16.1`.
+
 November 6 baseline: 3,390 identities, 3,347 public gifts, 43 holds, 37 optional
 articles and roughly 7,008 static files. These are observations, not growth caps.
 Full migration/17k-file cleanup are complete. Earlier recoveries, grants and

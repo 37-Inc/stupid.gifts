@@ -33,6 +33,8 @@ test('publication progress streams split lines before exit and never echoes raw 
   assert.deepEqual(hostedPublicationProgress(JSON.stringify(inventory)),{state:'progress',step:'publication',phase:'inventory',stage:'start',products:3407,elapsedMs:0});
   assert.equal(hostedPublicationProgress(JSON.stringify({...inventory,token:'secret'})),undefined);
   assert.equal(hostedPublicationProgress(JSON.stringify({...inventory,stage:'secret'})),undefined);
+  assert.equal(hostedPublicationProgress(JSON.stringify({...inventory,stage:'reused'})).stage,'reused');
+  assert.equal(hostedPublicationProgress(JSON.stringify({...inventory,phase:'native_batch',stage:'complete',products:4})).products,4);
   const phase={state:'catalog_phase_progress',phase:3,totalPhases:14,stage:'complete',elapsedMs:123};
   assert.deepEqual(hostedPublicationProgress(JSON.stringify(phase)),{...phase,state:'progress',step:'catalog'});
   for(const changed of [{phase:15},{stage:'private'},{product:'private'}])assert.equal(hostedPublicationProgress(JSON.stringify({...phase,...changed})),undefined);

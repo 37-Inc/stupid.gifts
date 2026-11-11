@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "stupid-gifts-catalog-clock",
+  "account_id": "7f05a1dcb6e16f9c239564a0293bbe74",
+  "main": "workers/catalog-clock.mjs",
+  "compatibility_date": "2026-11-11",
+  "workers_dev": false,
+  "preview_urls": false,
+  "upload_source_maps": false,
+  "observability": { "enabled": true },
+  "vars": { "CLOCK_ENABLED": "false" },
+  "triggers": { "crons": [] }
+}
