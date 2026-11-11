@@ -8,6 +8,7 @@ import {capturedRevisionBuildRequest,prunedVectorPlan} from '../../lib/catalog/p
 import {encodeBuildRequest} from '../../lib/catalog/build-requests.ts';
 import type {ApprovedCohortRevision} from '../../lib/catalog/freeze-approved-cohort.ts';
 import type {PublicationConfig,PublicationResult} from './publish-release.ts';
+import {verifyPublicationSemanticCatalog} from './publish-release.ts';
 import type {RunWorkspace,RuntimePublicationControl} from './run-workspace.ts';
 import type {CatalogObjectStore} from './r2-object-store.ts';
 import {exportRuntimeCatalog} from './export-runtime-catalog.ts';
@@ -43,7 +44,7 @@ export async function publishRuntimeCatalog(input:{db:CatalogD1;owner:MutationOw
     }catch(error){if(!(error instanceof ContentAdminError&&error.status===409))console.warn(JSON.stringify({notice:'runtime_homepage_not_applied',catalogBlocked:false}));}}
     let semanticCatalog;
     if(config.semanticSearch?.derivedCatalog){const ref=config.semanticSearch.derivedCatalog,bytes=await readFile(ref.path);
-      if(sha256(bytes)!==ref.sha256)throw Error('runtime_semantic_binding_changed');semanticCatalog=JSON.parse(bytes.toString('utf8'));}
+      semanticCatalog=await verifyPublicationSemanticCatalog({semanticCatalog:JSON.parse(bytes.toString('utf8'))},config);}
     const exported=await exportRuntimeCatalog({snapshot:revision.snapshot,releaseId:config.releaseId,sourceCodeSha:config.codeSha,
       homepage:config.homepage,merchandising:config.merchandising,semanticCatalog,assets:data.assets,disclosures:data.disclosures,store:input.store,
       now:()=>now().getTime(),registerFinite:async ref=>{await db.batch([mutationAssertion(db,owner,['freezing']),db.prepare(`INSERT INTO catalog_runtime_retention(object_key,sha256,not_after,release_id)

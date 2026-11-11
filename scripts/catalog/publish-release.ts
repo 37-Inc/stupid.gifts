@@ -384,6 +384,7 @@ export async function verifyPublicationSemanticCatalog(manifest:Pick<SiteAssetMa
   const catalog=await verifySemanticCatalogIdentities(manifest.semanticCatalog);
   if(catalog.indexName!==derived.indexName||sha256(canonicalJson(catalog))!==derived.sha256)
     throw new Error('publication_semantic_catalog_changed');
+  return catalog;
 }
 
 async function loadPackage(directory:string,config:PublicationConfig,expectedHash:string,now:Date,settlement?:ActivationPermit){
