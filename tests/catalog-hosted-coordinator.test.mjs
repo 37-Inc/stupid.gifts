@@ -603,7 +603,8 @@ test('one Pacific workflow remains main-only, protected, serialized and has no P
   assert.doesNotMatch(yaml,/\nconcurrency:/,'Whole-workflow concurrency would keep historical cleanup in the publication queue');
   const cleanup=yaml.slice(yaml.indexOf('\n  cleanup:'));
   assert.match(cleanup,/needs: catalog/);assert.match(cleanup,/group: catalog-cleanup/);
-  assert.doesNotMatch(cleanup,/group: catalog-production|CLOUDFLARE_API_TOKEN|AMAZON_|OPENAI_|WEBSITE_CAMPAIGNS/);
+  assert.doesNotMatch(cleanup,/group: catalog-production|AMAZON_|OPENAI_|WEBSITE_CAMPAIGNS/);
+  assert.match(cleanup,/STUPID_GIFTS_CLOUDFLARE_API_TOKEN/,'Existing cleanup also marks exact registered runtime-body expiry in D1');
   assert.match(cleanup,/R2_ACCESS_KEY_ID/);assert.match(cleanup,/R2_SECRET_ACCESS_KEY/);
   assert.match(cleanup,/hosted-coordinator.mjs cleanup/);
   assert.match(yaml,/timeout-minutes: 360/);
@@ -616,6 +617,16 @@ test('one Pacific workflow remains main-only, protected, serialized and has no P
     code=await readFile(new URL('../scripts/catalog/code-only-operator.mjs',import.meta.url),'utf8');
   assert.match(daily,/result.state==='finalized'&&!RUNTIME.hosted/);
   assert.match(code,/if\(!runtime.hosted\)await cleanupAcceptedPublication\(\{\.\.\.workspaceOptions/);
+});
+
+test('application deployment is manual-only and does not queue behind catalog care after the one-time cutover',async()=>{
+  const yaml=await readFile(new URL('../.github/workflows/app-deploy.yml',import.meta.url),'utf8');
+  assert.match(yaml,/workflow_dispatch:/);assert.doesNotMatch(yaml,/\b(?:schedule|pull_request|push):/);
+  assert.match(yaml,/group: app-production/);assert.match(yaml,/cancel-in-progress: false/);
+  const bootstrap=yaml.slice(yaml.indexOf('\n  bootstrap:'),yaml.indexOf('\n  deploy:')),app=yaml.slice(yaml.indexOf('\n  deploy:'));
+  assert.match(bootstrap,/group: catalog-production/);assert.doesNotMatch(app,/group: catalog-production/);
+  assert.doesNotMatch(yaml,/AMAZON_|OPENAI_|WEBSITE_CAMPAIGNS|permissions:.*write/);
+  assert.match(app,/deploy-runtime-app.mjs/);
 });
 
 test('evening photo retries and delayed-after-midnight dispatch share one UTC slot without consuming the next evening',()=>{

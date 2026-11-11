@@ -30,7 +30,7 @@ for(const loseAck of [false,true])test('saved-output admission repairs currency 
   const originalFetch=globalThis.fetch;globalThis.fetch=async()=>{throw Error('supplier/model/live network forbidden');};t.after(()=>{globalThis.fetch=originalFetch;});
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
   for(const file of(await readdir(new URL('../migrations/d1/',import.meta.url))).filter(n=>/^\d{4}.*\.sql$/.test(n)).sort())sql.exec(await readFile(new URL('../migrations/d1/'+file,import.meta.url),'utf8'));
-  sql.function('strftime',()=>NOW);
+  sql.function('strftime',{varargs:true},()=>NOW);
   const db={prepare(query){let params=[];return{bind(...v){params=v;return this;},async all(){return{results:sql.prepare(query).all(...params).map(r=>({...r}))};},
     async run(){return sql.prepare(query).run(...params);},execute(){return{results:sql.prepare(query).all(...params).map(r=>({...r}))};}};},async batch(statements){sql.exec('BEGIN');try{const out=statements.map(s=>s.execute());sql.exec('COMMIT');return out;}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const scope={environment:'production',indexName:'fixture'};sql.prepare('INSERT INTO catalog_mutation_scopes(environment,index_name) VALUES(?,?)').run(scope.environment,scope.indexName);

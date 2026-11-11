@@ -11,6 +11,8 @@ import { productPresentation } from '../../lib/catalog/presentation.ts';
 import {readMerchandising,productTitleView} from '../../lib/catalog/merchandising.ts';
 import { createCatalogGiftsHandler } from './catalog-gifts.ts';
 import { showPreview } from './show-preview.ts';
+import { createContentAdminHandler } from './content-admin.ts';
+import { SHOW_PRESET_KEYS,ACTIVE_SHOW_PRESET,selectShowPicks } from '../../static-site/lib/show-rehearsal.ts';
 
 export type { SiteEnv, SearchAdapters, SearchStorage, SemanticBudgetScope } from './bindings.ts';
 export interface SiteReleaseIdentity {
@@ -118,6 +120,9 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
   releaseIdentity?: unknown;
   canonicalOrigin?: string;
   now?: () => number;
+  /** Runtime exports retain the exact repaired-copy legacy-vector exclusion. */
+  repairedPublicIds?: readonly string[];
+  legacyPublicFieldsSha256?: Readonly<Record<string,string>>;
 }) {
   const now = options.now || Date.now;
   const { manifest, snapshot } = options;
@@ -137,6 +142,7 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
   const heldProductPaths = new Set(snapshot.heldProducts.map((product) => product.path));
   const snapshotDigest = 'catalogSnapshotSha256' in manifest && typeof manifest.catalogSnapshotSha256 === 'string' ? manifest.catalogSnapshotSha256 : undefined;
   const releaseIdentity = verifiedReleaseIdentity(options.releaseIdentity, manifest, snapshotDigest);
+  let contentAdmin:ReturnType<typeof createContentAdminHandler>|undefined;
   const preparedFeed = prepareStaticFeed(snapshot, options.feedPlan, snapshotDigest);
   // Shared by checked-in and generated publication entries. A request may not
   // choose the canonical origin or turn a preview hostname into a public alias.
@@ -150,7 +156,7 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
   const adapters = options.searchAdapters;
   let derivedSemantic: DerivedSemanticSearch | null | undefined;
   if (Object.hasOwn(manifest, 'semanticCatalog')) {
-    try { derivedSemantic = createDerivedSemanticSearch(snapshot, manifest.semanticCatalog); }
+    try { derivedSemantic = createDerivedSemanticSearch(snapshot, manifest.semanticCatalog, options.repairedPublicIds, options.legacyPublicFieldsSha256); }
     catch { derivedSemantic = null; } // Invalid proof cannot open legacy semantic serving.
   }
   const search = adapters ? createSearchHandler({
@@ -285,6 +291,12 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
         let decodedPath: string;
         try { decodedPath = decodeURIComponent(path); }
         catch { return respond(json({ error: 'Not found' }, 404)); }
+        if (decodedPath==='/api/content-admin'||decodedPath.startsWith('/api/content-admin/')) {
+          if(path!==decodedPath||env.CONTENT_ADMIN_ENABLED!=='true')return respond(json({error:'Not found'},404));
+          contentAdmin??=createContentAdminHandler({snapshot,manifest,releaseIdentity,now,activeShow:ACTIVE_SHOW_PRESET,
+            showCollections:Object.fromEntries(SHOW_PRESET_KEYS.map(name=>[name,selectShowPicks(snapshot,name).map(p=>p.publicId)]))});
+          return respond(await contentAdmin(request,env));
+        }
         if (RETIRED_ROUTE.test(decodedPath)) return respond(await notFound(request, env, decodedPath));
         if (env.ENVIRONMENT === 'production' && productionHost) {
           if (![productionHost, productionAlias].includes(url.host)) return respond(json({ error: 'Not found' }, 404));

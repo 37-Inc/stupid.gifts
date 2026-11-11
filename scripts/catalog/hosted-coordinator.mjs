@@ -231,16 +231,18 @@ function defaults(runtime,environment){
         budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe',durable:runtime.durable});
       try{const checkpoint=await workspace.readCheckpoint({controlOnly:true});return{prepared:true,started:true,config,
         phase:checkpoint?.checkpoint.phase??'created',owner:checkpoint?.checkpoint.owner??null,configSha256:operator.configSha256,
-        approvalPin:checkpoint?.checkpoint.pins.approval?.sha256,publication:checkpoint?.checkpoint.control?.publication};}
+        approvalPin:checkpoint?.checkpoint.pins.approval?.sha256,publication:checkpoint?.checkpoint.control?.publication,runtimeCatalog:checkpoint?.checkpoint.control?.runtimeCatalog};}
       finally{await workspace.close();}
     },
     async accepted(record,status){
-      if(status.phase!=='finalized'||status.owner!==null||status.publication?.stage!=='published')return null;
+      if(status.phase!=='finalized'||status.owner!==null||(status.runtimeCatalog??status.publication)?.stage!=='published')return null;
       const saved=await optional(async()=>json(await runtime.state.bytes(stateFile(record.runKey)+'/success.json')));if(!saved)return null;
       const pointer=json(await runtime.state.readPointer('last-success',runtime.care+'/last-success.json'));
       if(saved.source!==record.source||canonicalJson(saved.next)!==canonicalJson(pointer)||!HASH.test(pointer.control?.sha256))fail('successor_identity');
       const bytes=await runtime.state.bytes(pointer.control.path);if(hash(bytes)!==pointer.control.sha256)fail('successor_digest');
-      const seal=json(bytes),p=status.publication;
+      const seal=json(bytes),p=status.publication,r=status.runtimeCatalog;
+      if(r){if(seal.publication?.releaseId!==r.releaseId||seal.publication?.receiptSha256!==r.receiptSha256||pointer.transport!=='runtime-data'
+        ||pointer.manifestSha256!==r.dataSha256)fail('acceptance_identity');return{releaseId:r.releaseId,receiptSha256:r.receiptSha256};}
       if(seal.publication?.releaseId!==p.intent?.releaseId||!HASH.test(seal.publication?.receiptSha256)
         ||pointer.versionReference!==p.versionReference||pointer.manifestSha256!==p.intent.manifestSha256)fail('acceptance_identity');
       return{releaseId:p.intent.releaseId,receiptSha256:seal.publication.receiptSha256};
@@ -431,6 +433,8 @@ async function main(){
     try{
       console.log(JSON.stringify(await cleanupHostedRuns(runtime,checkout)));
     }catch(error){reportHostedCleanupFailure(error);}
+    try{const {cleanupRuntimeCatalog}=await import('./cleanup-runtime-catalog.mjs');console.log(JSON.stringify({runtimeCleanup:await cleanupRuntimeCatalog(runtime)}));}
+    catch{console.warn(JSON.stringify({notice:'runtime_cleanup_pending',catalogBlocked:false}));}
     return;
   }
   if(mode==='activate'){

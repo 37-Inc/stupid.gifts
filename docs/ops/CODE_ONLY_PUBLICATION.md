@@ -1,5 +1,9 @@
 # Maintained code-only publication
 
+**After runtime cutover:** use [Application deploy](RUNTIME_CATALOG.md). The
+legacy route below is retained for original frozen pre-cutover recovery, not
+new app shipping. It refuses new preparations once runtime mode is active.
+
 Small code/UI fixes use the **existing GitHub Catalog care workflow, manual
 mode `code`**, after merge. This uses the same `catalog-production` concurrency
 and protected pending pointer as catalog care, not another publisher/scheduler.
@@ -22,7 +26,8 @@ the same saved package, owner and exact readback, never a replacement run.
 The `catalog-production` concurrency fence is job-scoped. Acceptance and the
 pending-pointer handoff finish before a separate, independently serialized
 `catalog-cleanup` job restores one due historical workspace. Cleanup receives
-only private R2 credentials, not supplier/model or Cloudflare application keys.
+private R2 plus the existing Cloudflare reference for exact registered runtime
+retention metadata, never supplier/model keys. It does not deploy applications.
 It retains original source/config/deadlines; queue CAS conflicts merge fresh
 registrations rather than overwriting them. Failure does not reverse acceptance.
 Hosted generated checkout output disappears with its ephemeral runner; do not
@@ -83,12 +88,24 @@ prebuild attempts are terminal, not recovery candidates.
   read. New clients, restored inputs and new invocations authenticate again.
   No schema migration/out-of-band DDL is permitted under an active publication
   owner. This is not a persistent snapshot cache or private-source waiver.
+- Enqueue/claim/dispatch use the sealed snapshot hash, genuine receipt and compact
+  SQL barriers; they do not each repeat a fieldwise public-catalog rollback scan.
+  The publisher still freshly authenticates public bytes/native anchors before
+  activation and before final completion.
 - Acceptance checks the actual public identity, resolved build, idle owner and
   original genuine catalog receipt. The separate private serving-only receipt
   lives in `daily-catalog-care/code-only/<label>/success.json`. Catalog
   `last-success.json` and product/supplier timestamps stay unchanged.
 - A committed final-resolve response lost in transit resumes from body-free
   controls. It does not reacquire ownership or reconstruct expired bodies.
+- If an independently authorized exact uploaded version is already serving,
+  resume can reconcile that **observed** activation without uploading or sending
+  another activation. It verifies package/bindings, exact version/deployment marker
+  and public identity twice, records a truthful observed-activation pin, and CASes
+  only the original build/outbox/owner into completion. Original tokens, expired
+  lease values, attempts, catalog receipt, deadlines and charges remain historical;
+  no prior-deployment observation or new dispatch permission is invented. Unknown
+  or mismatched provider state stays pending.
 - Accepted generated-output cleanup uses the source-only cleanup capability
   after deployment locks are released for a persistent local operator. Hosted
   runners skip that redundant step; their separate expiry job retains the

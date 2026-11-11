@@ -264,6 +264,14 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,a
   for(const [name,value]of Object.entries(inputValues)){const file=directory+'/'+name+'.json';inputs[name]={path:file,
     sha256:bundled?digest(JSON.stringify(value)+'\n'):await put(file,value),observedAt:now};}
   const runId='daily-'+calendar.day+'-'+SOURCE.slice(0,8)+'-'+digest(path.basename(directory)).slice(0,8);
+  // Capture before the optional AI editor: a manual edition saved while it
+  // deliberates must win, rather than being mistaken for our base revision.
+  let runtimeCatalog;
+  const runtimeTable=(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='catalog_runtime_head'").all()).results.length;
+  if(runtimeTable){const head=(await db.prepare(`SELECT p.release_id,p.data_sha256 FROM catalog_runtime_head h JOIN catalog_runtime_publications p ON p.release_id=h.release_id WHERE h.singleton=1 AND h.enabled=1`).all()).results[0];
+    if(head){if(head.release_id!==seal.publication.releaseId)refuse('runtime_catalog_successor_changed');
+      const latest=(await db.prepare("SELECT coalesce(max(revision),0) n FROM content_admin_requests WHERE resource='/collections/homepage'").all()).results[0].n;
+      runtimeCatalog={schemaVersion:1,previousReleaseId:head.release_id,previousDataSha256:head.data_sha256,homepageRevision:latest};}}
   let homepageEdition=await routineHomepageEdition(calendar.day,prior.control.path,canaryId?file=>
     file===path.dirname(prior.control.path)+'/homepage-edition.json'?optional(file):null:optional);
   const semanticSearch=routineSearchPolicy(await optional(CARE+'/semantic-search.json'));
@@ -295,7 +303,7 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,a
   if(discoveryInputs?.searchTopics.length)automated.searchTopics=discoveryInputs.searchTopics;
   if(bundled)preparationReceipt.metrics=db.metrics();
   const config=validateCloudflareWeeklyConfig({schemaVersion:1,runId,catalogRevision:runId,codeSha:SOURCE,environment:SCOPE.environment,accountId:SCOPE.accountId,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},vectorIndex:{name:SCOPE.indexName,dimensions:1536,metric:'cosine'},catalog:{associateTag:'goose-gifts-37-20',marketplace:'www.amazon.com'},backfillLimit:0,cadence:{day:calendar.day,featuredIds:[...homepageEdition.anchors,...homepageEdition.rotation],runKey:runId,...(photosOnly?{photosOnly:true}:{}),...(admitAsins?{admitAsins}:{}),...(automated?{automation:automated}:{})},credentials:{cloudflare:RUNTIME.credentials.cloudflare,amazonId:RUNTIME.credentials.amazonId,amazonSecret:RUNTIME.credentials.amazonSecret,amazonVersion:'3.1',...(needsModel?{openai:RUNTIME.credentials.openai}:{})},limits,retention:{reviewReference:'owner/2026-11-02/per-run-catalog-bounds',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint'].map(k=>[k,{maxAgeMs:86400000,notAfter}]))},inputs,
-    publication:{schemaVersion:1,environment:SCOPE.environment,accountId:SCOPE.accountId,workerName:SCOPE.workerName,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},indexName:SCOPE.indexName,codeSha:SOURCE,sourceMode:'stupid-production',sourceRoot:ROOT,releaseId:runId,identityOrigin:'https://stupid.gifts',compatibilityDate:'2026-10-19',prior:{directory:null,releaseId:seal.publication.releaseId,manifestSha256:prior.manifestSha256,versionReference:prior.versionReference},servingPrior,semanticSearch,homepage:homepageEdition,merchandising,publicAnalytics:{enabled:true,posthogHost:'https://us.i.posthog.com',posthogKey:'phc_ATVKSPwDYTRfX9qDtDVLzZuXQcNdV9d55SjC8bHtuU8w'}}});
+    publication:{schemaVersion:1,environment:SCOPE.environment,accountId:SCOPE.accountId,workerName:SCOPE.workerName,database:{id:SCOPE.databaseId,name:SCOPE.databaseName},indexName:SCOPE.indexName,codeSha:SOURCE,sourceMode:'stupid-production',sourceRoot:ROOT,releaseId:runId,identityOrigin:'https://stupid.gifts',compatibilityDate:'2026-10-19',prior:{directory:null,releaseId:seal.publication.releaseId,manifestSha256:prior.manifestSha256,versionReference:runtimeCatalog?servingPrior.versionReference:prior.versionReference},...(runtimeCatalog?{runtimeCatalog}:{}),servingPrior,semanticSearch,homepage:homepageEdition,merchandising,publicAnalytics:{enabled:true,posthogHost:'https://us.i.posthog.com',posthogKey:'phc_ATVKSPwDYTRfX9qDtDVLzZuXQcNdV9d55SjC8bHtuU8w'}}});
   const configPath=directory+'/config.json',configSha256=bundled?digest(JSON.stringify(config)+'\n'):await put(configPath,config),record={source:SOURCE,helperSha256:self,configPath,configSha256,runId,capacity};
   if(bundled){const bundle={schemaVersion:1,kind:'routine-preparation',source:SOURCE,helperSha256:self,config,inputs:inputValues,operator:record,preparationReceipt,
     ...(freshness?{freshness}:{}),...(discoveryInputs?{discoveryInputs}:{})};
@@ -342,9 +350,9 @@ export async function routineHomepageEdition(day,priorControl,read=optional){
 export async function remember(result,entry,config,directory){
   if(result.state!=='finalized'||!result.catalogSeal)return;
   const w=await openRunWorkspace(entry.workspace);
-  try{const cp=await w.readCheckpoint({controlOnly:true});if(cp?.checkpoint.phase!=='finalized'||cp.checkpoint.owner!==null)refuse('final_state');const control=cp.checkpoint.control.publication;
-  if(control.stage!=='published'||!control.intent||control.intent.releaseId!==config.publication.releaseId||!control.versionReference)refuse('final_identity');
-  const file=directory+'/catalog-control.json',hash=await put(file,result.catalogSeal),next={control:{path:file,sha256:hash},versionReference:control.versionReference,manifestSha256:control.intent.manifestSha256};
+  try{const cp=await w.readCheckpoint({controlOnly:true});if(cp?.checkpoint.phase!=='finalized'||cp.checkpoint.owner!==null)refuse('final_state');const control=cp.checkpoint.control.publication,runtime=cp.checkpoint.control.runtimeCatalog;
+  if(runtime?(runtime.stage!=='published'||runtime.releaseId!==config.publication.releaseId):(!control||control.stage!=='published'||!control.intent||control.intent.releaseId!==config.publication.releaseId||!control.versionReference))refuse('final_identity');
+  const file=directory+'/catalog-control.json',hash=await put(file,result.catalogSeal),next={control:{path:file,sha256:hash},...(runtime?{transport:'runtime-data',manifestSha256:runtime.dataSha256}:{versionReference:control.versionReference,manifestSha256:control.intent.manifestSha256})};
   if(config.publication.homepage)await put(directory+'/homepage-edition.json',config.publication.homepage);
   await put(directory+'/success.json',{next,result:weeklyCommandSummary(result),source:config.codeSha,operatorSource:SOURCE,helperSha256:self});
   const pointer=CARE+'/last-success.json',oldBytes=await priorSuccess(),old=oldBytes?JSON.parse(oldBytes.toString('utf8')):null;

@@ -120,12 +120,18 @@ same publisher and exact-ASIN operator, not permission to run a local fallback.
 
 ## Publication, recovery and acceptance
 
-Use the maintained [code-only route](CODE_ONLY_PUBLICATION.md) for code over the
-accepted catalog. Preserve its genuine D1 catalog receipt and accepted pointer.
-After merge, select manual `code` in the existing GitHub Catalog care workflow;
-do not run full maintenance merely to ship a small UI fix. It shares the same
-single-writer queue and resumes only its saved code intent. Pending catalog work
-must finish first. No new private per-release publisher or fake catalog receipt.
+The [runtime catalog](RUNTIME_CATALOG.md) separates app deployment from routine
+catalog publication. The private [content admin API](CONTENT_ADMIN.md) stays
+default-off until staff Access is verified. Runtime collection writes use the
+same versioned service as the daily homepage editor; admissions/copy/visibility
+remain explicit HTTP202 drafts, not new provider jobs or accepted products.
+
+After runtime cutover, code/UI changes use the manual `Application deploy`
+workflow (`app-deploy.yml`, mode `deploy`), independent of catalog care. It has
+no supplier/model credentials and cannot change the accepted catalog head.
+The historical [code-only route](CODE_ONLY_PUBLICATION.md) remains for exact
+frozen pre-cutover recovery only; never start another legacy static publication.
+Routine care retains the single catalog queue and genuine catalog receipts.
 
 Pending work keeps original source/config/owner/checkpoint/review SHA. Do not
 force locks/owners or blindly retry uncertain version/activation writes.
@@ -144,8 +150,8 @@ Hosted generated output leaves with its ephemeral runner. Historical expired
 body/package cleanup runs in a dependent `catalog-cleanup` job after the
 job-scoped `catalog-production` queue releases, retaining original registrations,
 sources and deadlines. It cannot hold application shipping behind old cleanup.
-App promotion still waits for pending catalog acceptance; runtime catalog/data
-separation is not yet implemented.
+Normal app promotion no longer waits for catalog work. The once-only bootstrap
+does settle the original saved code intent before enabling runtime publication.
 
 Credentials come only from reviewed local Keychain/OAuth references or explicitly
 approved hosted secrets. Access failure needs the exact attended action; never

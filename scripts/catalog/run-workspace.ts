@@ -36,7 +36,12 @@ export interface PublicationControl {
   uploadMarker:string; versionReference:string|null; deploymentMarker:string; deploymentId:string|null;
   receiptSha256?:string;
 }
-export interface WorkspaceControl { publication?:PublicationControl }
+export interface RuntimePublicationControl {
+  schemaVersion:1;configSha256:string;requestId:string;runReference:string;releaseId:string;
+  dataSha256:string;sourceSnapshotSha256:string;publicSnapshotSha256:string;previousReleaseId:string;handoffSha256:string;
+  stage:'prepared'|'published';receiptSha256?:string;
+}
+export interface WorkspaceControl { publication?:PublicationControl;runtimeCatalog?:RuntimePublicationControl }
 export interface WorkspaceCheckpoint {
   phase:string; owner:MutationOwner|null; state:Json; pins:Record<string,ArtifactRef>;
   phaseComplete:ArtifactRef|null; control?:WorkspaceControl;
@@ -281,7 +286,14 @@ function owner(value:MutationOwner) {
 }
 function control(value:WorkspaceControl|undefined) {
   if(value===undefined)return;
-  if(!exact(value,value.publication===undefined?[]:['publication']))fail('control');
+  if(!exact(value,[...(value.publication===undefined?[]:['publication']),...(value.runtimeCatalog===undefined?[]:['runtimeCatalog'])])
+    ||value.publication&&value.runtimeCatalog)fail('control');
+  if(value.runtimeCatalog){const p=value.runtimeCatalog;
+    if(!exact(p,['schemaVersion','configSha256','requestId','runReference','releaseId','dataSha256','sourceSnapshotSha256','publicSnapshotSha256','previousReleaseId','handoffSha256','stage',...(p.receiptSha256===undefined?[]:['receiptSha256'])])
+      ||p.schemaVersion!==1||![p.configSha256,p.dataSha256,p.sourceSnapshotSha256,p.publicSnapshotSha256,p.requestId,p.handoffSha256].every(hash)
+      ||![p.runReference,p.releaseId,p.previousReleaseId].every(key)||!['prepared','published'].includes(p.stage)
+      ||(p.stage==='published')!==hash(p.receiptSha256))fail('control');return;
+  }
   if(!value.publication)return;
   json(value,MAX_JSON);const p=value.publication;
   if(!exact(p,['schemaVersion','configSha256','requestId','runReference','stage','build','publication','intent','permit','vectorPlan','packageSha256','uploadMarker','versionReference','deploymentMarker','deploymentId',...(p.receiptSha256===undefined?[]:['receiptSha256'])])
@@ -634,6 +646,13 @@ function apply(state:State,event:Event,dry=false) {
 }
 function validateControlTransition(old:CheckpointControl,next:CheckpointControl,state:State) {
   checkpoint({...next,state:null});
+  if(old.control?.runtimeCatalog){
+    const a=old.control.runtimeCatalog,b=next.control?.runtimeCatalog;
+    if(!b||!same(old.pins,next.pins)||!same(old.phaseComplete,next.phaseComplete)||!['published','finalized'].includes(next.phase)
+      ||!same({...a,stage:b.stage,...(b.receiptSha256?{receiptSha256:b.receiptSha256}:{})},b)||b.stage!=='published'
+      ||a.stage==='published'&&a.receiptSha256!==b.receiptSha256||next.phase==='finalized'&&next.owner!==null
+      ||next.owner&&(next.owner.phase!=='writing'||next.owner.ownerReference!==state.manifest.runId+':finalize'))fail('control_reconciliation');return;
+  }
   if(!same(old.pins,next.pins)||!same(old.phaseComplete,next.phaseComplete)
     ||!old.control?.publication||!next.control?.publication)fail('control_reconciliation');
   const prior=old.control.publication,current=next.control.publication;
@@ -665,6 +684,11 @@ function validateControlTransition(old:CheckpointControl,next:CheckpointControl,
   if(prior.receiptSha256!==undefined&&prior.receiptSha256!==current.receiptSha256)fail('control_reconciliation');
 }
 function controlEvolution(old:CheckpointControl,next:CheckpointControl,publicationUntil?:string) {
+  const runtime=old.control?.runtimeCatalog,nextRuntime=next.control?.runtimeCatalog;
+  if(runtime){
+    if(!nextRuntime||!same({...runtime,stage:nextRuntime.stage,...(nextRuntime.receiptSha256?{receiptSha256:nextRuntime.receiptSha256}:{})},nextRuntime)
+      ||runtime.stage==='published'&&nextRuntime.stage!=='published')fail('control_rewrite');return;
+  }
   const a=old.control?.publication,b=next.control?.publication;if(!a)return;if(!b)fail('control_rewrite');
   // Shape permission only: the protected publisher separately proves actual
   // DB expiry, attempt increment and ownership. Never a control-only recovery.
@@ -703,6 +727,8 @@ function controlEvolution(old:CheckpointControl,next:CheckpointControl,publicati
 }
 function bindCheckpoint(value:CheckpointControl,manifest:WorkspaceManifest,execution:ExecutionAdoption|null=null) {
   if(value.owner&&(value.owner.environment!==manifest.scope.environment||value.owner.indexName!==manifest.scope.indexName))fail('owner_scope');
+  const runtime=value.control?.runtimeCatalog;
+  if(runtime&&(execution||runtime.configSha256!==manifest.configSha256||runtime.runReference!==manifest.runId||runtime.releaseId!==manifest.runId))fail('control_scope');
   const p=value.control?.publication;if(p&&(p.build.request.environment!==manifest.scope.environment
     ||p.build.request.codeSha!==(execution?.effective.codeSha??manifest.codeSha)
     ||p.intent&&p.intent.codeSha!==(execution?.effective.codeSha??manifest.codeSha)

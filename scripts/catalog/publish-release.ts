@@ -19,7 +19,7 @@ import { assertPermanentCatalog } from '../../lib/catalog/freeze-permanent-catal
 import {assertApprovedCatalogInventory} from './permanent-catalog-seal.ts';
 import type { ApprovedCohortRevision } from '../../lib/catalog/freeze-approved-cohort.ts';
 import type { ActivationPermit, DeploymentIdentity, DeploymentObservation, BuildRecoveryApproval, ReviewedUploadActivationApproval, ReviewedUploadActivationApprovalV1, ReviewedUploadActivationInput } from '../../lib/catalog/build-requests.ts';
-import { beginBuildActivation, claimBuildRequest, encodeBuildRequest, resolveBuildActivation, drainDeploymentObservation,
+import { beginBuildActivation, reconcileObservedServingActivation, claimBuildRequest, encodeBuildRequest, resolveBuildActivation, drainDeploymentObservation,
   encodeBuildRecoveryApproval, recoverUnstartedBuildRequest, readUnstartedBuildRecovery,
   encodeReviewedUploadActivationApproval, reviewedUploadActivationDeadline, beginReviewedUploadActivation, readReviewedUploadActivation,validatePublicationFinishAuthority } from '../../lib/catalog/build-requests.ts';
 import { isAccountedPublicationFetch } from './publication-read-fetch.ts';
@@ -81,6 +81,8 @@ export interface PublicationConfig {
     derivedCatalog?:{path:string;sha256:string;indexName:string}};
   /** Public build inputs only; omission preserves historical hashes/default-off. */
   publicAnalytics?:{enabled:boolean;posthogKey:string;posthogHost:string};
+  /** Data publication: no application build, version upload or activation. */
+  runtimeCatalog?:{schemaVersion:1;previousReleaseId:string;previousDataSha256:string;homepageRevision:number};
 }
 const KEY=/^[a-zA-Z0-9._-]{1,200}$/;
 const HASH=/^[a-f0-9]{64}$/;
@@ -91,7 +93,7 @@ const exact=(v:object,keys:string)=>Object.keys(v).sort().join(',')===keys;
 const sameRef=(a:ArtifactRef|undefined,b:ArtifactRef|undefined)=>canonicalJson(a??null)===canonicalJson(b??null);
 const sha256=(value:string|Uint8Array)=>createHash('sha256').update(value).digest('hex');
 export function validatePublicationConfig(input:PublicationConfig):Readonly<PublicationConfig> {
-  if(!input||!exact(input,`${Object.hasOwn(input,'acceptedCatalog')?'acceptedCatalog,':''}accountId,codeSha,compatibilityDate,database,environment,${Object.hasOwn(input,'homepage')?'homepage,':''}identityOrigin,indexName,${Object.hasOwn(input,'merchandising')?'merchandising,':''}prior,${Object.hasOwn(input,'publicAnalytics')?'publicAnalytics,':''}releaseId,schemaVersion,${Object.hasOwn(input,'semanticSearch')?'semanticSearch,':''}${Object.hasOwn(input,'servingPrior')?'servingPrior,':''}sourceMode,sourceRoot,workerName`)
+  if(!input||!exact(input,`${Object.hasOwn(input,'acceptedCatalog')?'acceptedCatalog,':''}accountId,codeSha,compatibilityDate,database,environment,${Object.hasOwn(input,'homepage')?'homepage,':''}identityOrigin,indexName,${Object.hasOwn(input,'merchandising')?'merchandising,':''}prior,${Object.hasOwn(input,'publicAnalytics')?'publicAnalytics,':''}releaseId,${Object.hasOwn(input,'runtimeCatalog')?'runtimeCatalog,':''}schemaVersion,${Object.hasOwn(input,'semanticSearch')?'semanticSearch,':''}${Object.hasOwn(input,'servingPrior')?'servingPrior,':''}sourceMode,sourceRoot,workerName`)
     ||input.schemaVersion!==1||!['staging','production'].includes(input.environment)||!/^[a-f0-9]{32}$/.test(input.accountId)
     ||!RESOURCE.test(input.workerName)||input.environment==='staging'&&!WORKERS_DEV_NAME.test(input.workerName)
     ||!RESOURCE.test(input.indexName)||!input.database||!exact(input.database,'id,name')
@@ -101,6 +103,10 @@ export function validatePublicationConfig(input:PublicationConfig):Readonly<Publ
     ||new Date(`${input.compatibilityDate}T00:00:00.000Z`).toISOString().slice(0,10)!==input.compatibilityDate)
     throw new Error('publication_configuration_invalid');
   if(Object.hasOwn(input,'homepage')&&!readHomepageEdition(input.homepage))throw new Error('publication_homepage_invalid');
+  if(input.runtimeCatalog&&(!exact(input.runtimeCatalog,'homepageRevision,previousDataSha256,previousReleaseId,schemaVersion')
+    ||input.runtimeCatalog.schemaVersion!==1||!KEY.test(input.runtimeCatalog.previousReleaseId)||!HASH.test(input.runtimeCatalog.previousDataSha256)
+    ||!Number.isSafeInteger(input.runtimeCatalog.homepageRevision)||input.runtimeCatalog.homepageRevision<0
+    ||input.runtimeCatalog.previousReleaseId!==input.prior?.releaseId||input.acceptedCatalog))throw Error('publication_runtime_invalid');
   if(Object.hasOwn(input,'merchandising')&&!readMerchandising(input.merchandising))throw new Error('publication_merchandising_invalid');
   const identity=siteIdentityFor(input.sourceMode); const origin=new URL(input.identityOrigin);
   if(origin.protocol!=='https:'||origin.origin!==input.identityOrigin||origin.username||origin.password
@@ -873,6 +879,37 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       await save({stage:'activating',permit:{requestId:control.requestId,token:control.build.token,runReference:control.runReference,
         releaseId:config.releaseId,versionReference:control.versionReference!,mutationOwner:actual}},actual);
     }
+    if(serving&&!reviewed&&!control.permit&&owner.phase==='freezing'&&['uploaded','activating'].includes(control.stage)
+      &&control.versionReference&&control.publication&&control.intent&&control.packageSha256){
+      const deployed=await api.deployed();
+      if(deployed?.version===control.versionReference){
+        if(control.deploymentId!==null&&control.deploymentId!==deployed.id)throw Error('serving_observation_mismatch');
+        // A separately authorized exact promotion is already live. Observe and
+        // reconcile it truthfully; never pretend we observed its prior or POST again.
+        await verifyBuiltPackage();verifyUploadedVersion(await api.version(control.versionReference),config,control.versionReference,control);
+        const reconciled=await reconcileObservedServingActivation(db,control.build,control.publication,serving.revision!,serving.authority,
+          owner,control.versionReference,control.deploymentMarker,async signal=>{
+            signal.throwIfAborted();const before=await api.deployed(signal);
+            if(!before||before.id!==deployed.id||before.version!==control!.versionReference||before.marker!==control!.deploymentMarker
+              ||!matchesIdentity(await api.identity(signal),control!.intent!))throw Error('serving_observation_mismatch');
+            if(canonicalJson(await api.deployed(signal))!==canonicalJson(before))throw Error('serving_observation_mismatch');
+            return{environment:config.environment,settled:true,active:identity(control!.intent!,control!.versionReference!),
+              deploymentId:before.id,marker:before.marker!};
+          },async observation=>{
+            await permanentProof();
+            const proof={schemaVersion:1,observation,configSha256,packageSha256:control!.packageSha256,
+              requestId:control!.requestId,intent:control!.intent,versionReference:control!.versionReference,owner};
+            const pin=checkpoint!.checkpoint.pins.publicationObservedActivation;
+            if(pin){const saved=await workspace.readArtifact(pin) as unknown as typeof proof;
+              if(canonicalTime(saved.observation.observedAt)>observation.observedAt
+                ||canonicalJson({...saved,observation:{...saved.observation,observedAt:observation.observedAt}})!==canonicalJson(proof))
+                throw Error('serving_observation_fenced');
+              if(control!.stage!=='activating')await save({stage:'activating'});
+            }else await save({stage:'activating'},owner,{publicationObservedActivation:await workspace.putArtifact(proof,{kind:'publication',observedAt:observation.observedAt})});
+          },now());
+        await save({stage:'activating',permit:reconciled.permit,deploymentId:reconciled.observation.deploymentId},reconciled.permit.mutationOwner);
+      }
+    }
     if(control.permit){
       owner=control.permit.mutationOwner!;
       const receiptOnly=options.acceptedReceiptOnly===true;
@@ -933,8 +970,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
           // Approved persistent completion already checks all source/projection
           // rows on both sides of this callback. Retain one full private/held
           // inventory AFTER the independent native/deployment observation.
-          if(serving)await vectorProof();
-          else if(!options.approvedCatalog?.persistent)await permanentProof();
+          if(!serving&&!options.approvedCatalog?.persistent)await permanentProof();
           await observed();await permanentProof();receiptInventoryOwner={...owner};return control!.intent!;
         };
         if(serving)await completeActivatedServingPublication(db,serving.revision!,control.publication!,control.permit,serving.authority,readDeployed,now);

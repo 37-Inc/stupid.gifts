@@ -1,5 +1,5 @@
 import type { CatalogSnapshot, PublicCatalogProduct } from "../../lib/catalog/types";
-import { readySnapshotProducts } from "./selection";
+import { readySnapshotProducts } from "./selection.ts";
 
 // Saved lineups contain identities only, never frozen product copy or photos.
 // Keep past editions intact so a postponed filming can reopen its original URL.

@@ -1,0 +1,51 @@
+import test,{after} from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import path from 'node:path';
+import {stop} from 'esbuild';
+import {deployRuntimeApp} from '../scripts/catalog/deploy-runtime-app.mjs';
+import {CATALOG_SCOPE as SCOPE} from '../scripts/catalog/automation-runtime.mjs';
+after(stop);
+const source='a'.repeat(40),old='00000000-0000-4000-8000-000000000001',next='00000000-0000-4000-8000-000000000002',deployment='00000000-0000-4000-8000-000000000003';
+function fixture({lostActivation=false,lostUpload=false}={}){
+  const objects=new Map(),writes=[],state={version:old,marker:null,uploads:0,activations:0},bindings=[{name:'DB',type:'d1',id:SCOPE.databaseId},
+    {name:'ASSETS',type:'assets'},{name:'VECTORIZE',type:'vectorize',index_name:SCOPE.indexName},{name:'SEMANTIC_VECTORIZE',type:'vectorize',index_name:'actual-existing-search'},
+    {name:'OPENAI_API_KEY',type:'secret_text'},{name:'ENVIRONMENT',type:'plain_text',text:'production'},{name:'SEMANTIC_SEARCH_ENABLED',type:'plain_text',text:'true'}];
+  const runtime={hosted:true,token:async()=>'SYNTHETIC_TOKEN',durable:{async get(key){const bytes=objects.get(key);return bytes?{bytes,etag:'"test"'}:null;},async putImmutable(key,bytes){
+    const prior=objects.get(key);if(prior)assert.ok(Buffer.from(prior).equals(Buffer.from(bytes)));else{objects.set(key,new Uint8Array(bytes));writes.push(key);}return{bytes,etag:'"test"'};}}};
+  const ok=result=>Response.json({success:true,result});
+  const send=async(input,options={})=>{
+    const url=new URL(input);assert.ok(['api.cloudflare.com','stupid.gifts'].includes(url.hostname));
+    if(url.hostname==='stupid.gifts')return Response.json(url.pathname.endsWith('runtime-catalog.json')?{contract:'runtime-catalog-v1',catalogReleaseId:'unchanged-catalog',dataSha256:'c'.repeat(64)}:
+      {release_id:state.metadata.releaseId,code_sha:source,manifest_sha256:state.manifestSha256,catalog_revision:'unchanged-catalog',catalog_snapshot_sha256:'d'.repeat(64)});
+    if(options.method==='POST'){
+      const body=JSON.parse(options.body);assert.deepEqual(body.versions,[{version_id:next,percentage:100}]);state.activations++;state.version=next;state.marker=body.annotations['workers/message'];
+      if(lostActivation){lostActivation=false;throw Error('synthetic lost committed POST acknowledgement');}return ok({id:deployment});
+    }
+    if(url.pathname.endsWith('/deployments'))return ok({deployments:[{id:deployment,versions:[{version_id:state.version,percentage:100}],annotations:{'workers/message':state.marker}}]});
+    if(url.pathname.endsWith('/versions'))return ok({items:state.uploaded?[{id:next,annotations:{'workers/tag':state.tag}}]:[]});
+    if(url.pathname.endsWith('/versions/'+old))return ok({id:old,resources:{bindings}});
+    if(url.pathname.endsWith('/versions/'+next))return ok({id:next,annotations:{'workers/tag':state.tag,'workers/message':state.message},resources:{bindings:state.bindings}});
+    throw Error('Unexpected provider path');
+  };
+  const command=async(file,args,options)=>{
+    assert.equal(file,process.execPath);assert.ok(!Object.keys(options.env).some(k=>/STUPID_GIFTS_|AMAZON|OPENAI|R2_SECRET/.test(k)));
+    assert.equal(options.env.CLOUDFLARE_API_TOKEN,'SYNTHETIC_TOKEN');assert.ok(writes.some(k=>k.endsWith('/upload-dispatched.json')));
+    const configPath=args[args.indexOf('--config')+1],config=JSON.parse(await readFile(configPath,'utf8'));
+    assert.equal(config.keep_vars,true);assert.equal(config.vars.SEMANTIC_SEARCH_ENABLED,'true');assert.equal(config.vectorize[1].index_name,'actual-existing-search');
+    const bytes=await readFile(path.join(path.dirname(configPath),'app-manifest.json'));state.metadata=JSON.parse(bytes);
+    state.manifestSha256=(await import('node:crypto')).createHash('sha256').update(bytes).digest('hex');
+    state.tag=args[args.indexOf('--tag')+1];state.message=args[args.indexOf('--message')+1];state.uploads++;state.uploaded=true;
+    state.bindings=[...bindings.filter(b=>b.type!=='plain_text'),...Object.entries(config.vars).map(([name,text])=>({type:'plain_text',name,text})),
+      {type:'r2_bucket',name:'CATALOG_DATA',bucket_name:'stupid-gifts-catalog-private'}];
+    if(lostUpload){lostUpload=false;throw Error('synthetic upload acknowledgement lost');}
+  };
+  return{runtime,send,command,state,objects};
+}
+for(const mode of ['normal','lostActivation','lostUpload'])test('app-only deploy preserves bindings/catalog and reconciles '+mode+' without catalog ownership or duplicate dispatch',async()=>{
+  const f=fixture({[mode]:true}),result=await deployRuntimeApp({...f,source});
+  assert.equal(result.state,'deployed');assert.equal(result.catalogReleaseId,'unchanged-catalog');assert.equal(result.supplierCalls,0);assert.equal(result.modelCalls,0);
+  assert.equal(f.state.uploads,1);assert.equal(f.state.activations,1);
+  const again=await deployRuntimeApp({...f,source});assert.equal(again.version,next);assert.equal(f.state.uploads,1);assert.equal(f.state.activations,1);
+  assert.ok([...f.objects.keys()].every(k=>k.startsWith('app-releases/')),'No catalog pointer, product row or catalog mutation journal is written');
+});

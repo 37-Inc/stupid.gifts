@@ -20,6 +20,7 @@ import { decodePgvectorSendBase64 } from './pgvector-binary.ts';
 import { openRunWorkspace, readRunWorkspace, WORKSPACE_BLOB_LIMITS } from './run-workspace.ts';
 import type { ArtifactRef, RetentionPolicy, RunWorkspace, RunWorkspaceOptions, WorkspaceCheckpoint, PublicationFinishBudget } from './run-workspace.ts';
 import { executePublication, validatePublicationConfig } from './publish-release.ts';
+import {publishRuntimeCatalog,readAcceptedRuntimeHandoff} from './publish-runtime-catalog.ts';
 import { accountedPublicationReadFetch, accountedPublicationFetch, isAccountedPublicationFetch } from './publication-read-fetch.ts';
 import { accountedPublicationUploadCommand, isAccountedPublicationUploadCommand } from './publication-upload-command.ts';
 import { approvedRequestControl, hydrateApprovedRequest, approvedRevisionControl, hydrateApprovedRevision,
@@ -448,7 +449,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       &&saved.checkpoint.control.publication.intent?.nextExpiry===null&&resolving(saved.checkpoint));
     const permanentFinalization=routineFinalization||Boolean(finish&&(await ws.budgetRowsReadCeiling()!==null||!adoption));
     if(finish?.terminalReceiptOnly&&!permanentFinalization)throw Error('weekly_terminal_scope_required');
-    if(!permanentFinalization)await ws.purgeExpired();
+    if(!permanentFinalization&&!saved?.checkpoint.control?.runtimeCatalog)await ws.purgeExpired();
     if(config.cadence&&!routineFinalization&&!reviewedUploadRetry&&saved?.checkpoint.control?.publication){
       try{reviewedUploadRetry=await routineUploadRetry(ws,now());}
       catch(error){return{state:'attention',phase:saved.checkpoint.phase,errorCode:safeCode(error),budget:await ws.budget()};}
@@ -476,6 +477,45 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         },settle:(id,value)=>ws.settleBudget(id,value)}});
     if(permanentFinalization)return await settleActivatedPermanentWeekly({db,ws,config,configSha256:options.configSha256,token,
       publication,reviewedUploadRetry,finish});
+    if(saved?.checkpoint.control?.runtimeCatalog&&options.durable){
+      const runtimeControl=saved.checkpoint.control.runtimeCatalog,handoff=await readAcceptedRuntimeHandoff(db,options.durable,runtimeControl);
+      if(handoff){
+        const receiptSha256=sha256(canonicalJson(handoff.receipt)),releaseId=runtimeControl.releaseId;
+        const save=async(phase:'published'|'finalized',owner:MutationOwner|null)=>{
+          saved=(await ws.readCheckpoint({controlOnly:true}))!;
+          saved=await ws.writeControlCheckpoint(saved.sha256,{phase,owner,control:{runtimeCatalog:{...runtimeControl,stage:'published',receiptSha256}}});
+        };
+        await ws.recordCatalogSuccessor(handoff.seal);
+        if(saved.checkpoint.phase!=='published')await save('published',null);
+        const summary={...handoff.summary,status:'completed',counts:{...handoff.summary.counts,publication:{status:'published',releaseId,receiptSha256}}};
+        const originalRun=(await db.prepare(`SELECT r.status,t.finish_json FROM catalog_runs r JOIN catalog_run_telemetry t ON t.run_id=r.id WHERE r.id=?`)
+          .bind(config.runId).all<Record<string,unknown>>()).results[0];
+        if(handoff.retainOriginalFailedTelemetry?originalRun?.status!=='failed':originalRun?.status==='completed'&&canonicalJson(JSON.parse(String(originalRun.finish_json)).counts)!==canonicalJson(summary.counts))
+          throw Error('weekly_finalization_mismatch');
+        if(handoff.retainOriginalFailedTelemetry||originalRun?.status==='completed'){
+          const remaining=await readMutationOwner(db,scope);
+          if(remaining){if(remaining.phase!=='writing'||remaining.ownerReference!==config.runId+':finalize'
+            ||remaining.operationKey!==sha256(`finalize:${options.configSha256}`))throw Error('weekly_finalize_owner');
+            await releaseExact(db,remaining);}
+          await save('finalized',null);
+          return{state:'finalized',runId:config.runId,releaseId,receiptSha256,catalogSeal:handoff.seal,budget:await ws.budget()};
+        }
+        let owner=saved.checkpoint.owner;
+        if(!owner){owner=await claimMutationOwnership(db,scope,{phase:'writing',ownerReference:config.runId+':finalize',operationKey:sha256(`finalize:${options.configSha256}`)});
+          if(!owner)throw Error('weekly_finalize_owner');await save('published',owner);}
+        const cursor={current:owner},telemetry=createD1CatalogTelemetryStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision});
+        const existing=await telemetry.loadCatalogRun(config.runId,{items:false});
+        if(existing?.run.status==='completed'){
+          if(canonicalJson(existing.run.counts)!==canonicalJson(summary.counts))throw Error('weekly_finalization_mismatch');
+          const actual=await readMutationOwner(db,scope);
+          if(actual){if(actual.generation!==owner.generation||actual.ownerReference!==owner.ownerReference||actual.operationKey!==owner.operationKey
+            ||actual.epoch<owner.epoch||actual.epoch>owner.epoch+1)throw Error('weekly_finalize_owner');cursor.current=actual;}
+        }else{await telemetry.finishCatalogRun(config.runId,summary);await save('published',cursor.current);}
+        const actual=await readMutationOwner(db,scope);if(actual)await releaseExact(db,cursor.current);
+        await save('finalized',null);
+        return{state:'finalized',runId:config.runId,releaseId,receiptSha256,catalogSeal:handoff.seal,budget:await ws.budget()};
+      }
+    }
     // Expiry never hides the minimal control identity required to resolve an
     // already-dispatched activation. No expired snapshot/evidence is read here.
     let cp:WorkspaceCheckpoint;
@@ -804,7 +844,11 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     }
     if(cp.phase==='publishing'){
       revision=revision||await hydrateApprovedRevision(db,hydrationOwner??cp.owner!,await readOrdered<ReturnType<typeof approvedRevisionControl>>(ws,cp.pins.revision));
-      const result=await executePublication({db,owner:cp.owner!,revision,approvedCatalog:revision,requestId:String(state().requestId),runReference:config.runId,workspace:ws,
+      const result=config.publication.runtimeCatalog?await publishRuntimeCatalog({db,owner:cp.owner!,revision,requestId:String(state().requestId),runReference:config.runId,
+        workspace:ws,config:config.publication,configSha256:options.configSha256,editHomepage:!config.cadence?.photosOnly,
+        retainOriginalFailedTelemetry:await retainedFailedAdmission(ws,db,config,options.configSha256),
+        store:options.durable??(()=>{throw Error('runtime_durable_store_required');})()})
+        :await executePublication({db,owner:cp.owner!,revision,approvedCatalog:revision,requestId:String(state().requestId),runReference:config.runId,workspace:ws,
         config:config.publication,routineCare:Boolean(config.cadence),credentials:{cloudflareToken:token,identityAuthorization:await identityAuthorization()},dependencies:publication,reviewedUploadRetry,finishAuthorization:finish?.authorization});
       const changed=await ws.readCheckpoint();if(!changed)throw new Error('weekly_checkpoint_missing');saved=changed;cp=changed.checkpoint;
       if(result.state!=='published')return{...result,phase:cp.phase,budget:await ws.budget()};

@@ -9,8 +9,9 @@ import { hasRepairedSemanticCopy, productPresentation } from '../../lib/catalog/
 /** Compiled, hash-bound artifact + CURRENT public snapshot, never broad D1 lookup.
  * Do not equate this local contract with actual index coverage/quality acceptance.
  */
-export function createDerivedSemanticSearch(snapshot: CatalogSnapshot, input: unknown) {
+export function createDerivedSemanticSearch(snapshot: CatalogSnapshot, input: unknown, repairedPublicIds:readonly string[] = [],legacyPublicFieldsSha256:Readonly<Record<string,string>> = {}) {
   const catalog = validateSemanticCatalog(input);
+  const repaired = new Set(repairedPublicIds);
   const excluded = new Set(snapshot.heldProducts.map(p => p.publicId));
   const excludedProducts = new Set(snapshot.heldProducts.map(p => p.id));
   const products = new Map(snapshot.products.flatMap(outer => {
@@ -31,11 +32,13 @@ export function createDerivedSemanticSearch(snapshot: CatalogSnapshot, input: un
         const metadata = match.metadata as {publicId?:string} | undefined;
         const product = products.get(metadata?.publicId ?? '');
         const entry = entries.get(match.id) ?? (product && semanticEntryFromMetadata(match.id,metadata,product.id));
-        if (!entry || !product || hasRepairedSemanticCopy(product)&&entry.inputRecipe!=='canonical-short-description-v2'
+        if (!entry || !product || (hasRepairedSemanticCopy(product)||repaired.has(product.publicId))&&entry.inputRecipe!=='canonical-short-description-v2'
           || product.id !== entry.productId || !Number.isFinite(match.score)
           || canonicalJson(match.metadata ?? null) !== canonicalJson(semanticVectorMetadata(entry))
           || await semanticVectorIdentity(entry) !== entry.vectorId
-          || await semanticHash(canonicalJson(semanticPublicFields(product,entry.inputRecipe))) !== entry.publicFieldsSha256) return null;
+          || (entry.inputRecipe==='canonical-short-description-v2'
+            ?await semanticHash(canonicalJson(semanticPublicFields(product,entry.inputRecipe)))
+            :legacyPublicFieldsSha256[product.publicId]??await semanticHash(canonicalJson(semanticPublicFields(product)))) !== entry.publicFieldsSha256) return null;
         return { product:productPresentation(product), score: Math.max(-1, Math.min(1, match.score)) };
       }));
       return verified.flatMap(item => {
