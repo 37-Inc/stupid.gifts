@@ -501,7 +501,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // Read normal state only before activation; control-only settlement must not
     // turn expired merchant artifacts back into usable content.
     const view=await workspace.readCheckpoint({controlOnly:true});if(!view)throw new Error('publication_checkpoint_missing');
-    if(options.finishAuthorization&&!reviewed||view.checkpoint.control?.publication?.permit||control.permit&&view.checkpoint.control?.publication?.stage==='activating'){
+    if(control.observedActivation||options.finishAuthorization&&!reviewed||view.checkpoint.control?.publication?.permit||control.permit&&view.checkpoint.control?.publication?.stage==='activating'){
       if(appendPins)throw new Error('publication_upload_review_required');
       await workspace.writeControlCheckpoint(view.sha256,{phase:'attention',owner,control:{publication:control}});
     }else{
@@ -520,6 +520,24 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       ||sealed.manifest.catalogRevision!==request.sourceRevision||sealed.manifest.priorReleaseId!==request.priorReleaseId
       ||sealed.manifest.vectorSyncWatermark!==revision.vectorSyncWatermark
       ||canonicalJson(sealed.snapshot)!==canonicalJson(revision.snapshot))throw new Error('publication_package_changed');
+  };
+  const verifyObservedServingInput=async(observedOwner=owner)=>{
+    const c=control!,intent=c.intent;
+    if(!options.routineCare||!serving||intent?.nextExpiry!==null)return verifyBuiltPackage();
+    // The original accepted snapshot can include expired finite overlays whose
+    // cleared permanent fallback is still live. Observe that exact immutable
+    // version; never restore/renew its expired upload package or authorize POST.
+    if(!revision||!c.publication||!HASH.test(c.packageSha256??'')||!HASH.test(intent.manifestSha256)
+      ||canonicalJson(c.publication.intent)!==canonicalJson(intent)||intent.releaseId!==config.releaseId
+      ||c.runReference!==intent.releaseId||intent.codeSha!==config.codeSha
+      ||intent.catalogRevision!==serving.authority.request.sourceRevision
+      ||intent.catalogSnapshotSha256!==serving.authority.request.sourceDigest
+      ||sha256(`${JSON.stringify(revision.snapshot)}\n`)!==intent.catalogSnapshotSha256
+      ||intent.vectorSyncWatermark!==revision.vectorSyncWatermark||intent.priorReleaseId!==serving.authority.publication.releaseId
+      ||encodeBuildRequest(c.build.request)!==encodeBuildRequest(serving.authority.request))throw Error('serving_observation_fenced');
+    // The observer core also requires the original exact build/outbox claims
+    // and owner before and during its final CAS; this is no body-cache bypass.
+    await recheckAcceptedCodeOnlyCatalog({db,owner:observedOwner,input:serving as AcceptedCodeOnlyRead,runReference:options.runReference});
   };
   try{
     if(serving&&!revision){
@@ -542,7 +560,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // separately authorized exact version may already be live. This readback
     // does NOT mint an upload ACK or a new dispatch grant: it only permits the
     // original observed-activation settlement below. Keep all original pins.
-    let observedServingUpload=Boolean(serving&&!reviewed&&control?.permit&&checkpoint?.checkpoint.pins.publicationObservedActivation);
+    let observedServingUpload=Boolean(serving&&!reviewed&&control?.permit&&(control.observedActivation||checkpoint?.checkpoint.pins.publicationObservedActivation));
     if(serving&&!reviewed&&!control?.permit&&control?.publication&&control.intent&&control.packageSha256
       &&['uploading','uploaded','activating'].includes(control.stage)
       &&checkpoint?.checkpoint.pins.publicationUploadPending&&!checkpoint.checkpoint.pins.publicationUploadAcknowledged
@@ -554,12 +572,14 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         ||!deployed||deployed.marker!==control.deploymentMarker
         ||control.versionReference!==null&&control.versionReference!==deployed.version
         ||control.deploymentId!==null&&control.deploymentId!==deployed.id)throw Error('serving_observation_mismatch');
-      await verifyBuiltPackage();verifyUploadedVersion(await api.version(deployed.version),config,deployed.version,control);
+      await verifyObservedServingInput(originalOwner);verifyUploadedVersion(await api.version(deployed.version),config,deployed.version,control);
       if(!matchesIdentity(await api.identity(),control.intent)
         ||canonicalJson(await api.deployed())!==canonicalJson(deployed)
         ||canonicalJson(await readMutationOwner(db,owner))!==canonicalJson(originalOwner))throw Error('serving_observation_mismatch');
       await recheckAcceptedCodeOnlyCatalog({db,owner:originalOwner,input:serving as AcceptedCodeOnlyRead,runReference:options.runReference});
-      if(control.stage==='uploading')await save({stage:'uploaded',versionReference:deployed.version});
+      if(control.stage==='uploading')await save({stage:'uploaded',versionReference:deployed.version,
+        ...(options.routineCare&&control.intent.nextExpiry===null?{observedActivation:{kind:'observed-serving-activation',
+          observedAt:now().toISOString(),deploymentId:deployed.id,marker:deployed.marker!}}:{})});
       observedServingUpload=true;
     }
     // A rejected protected upload is an operator-review gate, not an uncertain
@@ -910,7 +930,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         if(control.deploymentId!==null&&control.deploymentId!==deployed.id)throw Error('serving_observation_mismatch');
         // A separately authorized exact promotion is already live. Observe and
         // reconcile it truthfully; never pretend we observed its prior or POST again.
-        await verifyBuiltPackage();verifyUploadedVersion(await api.version(control.versionReference),config,control.versionReference,control);
+        await verifyObservedServingInput();verifyUploadedVersion(await api.version(control.versionReference),config,control.versionReference,control);
         const reconciled=await reconcileObservedServingActivation(db,control.build,control.publication,serving.revision!,serving.authority,
           owner,control.versionReference,control.deploymentMarker,async signal=>{
             signal.throwIfAborted();const before=await api.deployed(signal);
@@ -921,6 +941,14 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
               deploymentId:before.id,marker:before.marker!};
           },async observation=>{
             await permanentProof();
+            if(options.routineCare&&control!.intent!.nextExpiry===null){
+              const saved=control!.observedActivation;
+              if(saved&&(saved.deploymentId!==observation.deploymentId||saved.marker!==observation.marker
+                ||canonicalTime(saved.observedAt)>observation.observedAt))throw Error('serving_observation_fenced');
+              // A body-free original observation survives finite package expiry.
+              // Existing legacy artifact pins remain untouched, never renewed.
+              await save({stage:'activating',observedActivation:saved??observation});return;
+            }
             const proof={schemaVersion:1,observation,configSha256,packageSha256:control!.packageSha256,
               requestId:control!.requestId,intent:control!.intent,versionReference:control!.versionReference,owner};
             const pin=checkpoint!.checkpoint.pins.publicationObservedActivation;
