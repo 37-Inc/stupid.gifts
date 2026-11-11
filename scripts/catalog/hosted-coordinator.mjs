@@ -224,7 +224,7 @@ function defaults(runtime,environment){
       for(const role of ['cloudflare','amazonId','amazonSecret','openai'])if(config.credentials[role]&&canonicalJson(config.credentials[role])!==canonicalJson(runtime.credentials[role]))fail('credential_reference');
       const remote=await Promise.all(['manifest.json','head.json'].map(name=>runtime.durable.get(`runs/${config.runId}/${name}`)));
       const local=await Promise.all(['manifest.json','head.json'].map(name=>optional(()=>lstat(path.join(runtime.workspace,'runs',config.runId,name)))));
-      if(remote.every(v=>v===null)&&local.every(v=>v===null))return{prepared:true,started:false,config};
+      if(remote.every(v=>v===null)&&local.every(v=>v===null))return{prepared:true,started:false,config,configSha256:operator.configSha256};
       if(remote.some(v=>v===null))fail('workspace_uncertain');
       const {openRunWorkspace}=await import('./run-workspace.ts');
       const workspace=await openRunWorkspace({directory:runtime.workspace,repository:directory,mode:'resume',runId:config.runId,
@@ -376,7 +376,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
       if(result.source!==record.source||!HASH.test(result.configSha256)||!(await deps.inspect(record,directory)).prepared)fail('prepare_incomplete');
       continue;
     }
-    if(!status.started)result=await invoke('start');
+    if(!status.started)result=record.source!==source
+      ?await deps.invoke(ROOT,['recover',status.configSha256,'--run',record.runKey]):await invoke('start');
     else if(status.phase==='phase_failed'&&record.admitSavedRun)
       result=await deps.invoke(ROOT,['recover',status.configSha256,'--run',record.runKey]);
     else if(status.phase==='phases_complete'&&!status.approvalPin){

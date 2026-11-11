@@ -1194,14 +1194,23 @@ test('large previous ingress requires its exact raw SHA; context/rights inputs k
   }
 });
 
-test('oversized original input still binds reviewed RAW hash; config limit cannot be broadened by blob support',async t=>{
+test('prepared config above the old 32 KiB limit retains exact bytes and executes once',async t=>{
+  const f=await setup(t),body=JSON.stringify(f.config)+' '.repeat(40000);
+  await put(f.options.configPath,body);f.options.configSha256=sha256(body);f.workspaceOptions.configSha256=f.options.configSha256;
+  assert.equal((await f.run('start')).reason,'awaiting_reviewed_approval');
+  assert.equal(await fs.readFile(f.options.configPath,'utf8'),body);
+  const paid={...f.calls};await assert.rejects(f.run('start'));
+  assert.deepEqual(f.calls,paid);
+});
+
+test('oversized original input still binds reviewed RAW hash; config keeps its metadata bound',async t=>{
   const f=await setup(t),bytes=Buffer.from(`{"nativeBase64":"${'A'.repeat(520*1024)}"}\n`);
   const file=path.join(path.dirname(f.options.configPath),'unconfirmed-originals.json');await put(file,bytes);
   f.config.inputs.originalVectors={path:file,sha256:sha256(bytes),observedAt:NOW};await put(f.options.configPath,f.config);
   f.options.configSha256=sha256(await fs.readFile(f.options.configPath));f.workspaceOptions.configSha256=f.options.configSha256;
   await fs.appendFile(file,' ');await assert.rejects(f.run('start'),/weekly_input_digest/);
   assert.equal(f.calls.getItems+f.calls.search+f.calls.chat+f.calls.embedding+f.calls.upsert+f.calls.upload+f.calls.activate,0);
-  const http=f.calls.http;await put(f.options.configPath,`${JSON.stringify(f.config)}${' '.repeat(32768)}`);
+  const http=f.calls.http;await put(f.options.configPath,`${JSON.stringify(f.config)}${' '.repeat(8*1024*1024)}`);
   f.options.configSha256=sha256(await fs.readFile(f.options.configPath));await assert.rejects(f.run('preflight'),/weekly_private_input/);
   assert.equal(f.calls.http,http);
 });
