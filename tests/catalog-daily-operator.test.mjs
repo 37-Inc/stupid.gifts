@@ -2,10 +2,22 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { headroom, observeHeadroom, currentD1Plan, routineLimits, routineSearchPolicy, routineServingPrior, assertNoUnsealedMaintenance, operatorInvocation, cleanupAcceptedPublication,
-  routineAutomationPolicy,materializeRoutinePreparation,routineFreshnessPool,hydrateRoutineInputs,routineHostedPending,routineRecoveryPhase } from '../scripts/catalog/daily-operator.mjs';
+  routineAutomationPolicy,materializeRoutinePreparation,routineFreshnessPool,hydrateRoutineInputs,routineHostedPending,routineRecoveryPhase,routineUnstartedRecovery } from '../scripts/catalog/daily-operator.mjs';
 import {sha256,canonicalJson} from '../scripts/catalog/migration.ts';
 import {derivedFixture} from './helpers/derived-search-fixture.mjs';
 import {automationRuntime} from '../scripts/catalog/automation-runtime.mjs';
+
+test('prepared start recovery requires exact config and absence of both local and durable execution state',async()=>{
+  const hash='a'.repeat(64),config={runId:'original'},runtime={hosted:true,workspace:'/private',durable:{get:async()=>null}};
+  assert.equal(await routineUnstartedRecovery(runtime,config,hash,hash,()=>false),true);
+  for(const name of ['manifest.json','head.json']){
+    assert.equal(await routineUnstartedRecovery(runtime,config,hash,hash,p=>p.endsWith(name)),false);
+    assert.equal(await routineUnstartedRecovery({...runtime,durable:{get:async k=>k.endsWith(name)?{}:null}},config,hash,hash,()=>false),false);
+  }
+  assert.equal(await routineUnstartedRecovery(runtime,config,hash,'b'.repeat(64),()=>false),false);
+  assert.equal(await routineUnstartedRecovery({...runtime,hosted:false},config,hash,hash,()=>false),false);
+  await assert.rejects(routineUnstartedRecovery({...runtime,durable:{get:async()=>{throw Error('unknown');}}},config,hash,hash,()=>false),/unknown/);
+});
 
 test('phase recovery binds the original finite config and writer; publication recovery still needs approval',()=>{
   const hash='a'.repeat(64),config={runId:'original',cadence:{automation:{refreshIds:['B000000001'],discovery:false}}},

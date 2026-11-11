@@ -357,13 +357,15 @@ export async function settleActivatedPermanentWeekly(input:{db:CatalogD1 & {prov
  */
 export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependencies:Dependencies={}) {
   const repo=dependencies.repository||repository;const now=dependencies.now||(()=>new Date().toISOString());
-  const original=validateCloudflareWeeklyConfig(await reviewed(options.configPath,options.configSha256,repo,32768));
+  // Canonical title/campaign reviews grow with the catalog; this is metadata,
+  // not a 32 KiB control message. Keep a bounded reader and the exact raw hash.
+  const original=validateCloudflareWeeklyConfig(await reviewed(options.configPath,options.configSha256,repo,8*1024*1024));
   let config=original,adoption:ExecutionAdoption|null=null;
   if(options.recovery){
     if(!['resume','status'].includes(options.command))throw new Error('weekly_recovery_command');
     adoption=await reviewed(options.recovery.path,options.recovery.sha256,repo) as ExecutionAdoption;
     validateExecutionAdoption(adoption);
-    config=validateCloudflareWeeklyConfig(await reviewed(options.recovery.configPath,options.recovery.configSha256,repo,32768));
+    config=validateCloudflareWeeklyConfig(await reviewed(options.recovery.configPath,options.recovery.configSha256,repo,8*1024*1024));
     validateExecutionAdoptionConfigs(original,config,adoption);
     if(adoption.original.configSha256!==options.configSha256||adoption.effective.configSha256!==options.recovery.configSha256)
       throw new Error('weekly_recovery_config');

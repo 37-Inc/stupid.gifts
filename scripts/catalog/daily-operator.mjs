@@ -414,6 +414,16 @@ export function routineRecoveryPhase(cp,config,configSha256,digest){
     refuse('provider_replay_forbidden');
   return 'publication';
 }
+/** An exact prepared intent can use a newer reader before its first execution.
+ * Any local or durable run state excludes this path; normal recovery owns it. */
+export async function routineUnstartedRecovery(runtime,config,configSha256,digest,exists=existsSync){
+  if(!runtime.hosted||!runtime.durable||!HASH.test(configSha256??'')||digest!==configSha256)return false;
+  for(const name of ['manifest.json','head.json']){
+    const key='runs/'+config.runId+'/'+name;
+    if(exists(runtime.workspace+'/'+key)||await runtime.durable.get(key))return false;
+  }
+  return true;
+}
 export async function main(argv=process.argv.slice(2)){
 if(argv[0]==='code-only'){
   const operator=await import('./code-only-operator.mjs');operator.codeOnlyInvocation(argv.slice(1));
@@ -454,21 +464,22 @@ else{
       ||digest(await fs.readFile(old+'/scripts/catalog/daily-operator.mjs'))!==record.helperSha256)refuse('original_source');
     try{git('merge-base','--is-ancestor',record.source,SOURCE);}catch{refuse('original_source');}
     entry.workspace.repository=old;entry.workspace.codeSha=record.source;
-    const w=await openRunWorkspace(entry.workspace);
-    try{const cp=await w.readCheckpoint({controlOnly:true});
-      recoveryPhase=routineRecoveryPhase(cp?.checkpoint,config,record.configSha256,approvalSha);
-    }finally{await w.close();}
+    if(await routineUnstartedRecovery(RUNTIME,config,record.configSha256,approvalSha))recoveryPhase='start';
+    else{const w=await openRunWorkspace(entry.workspace);
+      try{const cp=await w.readCheckpoint({controlOnly:true});
+        recoveryPhase=routineRecoveryPhase(cp?.checkpoint,config,record.configSha256,approvalSha);
+      }finally{await w.close();}}
   }
   if(command==='review'||recoveryPhase==='review')await review(entry,config,directory);
   else if(['start','resume','publish','recover','status'].includes(command)){
     if(['publish','recover'].includes(command)&&!HASH.test(approvalSha??''))refuse('explicit_review_digest');
-    if(command==='start'){const token=await RUNTIME.token();await observeHeadroom(token,undefined,record.capacity,fetch,await currentD1Plan(token));}
-    if(['resume','publish'].includes(command)||recovering){
+    if(command==='start'||recoveryPhase==='start'){const token=await RUNTIME.token();await observeHeadroom(token,undefined,record.capacity,fetch,await currentD1Plan(token));}
+    if(['resume','publish'].includes(command)||recovering&&recoveryPhase!=='start'){
       const w=await openRunWorkspace(entry.workspace);let spent;try{spent=await w.budget();}finally{await w.close();}
       const token=await RUNTIME.token();await observeHeadroom(token,spent,record.capacity,fetch,await currentD1Plan(token));
     }
-    const result=await runCloudflareWeekly({...entry.driver,command:command==='publish'||recovering?'resume':command,
-      ...(approvalSha&&!['provider','admission-repair'].includes(recoveryPhase)?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})},
+    const result=await runCloudflareWeekly({...entry.driver,command:recoveryPhase==='start'?'start':command==='publish'||recovering?'resume':command,
+      ...(approvalSha&&!['start','provider','admission-repair'].includes(recoveryPhase)?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})},
       recovering?{repository:config.publication.sourceRoot,...(recoveryPhase==='admission-repair'?{repairSavedAdmission:true}:{})}:{});
     await remember(result,entry,config,directory);console.log(JSON.stringify(weeklyCommandSummary(result)));
     if(result.state==='finalized'&&!RUNTIME.hosted){

@@ -355,6 +355,23 @@ test('old-run cleanup failure is advisory; lost cleanup registration preserves a
   assert.equal((await f.run()).state,'accepted');assert.equal(f.calls.length,calls);assert.equal(JSON.parse(f.pointer()).pending,null);
 });
 
+test('new controller starts the exact saved prepared intent without another prepare or source rewrite',async()=>{
+  const f=fixture(),invoke=f.deps.invoke;
+  const held=await f.run({}, {invoke:async(directory,args)=>args[0]==='start'
+    ?{state:'attention',errorCode:'weekly_private_input'}:invoke(directory,args)});
+  assert.equal(held.state,'attention');assert.equal(f.phase,null);
+  const original=f.pointer(),record=f.files.get(f.runtime.care+'/runs/scheduled-'+DAY+'/hosted-run.json');
+  const resumed=await f.run({source:NEW_SOURCE},{invoke:async(directory,args)=>{
+    assert.equal(args[0],'recover');assert.equal(args.at(-1),'scheduled-'+DAY);
+    assert.notEqual(directory,'/operators/'+SOURCE);
+    if(f.phase===null)assert.equal(args[1],HASH);
+    return invoke(directory,args);
+  }});
+  assert.equal(resumed.state,'accepted');assert.equal(resumed.resumed,true);assert.ok(original);
+  assert.equal(f.calls.filter(a=>a[0]==='prepare').length,1);
+  assert.deepEqual(f.files.get(f.runtime.care+'/runs/scheduled-'+DAY+'/hosted-run.json'),record);
+});
+
 test('new reviewed controller uses recovery only for the original already-approved post-provider publication',async()=>{
   const f=fixture(),invoke=f.deps.invoke;
   const held=await f.run({}, {invoke:async(directory,args)=>{

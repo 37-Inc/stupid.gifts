@@ -49,6 +49,13 @@ for shadow, canary, explicit activation and single-writer recovery, and
   the original `scheduled_at` to the same coordinator. Never run two clocks.
 - Log intended slot, actual start/delay, inventory `complete` versus `reused`,
   and native batch size/duration. A dispatch ACK is not a catalog acceptance.
+- Catalog config uses the existing 8 MiB metadata-sized reader, not the obsolete
+  32 KiB control limit. The November 11 delayed morning intent saved 34,159 bytes
+  of valid config (including canonical title/editorial reviews) and failed before
+  any run workspace or supplier phase. A descendant controller may start that
+  exact prepared config only after proving both local and durable manifest/head
+  absent. It retains the original source, hash, decisions, deadlines and run ID;
+  an existing/uncertain workspace always uses normal recovery, never another start.
 
 Measured baseline: November 11 run `43016472526` started 7h29m late and the
 catalog job took 3h47m48s. Forty serial native updates spanned 111m03s; four
