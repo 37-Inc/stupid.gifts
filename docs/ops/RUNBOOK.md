@@ -132,6 +132,9 @@ no supplier/model credentials and cannot change the accepted catalog head.
 The historical [code-only route](CODE_ONLY_PUBLICATION.md) remains for exact
 frozen pre-cutover recovery only; never start another legacy static publication.
 Routine care retains the single catalog queue and genuine catalog receipts.
+Data-only care does not install the legacy uploader's apt/bubblewrap runtime.
+Only an explicit manual legacy `code` recovery installs that sandbox; current
+application uploads retain their own isolation in the application workflow.
 
 Pending work keeps original source/config/owner/checkpoint/review SHA. Do not
 force locks/owners or blindly retry uncertain version/activation writes.
