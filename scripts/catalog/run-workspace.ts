@@ -316,7 +316,8 @@ function control(value:WorkspaceControl|undefined) {
     ||p.receiptSha256!==undefined&&!hash(p.receiptSha256))fail('control');
   if(p.observedActivation){const o=p.observedActivation;
     if(!exact(o,['kind','observedAt','deploymentId','marker'])||o.kind!=='observed-serving-activation'
-      ||![o.deploymentId,o.marker].every(refString)||o.marker!==p.deploymentMarker||!p.versionReference||!hash(p.packageSha256)
+      ||![o.deploymentId,o.marker].every(refString)||o.marker!==p.deploymentMarker||!p.publication||!p.versionReference||!hash(p.packageSha256)
+      ||p.deploymentId!==null&&p.deploymentId!==o.deploymentId
       ||p.intent?.nextExpiry!==null||!['uploaded','activating','published'].includes(p.stage))fail('control');
     time(o.observedAt);
   }
