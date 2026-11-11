@@ -384,7 +384,8 @@ test('ordinary catalog successor accepts skipped code-only ownership generation 
 
 // Real publisher/control/accounting/upload-bridge composition; only external
 // provider HTTP, process execution and generated output are LOCAL fixtures.
-for(const externallyPromoted of [false,true])test(`actual mixed serving-only publisher ${externallyPromoted?'reconciles observed external promotion':'resumes uncertain activation'} with one upload and no catalog receipt`,{skip:process.platform!=='darwin'},async t=>{
+for(const scenario of ['uncertain activation','external promotion','external promotion before upload ACK'])test(`actual mixed serving-only publisher ${scenario} with one upload and no catalog receipt`,{skip:process.platform!=='darwin'},async t=>{
+  const externallyPromoted=scenario!=='uncertain activation',interruptedUpload=scenario==='external promotion before upload ACK';
   const directory=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'accepted-code-only-'))),sourceRoot=path.join(directory,'source');
   let workspace;t.after(async()=>{await workspace?.close();await fs.rm(directory,{recursive:true,force:true});});
   await fs.mkdir(sourceRoot,{mode:0o700});
@@ -408,9 +409,14 @@ for(const externallyPromoted of [false,true])test(`actual mixed serving-only pub
     retention:{reviewReference:'test-only/original-window',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint']
       .map(kind=>[kind,{maxAgeMs:24*3600000,notAfter:until}]))},budgetCaps:{httpRequests:5000,sqlStatements:12000},now:()=>f.now().toISOString()};
   workspace=await openRunWorkspace(wsOptions);
+  if(interruptedUpload){const writeCheckpoint=workspace.writeCheckpoint.bind(workspace);let crash=true;
+    workspace={...workspace,writeCheckpoint:async(expected,next)=>{
+      if(crash&&next.pins?.publicationUploadAcknowledged){crash=false;throw Error('Synthetic crash after upload before durable ACK');}
+      return writeCheckpoint(expected,next);
+    }};}
   const counts={uploads:0,activations:0,builds:0,nativeWrites:0};let uploaded=false,active=false,uploadedConfig,identityFailure=!externallyPromoted,
-    loseResolve=false,interruptDispatch=externallyPromoted,loseObservedCas=externallyPromoted,observedCas=0,
-    publicPageReads=0,poisonBuild=!externallyPromoted;
+    loseResolve=false,interruptDispatch=externallyPromoted&&!interruptedUpload,loseObservedCas=externallyPromoted,observedCas=0,
+    publicPageReads=0,poisonBuild=!externallyPromoted,activeVersion=version,wrongDeploymentMarker=false;
   const pendingVector=f.sql.prepare('SELECT sequence,status FROM vector_sync_outbox LIMIT 1').get();
   const response=result=>Response.json({success:true,result}),checkpoint=async()=>(await workspace.readCheckpoint({controlOnly:true})).checkpoint;
   const base=`https://api.cloudflare.com/client/v4/accounts/${f.accountId}`,worker=`${base}/workers/scripts/${config.workerName}`;
@@ -439,12 +445,12 @@ for(const externallyPromoted of [false,true])test(`actual mixed serving-only pub
     if(url===`${worker}/assets-upload-session`||u.pathname===`/client/v4/accounts/${f.accountId}/workers/assets/upload`)return response({jwt:'fixture-only',buckets:[]});
     if(u.pathname.endsWith('/versions')&&init.method==='POST'){uploaded=true;return response({id:version});}
     if(u.pathname.endsWith('/versions'))return response({items:uploaded?[{id:version}]:[]});
-    if(url===`${worker}/versions/${version}`)return response({id:version,annotations:{'workers/tag':c.uploadMarker,'workers/message':`package:${c.packageSha256}`},
+    if(url===`${worker}/versions/${version}`||url===`${worker}/versions/${uuid(499)}`)return response({id:u.pathname.split('/').at(-1),annotations:{'workers/tag':url.endsWith(version)?c.uploadMarker:'not-the-original-upload','workers/message':`package:${c.packageSha256}`},
       resources:{script_runtime:{compatibility_date:config.compatibilityDate},bindings:[{name:'DB',type:'d1',id:f.databaseId},{name:'VECTORIZE',type:'vectorize',index_name:scope.indexName},
         {name:'ASSETS',type:'assets'},{name:'STAGING_AUTH_SECRET',type:'secret_text'},...Object.entries(uploadedConfig.vars).map(([name,text])=>({name,type:'plain_text',text}))]}});
     if(url===`${worker}/deployments`){if(init.method==='POST'){counts.activations++;active=true;return response({id:deployment});}
-      return response({deployments:[{id:active?deployment:uuid(412),versions:[{version_id:active?version:servingPrior.versionReference,percentage:100}],
-        annotations:{'workers/message':active?c.deploymentMarker:'fixture:accepted'}}]});}assert.fail(`Unexpected local mock route ${u.pathname}`);
+      return response({deployments:[{id:active?deployment:uuid(412),versions:[{version_id:active?activeVersion:servingPrior.versionReference,percentage:100}],
+        annotations:{'workers/message':active?(wrongDeploymentMarker?'not-the-original-deployment':c.deploymentMarker):'fixture:accepted'}}]});}assert.fail(`Unexpected local mock route ${u.pathname}`);
   };
   const fetchScope={accountId:f.accountId,workerName:config.workerName,indexName:scope.indexName,databaseId:f.databaseId,identityOrigin:config.identityOrigin};
   const transports=async()=>({db:await createCatalogD1Rest({accountId:f.accountId,databaseId:f.databaseId,databaseName:config.database.name,token:'FIXTURE_ONLY',fetch:raw,
@@ -502,9 +508,22 @@ for(const externallyPromoted of [false,true])test(`actual mixed serving-only pub
   }
   const first=await withPrivateDrift();assert.equal(first.state,'pending',JSON.stringify(first));assert.equal(counts.activations,externallyPromoted?0:1,JSON.stringify(first));assert.equal(counts.uploads,1);f.unchanged();
   if(!externallyPromoted)assert.equal(publicPageReads,2,'Each active invocation reads public rows once, never once per activation boundary');
-  if(externallyPromoted){active=true;f.advance(11*60_000); // LOCAL separately authorized promotion, not a publisher API call.
-    assert.equal((await checkpoint()).control.publication.stage,'uploaded');}
+  if(externallyPromoted){active=true;f.advance(16*60_000); // LOCAL separately authorized promotion, not a publisher API call.
+    assert.equal((await checkpoint()).control.publication.stage,interruptedUpload?'uploading':'uploaded');
+    assert.ok(f.sql.prepare('SELECT lease_until FROM catalog_build_requests WHERE request_id=?').get(queued.requestId).lease_until<=f.now().toISOString());
+    assert.ok(f.sql.prepare('SELECT lease_until FROM publication_outbox WHERE release_id=?').get(config.releaseId).lease_until<=f.now().toISOString());}
   const expectedManifestSha256=workspace.manifestSha256;await workspace.close();workspace=await openRunWorkspace({...wsOptions,mode:'resume',expectedManifestSha256});io=await transports();
+  const originalPending=(await checkpoint()).pins.publicationUploadPending;
+  if(interruptedUpload){
+    assert.ok(originalPending);assert.equal((await checkpoint()).pins.publicationUploadAcknowledged,undefined);
+    const before=canonicalJson(await checkpoint()),claims=()=>canonicalJson({build:f.sql.prepare('SELECT * FROM catalog_build_requests WHERE request_id=?').get(queued.requestId),
+      publication:f.sql.prepare('SELECT * FROM publication_outbox WHERE release_id=?').get(config.releaseId),owner:f.sql.prepare('SELECT * FROM catalog_mutation_scopes').get()}),originalClaims=claims();
+    wrongDeploymentMarker=true;let mismatch=await withPrivateDrift();assert.equal(mismatch.errorCode,'serving_observation_mismatch');
+    assert.equal(canonicalJson(await checkpoint()),before);assert.equal(claims(),originalClaims);
+    wrongDeploymentMarker=false;activeVersion=uuid(499);mismatch=await withPrivateDrift();assert.equal(mismatch.errorCode,'publication_version_mismatch');
+    assert.equal(canonicalJson(await checkpoint()),before);assert.equal(claims(),originalClaims);activeVersion=version;
+    assert.deepEqual(counts,{uploads:1,activations:0,builds:1,nativeWrites:0});
+  }
   loseResolve=true;let uncertain=await withPrivateDrift();assert.equal(uncertain.state,'pending',JSON.stringify(uncertain));f.unchanged();
   if(externallyPromoted){assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'activating');
     assert.equal((await checkpoint()).control.publication.stage,'activating'); // Normal CLI can recognize the lost-CAS phase transition.
@@ -514,7 +533,8 @@ for(const externallyPromoted of [false,true])test(`actual mixed serving-only pub
   assert.equal(f.sql.prepare('SELECT count(*) n FROM publication_receipts WHERE release_id=?').get(config.releaseId).n,0);
   const expectedCounts={uploads:1,activations:externallyPromoted?0:1,builds:1,nativeWrites:0};assert.deepEqual(counts,expectedCounts);
   if(externallyPromoted){const cp=await checkpoint(),pin=cp.pins.publicationObservedActivation;assert.ok(pin);
-    const proof=await workspace.readArtifact(pin);assert.equal(proof.observation.kind,'observed-serving-activation');assert.equal(proof.observation.deploymentId,deployment);}
+    const proof=await workspace.readArtifact(pin);assert.equal(proof.observation.kind,'observed-serving-activation');assert.equal(proof.observation.deploymentId,deployment);
+    if(interruptedUpload){assert.deepEqual(cp.pins.publicationUploadPending,originalPending);assert.equal(cp.pins.publicationUploadAcknowledged,undefined);}}
   const manifestAfterResolve=workspace.manifestSha256;await workspace.close();workspace=await openRunWorkspace({...wsOptions,mode:'resume',expectedManifestSha256:manifestAfterResolve});io=await transports();
   assert.equal((await execute(true)).state,'published');assert.deepEqual(counts,expectedCounts);f.unchanged();
 });

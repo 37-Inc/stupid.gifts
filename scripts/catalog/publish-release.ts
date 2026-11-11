@@ -514,6 +514,13 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     }
     checkpoint=await workspace.readCheckpoint({controlOnly:true});
   };
+  const verifyBuiltPackage=async()=>{
+    const c=control!,sealed=await loadPackage(directory,config,c.packageSha256!,now()),request=c.build.request;
+    if(!revision||sealed.manifest.catalogSnapshotSha256!==request.sourceDigest
+      ||sealed.manifest.catalogRevision!==request.sourceRevision||sealed.manifest.priorReleaseId!==request.priorReleaseId
+      ||sealed.manifest.vectorSyncWatermark!==revision.vectorSyncWatermark
+      ||canonicalJson(sealed.snapshot)!==canonicalJson(revision.snapshot))throw new Error('publication_package_changed');
+  };
   try{
     if(serving&&!revision){
       // A resolved CAS may have committed after its response was lost. This
@@ -531,10 +538,34 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       throw new Error('publication_receipt_settlement_scope');
     if(!HASH.test(options.requestId)||!/^[a-zA-Z0-9._:/-]{1,200}$/.test(options.runReference))throw new Error('publication_input_invalid');
     if(control&&(control.configSha256!==configSha256||control.requestId!==options.requestId||control.runReference!==options.runReference))throw new Error('publication_checkpoint_mismatch');
+    // An upload can finish before its local acknowledgement is saved, and a
+    // separately authorized exact version may already be live. This readback
+    // does NOT mint an upload ACK or a new dispatch grant: it only permits the
+    // original observed-activation settlement below. Keep all original pins.
+    let observedServingUpload=Boolean(serving&&!reviewed&&control?.permit&&checkpoint?.checkpoint.pins.publicationObservedActivation);
+    if(serving&&!reviewed&&!control?.permit&&control?.publication&&control.intent&&control.packageSha256
+      &&['uploading','uploaded','activating'].includes(control.stage)
+      &&checkpoint?.checkpoint.pins.publicationUploadPending&&!checkpoint.checkpoint.pins.publicationUploadAcknowledged
+      &&checkpoint.checkpoint.pins.publicationUploadPending.sha256===sha256(canonicalJson(uploadBinding()))){
+      const originalOwner=await readMutationOwner(db,owner),deployed=await api.deployed();
+      if(!originalOwner||canonicalJson({...originalOwner,phase:owner.phase})!==canonicalJson(owner)
+        ||!['freezing','activating'].includes(originalOwner.phase)
+        ||originalOwner.phase==='activating'&&control.stage!=='activating'
+        ||!deployed||deployed.marker!==control.deploymentMarker
+        ||control.versionReference!==null&&control.versionReference!==deployed.version
+        ||control.deploymentId!==null&&control.deploymentId!==deployed.id)throw Error('serving_observation_mismatch');
+      await verifyBuiltPackage();verifyUploadedVersion(await api.version(deployed.version),config,deployed.version,control);
+      if(!matchesIdentity(await api.identity(),control.intent)
+        ||canonicalJson(await api.deployed())!==canonicalJson(deployed)
+        ||canonicalJson(await readMutationOwner(db,owner))!==canonicalJson(originalOwner))throw Error('serving_observation_mismatch');
+      await recheckAcceptedCodeOnlyCatalog({db,owner:originalOwner,input:serving as AcceptedCodeOnlyRead,runReference:options.runReference});
+      if(control.stage==='uploading')await save({stage:'uploaded',versionReference:deployed.version});
+      observedServingUpload=true;
+    }
     // A rejected protected upload is an operator-review gate, not an uncertain
     // ordinary CLI exit. Its body-free pin survives content expiry and prevents
     // a later uploading-stage resume from bypassing scope/accounting refusal.
-    if(checkpoint?.checkpoint.pins.publicationUploadReview&&!reviewed)throw new Error('publication_upload_review_required');
+    if(checkpoint?.checkpoint.pins.publicationUploadReview&&!reviewed&&!observedServingUpload)throw new Error('publication_upload_review_required');
     if(checkpoint?.checkpoint.pins.buildOperatorRecoveryPending&&control?.stage==='built'&&!options.buildRecovery)
       throw new Error('publication_build_recovery_fenced');
     const pendingUpload=checkpoint?.checkpoint.pins.publicationUploadPending,acknowledgedUpload=checkpoint?.checkpoint.pins.publicationUploadAcknowledged;
@@ -599,7 +630,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       &&pendingUpload.sha256===sha256(canonicalJson(uploadBinding()))&&isAccountedPublicationUploadCommand(command));
     // Pins are append-only. A durable exact acknowledgement logically clears
     // pending; no artifact-body read (or new content rights) is needed on expiry.
-    if(!reviewed&&!preflightPending&&(pendingUpload||acknowledgedUpload)&&(!control||!pendingUpload||!acknowledgedUpload
+    if(!reviewed&&!preflightPending&&!observedServingUpload&&(pendingUpload||acknowledgedUpload)&&(!control||!pendingUpload||!acknowledgedUpload
       ||pendingUpload.sha256!==sha256(canonicalJson(uploadBinding()))
       ||acknowledgedUpload.sha256!==sha256(canonicalJson({...uploadBinding(),pending:pendingUpload}))))
       throw new Error('publication_upload_review_required');
@@ -643,13 +674,6 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     const actual=await readMutationOwner(db,owner);
     let buildRow=(await db.prepare("SELECT *,strftime('%Y-%m-%dT%H:%M:%fZ','now') observed_at FROM catalog_build_requests WHERE request_id=?")
       .bind(control.requestId).all<Record<string,unknown>>()).results[0];
-    const verifyBuiltPackage=async()=>{
-      const c=control!,sealed=await loadPackage(directory,config,c.packageSha256!,now()),request=c.build.request;
-      if(!revision||sealed.manifest.catalogSnapshotSha256!==request.sourceDigest
-        ||sealed.manifest.catalogRevision!==request.sourceRevision||sealed.manifest.priorReleaseId!==request.priorReleaseId
-        ||sealed.manifest.vectorSyncWatermark!==revision.vectorSyncWatermark
-        ||canonicalJson(sealed.snapshot)!==canonicalJson(revision.snapshot))throw new Error('publication_package_changed');
-    };
     const vectorProof=async(signal?:AbortSignal)=>{
       if(!revision)throw new Error('publication_revision_required');
       // The accepted seal authenticates immutable native delivery bytes. An
@@ -910,6 +934,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         await save({stage:'activating',permit:reconciled.permit,deploymentId:reconciled.observation.deploymentId},reconciled.permit.mutationOwner);
       }
     }
+    if(observedServingUpload&&!control.permit)throw Error('serving_observation_fenced');
     if(control.permit){
       owner=control.permit.mutationOwner!;
       const receiptOnly=options.acceptedReceiptOnly===true;
@@ -1193,7 +1218,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
     // exact durable control/package and has no second activation path.
     return executePublication({...options,owner,dependencies:options.dependencies});
   }catch(error){
-    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_|vector_|accepted_code_only_|accepted_catalog_|serving_publication_)[a-z_]+$/.test(error.message)?error.message:'publication_pending';
+    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_|vector_|accepted_code_only_|accepted_catalog_|serving_publication_|serving_observation_)[a-z_]+$/.test(error.message)?error.message:'publication_pending';
     return{state:'pending',owner,errorCode:code};
   }
 }
