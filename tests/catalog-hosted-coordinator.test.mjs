@@ -12,6 +12,14 @@ import {routineReviewProduct,routineRecoveryPhase,operatorInvocation,routineHost
 const SOURCE='a'.repeat(40),NEW_SOURCE='b'.repeat(40),HASH='c'.repeat(64),DAY='2026-11-06';
 const bytes=value=>Buffer.from(JSON.stringify(value)+'\n'),hash=value=>createHash('sha256').update(value).digest('hex');
 const ref={schemaVersion:1,key:'inputs/'+HASH+'.json',sha256:HASH};
+
+test('data-only care has no apt/uploader dependency; explicit legacy recovery retains its sandbox',async()=>{
+  const yaml=await readFile(new URL('../.github/workflows/catalog-manual.yml',import.meta.url),'utf8');
+  const setup=yaml.split('- name: Install the reviewed isolated uploader runtime')[1].split('- name:')[0];
+  assert.match(setup,/if: github.event_name == 'workflow_dispatch' && inputs.mode == 'code'/);
+  assert.match(setup,/apt-get install --no-install-recommends -y bubblewrap/);
+  assert.match(setup,/apparmor_parser -r/);
+});
 const missing=()=>{const e=Error('missing');e.code='ENOENT';throw e;};
 const providerReport=()=>({schemaVersion:1,kind:'cloudflare-runner-readiness',environment:CATALOG_SCOPE.environment,
   resources:{accountId:CATALOG_SCOPE.accountId,databaseId:CATALOG_SCOPE.databaseId,databaseName:CATALOG_SCOPE.databaseName,indexName:CATALOG_SCOPE.indexName},

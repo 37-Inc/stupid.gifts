@@ -53,6 +53,9 @@ jobs:
         with:
           node-version: '22.23.1'
       - name: Install the reviewed isolated uploader runtime
+        # Runtime care publishes data, not Worker assets. Only explicit frozen
+        # legacy code recovery needs this uploader sandbox.
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'code'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y bubblewrap
