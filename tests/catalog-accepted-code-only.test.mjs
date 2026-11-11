@@ -242,7 +242,7 @@ test('same-invocation proof cannot mask source, owner, schema, receipt, pending 
 });
 
 test('observed serving reconciliation retains expired original claims and rejects identity or accepted-state drift',async t=>{
-  for(const fault of [null,'version','marker','public','receipt','native','owner','late-owner','token'])await t.test(fault??'exact already-live target',async t=>{
+  for(const fault of [null,'version','marker','public','receipt','native','owner','late-owner','token','callback-code','callback-private','timeout'])await t.test(fault??'exact already-live target',async t=>{
     const f=await fixture(t),r=f.input.revision,queued=await enqueueBuildRequest(f.db,f.authority.request),
       build=await claimBuildRequest(f.db,queued.requestId,'observed-serving',f.now()),version=uuid(430),marker='catalog-observed-activate',
       intent={releaseId:'observed-serving',catalogRevision:r.snapshot.catalogRevision,codeSha:f.authority.request.codeSha,
@@ -261,13 +261,21 @@ test('observed serving reconciliation retains expired original claims and reject
       f.sql.prepare("UPDATE catalog_vector_deliveries SET evidence_json='[]' WHERE delivery_id=?").run(r.nativeHistory[0].source.deliveryId);}
     if(fault==='owner')f.sql.exec('UPDATE catalog_mutation_scopes SET mutation_epoch=mutation_epoch+1');
     if(fault==='token')f.sql.prepare('UPDATE catalog_build_requests SET lease_token=? WHERE request_id=?').run(uuid(431),queued.requestId);
-    const reconcile=()=>reconcileObservedServingActivation(f.db,build,publication,r,f.authority,f.owner,version,marker,async()=>({
-      environment:scope.environment,settled:true,active:{...intent,versionReference:fault==='version'?uuid(432):version},
-      deploymentId:uuid(433),marker:fault==='marker'?'foreign-marker':marker}),async observation=>{
+    let observedSignal;
+    const reconcile=()=>reconcileObservedServingActivation(f.db,build,publication,r,f.authority,f.owner,version,marker,async signal=>{
+      observedSignal=signal;
+      if(fault==='callback-code')throw Error('serving_observation_mismatch');
+      if(fault==='callback-private')throw Error('PRIVATE provider detail');
+      if(fault==='timeout')return new Promise(()=>{});
+      return{environment:scope.environment,settled:true,active:{...intent,versionReference:fault==='version'?uuid(432):version},
+        deploymentId:uuid(433),marker:fault==='marker'?'foreign-marker':marker};},async observation=>{
         await f.read();retained=observation;
         if(fault==='late-owner')f.sql.exec('UPDATE catalog_mutation_scopes SET mutation_epoch=mutation_epoch+1');
-      },f.now());
-    if(fault){await assert.rejects(reconcile());assert.equal(f.sql.prepare('SELECT state FROM catalog_build_requests WHERE request_id=?').get(queued.requestId).state,'building');
+      },f.now(),{observationTimeoutMs:fault==='timeout'?10:120_000});
+    if(fault){const messages={'callback-code':'serving_observation_mismatch','callback-private':'deployment_observation_failed','timeout':'deployment_observation_failed_timeout'};
+      await assert.rejects(reconcile(),messages[fault]?{message:messages[fault]}:undefined);
+      if(messages[fault])assert.equal(observedSignal.aborted,true);
+      assert.equal(f.sql.prepare('SELECT state FROM catalog_build_requests WHERE request_id=?').get(queued.requestId).state,'building');
       assert.equal(f.sql.prepare('SELECT state FROM publication_outbox WHERE release_id=?').get(intent.releaseId).state,'claimed');return;}
     const result=await reconcile();assert.equal(retained.kind,'observed-serving-activation');assert.equal(result.observation.deploymentId,uuid(433));
     assert.equal(result.permit.token,build.token);assert.deepEqual(result.permit.mutationOwner,{...f.owner,phase:'activating'});
@@ -319,8 +327,23 @@ test('serving completion and uncertain activation resolution preserve latest cat
   await assert.rejects(resolveBuildActivation(f.db,permit,async()=>{throw Error('synthetic lost provider read');},{acceptedCatalog:f.authority}));
   assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'activating');
   assert.equal(await resolveBuildActivation(f.db,permit,async()=>({environment:scope.environment,settled:true,active:{...intent,versionReference:'serving-version'}})),'awaiting_receipt');
-  assert.equal(await resolveBuildActivation(f.db,permit,async()=>{await f.read(permit.mutationOwner);return{
-    environment:scope.environment,settled:true,active:{...intent,versionReference:'serving-version'}};},{acceptedCatalog:f.authority}),'resolved');
+  const unused=()=>assert.fail('Invalid extended observation must not call provider adapter');
+  for(const timeout of [0,9,120_001,1.5,NaN,Infinity])await assert.rejects(resolveBuildActivation(f.db,permit,unused,
+    {acceptedCatalog:f.authority,observationTimeoutMs:timeout}),/invalid_observation_timeout/);
+  await assert.rejects(resolveBuildActivation(f.db,permit,unused,{observationTimeoutMs:120_000}),/invalid_observation_timeout/);
+  await assert.rejects(resolveBuildActivation(f.db,{...permit,mutationOwner:undefined},unused,
+    {acceptedCatalog:f.authority,observationTimeoutMs:120_000}),/invalid_observation_timeout/);
+  await assert.rejects(resolveBuildActivation(f.db,{...permit,mutationOwner:{...permit.mutationOwner,operationKey:'0'.repeat(64)}},unused,
+    {acceptedCatalog:f.authority,observationTimeoutMs:120_000}),/serving_publication_fenced/);
+  await assert.rejects(resolveBuildActivation(f.db,permit,unused,{acceptedCatalog:{...f.authority,request:{...f.authority.request,codeSha:'0'.repeat(40)}},
+    observationTimeoutMs:120_000}),/serving_publication_fenced/);
+  const timers=[],setTimeout=globalThis.setTimeout;
+  globalThis.setTimeout=(fn,ms,...args)=>{timers.push(ms);return setTimeout(fn,ms,...args);};
+  try{assert.equal(await resolveBuildActivation(f.db,permit,async()=>{await f.read(permit.mutationOwner);return{
+    environment:scope.environment,settled:true,active:{...intent,versionReference:'serving-version'}};},{acceptedCatalog:f.authority,observationTimeoutMs:120_000}),'resolved');}
+  finally{globalThis.setTimeout=setTimeout;}
+  assert.equal(timers.filter(ms=>ms===120_000).length,1);
+  assert.ok(timers.every(ms=>ms===10_000||ms===120_000),'Individual D1/provider read bounds are not enlarged');
   assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'idle');f.unchanged();
   assert.equal(f.sql.prepare('SELECT state FROM catalog_build_requests WHERE request_id=?').get(queued.requestId).state,'resolved');
 });
