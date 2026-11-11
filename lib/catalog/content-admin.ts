@@ -2,7 +2,8 @@ import type {CatalogD1} from './storage/d1.ts';
 import {canonicalJson} from './canonical-json.ts';
 
 export class ContentAdminError extends Error {
-  constructor(public readonly status:number,code:string){super(code);}
+  readonly status:number;
+  constructor(status:number,code:string){super(code);this.status=status;}
 }
 export interface ContentRequest {
   requestId:string;resource:string;revision:number;actor:string;reason:string;baseCatalogRevision:string;
