@@ -8,9 +8,9 @@ import {CATALOG_SCOPE as SCOPE} from '../scripts/catalog/automation-runtime.mjs'
 import {bootstrapAttention} from '../scripts/catalog/bootstrap-runtime-catalog.mjs';
 after(stop);
 test('bootstrap preserves the exact safe coordinator error instead of hiding it, without logging raw provider output',()=>{
-  assert.deepEqual(bootstrapAttention({errorCode:'publication_activation_pending',phase:'publishing',stderr:'SECRET'}),
-    {state:'attention',step:'original_code_reconciliation',errorCode:'publication_activation_pending',phase:'publishing'});
-  assert.deepEqual(bootstrapAttention({errorCode:'SECRET token=private',phase:'SELECT private'}),
+  assert.deepEqual(bootstrapAttention({errorCode:'publication_activation_pending',phase:'publishing',failureAt:'retention_line_16',stderr:'SECRET'}),
+    {state:'attention',step:'original_code_reconciliation',errorCode:'publication_activation_pending',phase:'publishing',failureAt:'retention_line_16'});
+  assert.deepEqual(bootstrapAttention({errorCode:'SECRET token=private',phase:'SELECT private',failureAt:'/private/secret/key'}),
     {state:'attention',step:'original_code_reconciliation',errorCode:'runtime_bootstrap_original_code_reconciliation_pending'});
 });
 const source='a'.repeat(40),old='00000000-0000-4000-8000-000000000001',next='00000000-0000-4000-8000-000000000002',deployment='00000000-0000-4000-8000-000000000003';

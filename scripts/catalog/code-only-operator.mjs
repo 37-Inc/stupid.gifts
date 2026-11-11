@@ -246,6 +246,6 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
     await rememberServing(success);
     if(!runtime.hosted)await cleanupAcceptedPublication({...workspaceOptions,mode:'resume'},record.runId);
   }
-  console.log(JSON.stringify({state:success?'published':result.state,runId:record.runId,...(result.errorCode?{errorCode:result.errorCode}:{}),...(result.phase?{phase:result.phase}:{}),supplierCalls:0,modelCalls:0,catalogPointerChanged:false}));
+  console.log(JSON.stringify({state:success?'published':result.state,runId:record.runId,...(result.errorCode?{errorCode:result.errorCode}:{}),...(result.phase?{phase:result.phase}:{}),...(result.failureAt?{failureAt:result.failureAt}:{}),supplierCalls:0,modelCalls:0,catalogPointerChanged:false}));
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)await codeOnlyMain();

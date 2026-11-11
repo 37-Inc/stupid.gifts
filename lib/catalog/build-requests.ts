@@ -224,12 +224,19 @@ export async function drainDeploymentObservation(pending: Promise<unknown>): Pro
   finally { clearTimeout(timer); }
 }
 async function observe(adapter: (signal: AbortSignal) => Promise<DeploymentObservation>, timeoutMs = 3000): Promise<DeploymentObservation> {
-  const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined,timedOut=false;
   try {
     return await Promise.race([adapter(controller.signal), new Promise<never>((_, reject) => {
-      timer = setTimeout(() => { controller.abort(); reject(new Error('deployment_observation_failed')); }, timeoutMs);
+      timer = setTimeout(() => { timedOut=true;controller.abort(); reject(new Error('deployment_observation_failed_timeout')); }, timeoutMs);
     })]);
-  } catch { controller.abort(); throw new Error('deployment_observation_failed'); } finally { clearTimeout(timer); }
+  } catch(error) {
+    controller.abort();
+    // Only these concrete transport/readback codes are safe to retain. Never
+    // expose an arbitrary adapter's message, stack or provider response.
+    const safe=['serving_observation_mismatch','publication_activation_pending','publication_identity_mismatch',
+      'publication_provider_unavailable','publication_read_scope_invalid','publication_read_unavailable','publication_read_aborted'];
+    throw new Error(timedOut?'deployment_observation_failed_timeout':error instanceof Error&&safe.includes(error.message)?error.message:'deployment_observation_failed');
+  } finally { clearTimeout(timer); }
 }
 function matches(active: DeploymentIdentity, intent: PublicationIntent) {
   return active.releaseId === intent.releaseId && active.codeSha === intent.codeSha && active.catalogRevision === intent.catalogRevision
@@ -332,7 +339,10 @@ export async function beginBuildActivation(db: CatalogD1, claim: CatalogBuildCla
 export async function reconcileObservedServingActivation(db:CatalogD1,claim:CatalogBuildClaim,publication:PublicationClaim,
   revision:AcceptedPublishedRevision,authority:AcceptedCatalogAuthority,owner:MutationOwner,versionReference:string,deploymentMarker:string,
   readDeployment:(signal:AbortSignal)=>Promise<DeploymentObservation&{deploymentId:string;marker:string}>,
-  beforeCommit:(observation:{kind:'observed-serving-activation';observedAt:string;deploymentId:string;marker:string})=>Promise<void>,now=new Date()){
+  beforeCommit:(observation:{kind:'observed-serving-activation';observedAt:string;deploymentId:string;marker:string})=>Promise<void>,now=new Date(),
+  options:{observationTimeoutMs?:number}={}){
+  const timeout=options.observationTimeoutMs??30_000;
+  if(!Number.isInteger(timeout)||timeout<10||timeout>120_000)throw Error('invalid_observation_timeout');
   const requestBytes=encodeBuildRequest(claim.request),intent=publication.intent,snapshot=revision.snapshot;
   if(owner.phase!=='freezing'||owner.operationKey!==await digest(encodeAcceptedCatalogAuthority(authority))
     ||revision.evidence!=='accepted-public-projection'||'sourceRows' in revision||revision.operationKey!==owner.operationKey
@@ -351,7 +361,7 @@ export async function reconcileObservedServingActivation(db:CatalogD1,claim:Cata
     ||outbox.release_id!==intent.releaseId||outbox.lease_token!==publication.token||outbox.lease_until!==publication.leaseUntil
     ||outbox.completed_token!==null||outbox.error_code!==null||outbox.dispatch_reference!==(outbox.state==='claimed'?null:`version:${versionReference}`))
     throw Error('serving_observation_fenced');
-  const observed=await observe(readDeployment,30_000) as DeploymentObservation&{deploymentId:string;marker:string};
+  const observed=await observe(readDeployment,timeout) as DeploymentObservation&{deploymentId:string;marker:string};
   if(observed.environment!==owner.environment||observed.settled!==true||!observed.active||!matches(observed.active,intent)
     ||observed.active.versionReference!==versionReference||observed.marker!==deploymentMarker
     ||typeof observed.deploymentId!=='string'||!REFERENCE.test(observed.deploymentId))
@@ -584,11 +594,18 @@ export async function readReviewedUploadActivation(db:CatalogD1,value:ReviewedUp
 export async function resolveBuildActivation(db: CatalogD1, permit: ActivationPermit,
   readDeployment: (signal: AbortSignal) => Promise<DeploymentObservation>, options: { observationTimeoutMs?: number;acceptedCatalog?:AcceptedCatalogAuthority } = {}): Promise<'awaiting_receipt' | 'resolved' | 'not_activated'> {
   const timeout = options.observationTimeoutMs ?? 3000;
-  if (!Number.isInteger(timeout) || timeout < 10 || timeout > 30_000) throw new Error('invalid_observation_timeout');
+  const extended=Boolean(options.acceptedCatalog&&permit.mutationOwner?.phase==='activating');
+  if (!Number.isInteger(timeout) || timeout < 10 || timeout > (extended?120_000:30_000)) throw new Error('invalid_observation_timeout');
   const stored = await row(db, permit.requestId);
   if (!stored || stored.state !== 'activating' || stored.lease_token !== permit.token || stored.run_reference !== permit.runReference
     || stored.release_id !== permit.releaseId || stored.version_reference !== permit.versionReference) throw new Error('build_fenced');
-  const request = input(stored); const observed = await observe(readDeployment, timeout);
+  const request = input(stored);
+  if(timeout>30_000){
+    if(permit.mutationOwner!.operationKey!==await digest(encodeAcceptedCatalogAuthority(options.acceptedCatalog!))
+      ||encodeBuildRequest(options.acceptedCatalog!.request)!==stored.request_json)throw Error('serving_publication_fenced');
+    await mutationAssertion(db,permit.mutationOwner!,['activating']).all();
+  }
+  const observed = await observe(readDeployment, timeout);
   if (observed.environment !== request.environment || observed.settled !== true) throw new Error('activation_still_uncertain');
   const finish = async (statement: D1Statement) => {
     if (!permit.mutationOwner) {

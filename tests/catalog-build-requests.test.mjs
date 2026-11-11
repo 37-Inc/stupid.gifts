@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile } from 'node:fs/promises';
-import { enqueueBuildRequest, encodeBuildRequest, claimBuildRequest, failBuildRequest, beginBuildActivation, resolveBuildActivation } from '../lib/catalog/build-requests.ts';
+import { enqueueBuildRequest, encodeBuildRequest, claimBuildRequest, failBuildRequest, beginBuildActivation, reconcileObservedServingActivation, resolveBuildActivation } from '../lib/catalog/build-requests.ts';
 import { createProjectionPacket, importPublicProjection } from '../lib/catalog/d1.ts';
 import { enqueuePublication, claimPublication, recordPublicationDispatch, completePublication } from '../lib/catalog/publication.ts';
 import { createFreshnessCheck } from '../workers/site/freshness.ts';
@@ -125,8 +125,15 @@ test('resolve-only observation timeout is explicit, bounded, aborts and leaves e
     let observedSignal;const before=f.calls.length;
     for(const value of [0,9,30_001,1.5,NaN,Infinity])await assert.rejects(resolveBuildActivation(f.db,permit,async()=>f.after,{observationTimeoutMs:value}),/invalid_observation_timeout/);
     assert.equal(f.calls.length,before);
-    await assert.rejects(resolveBuildActivation(f.db,permit,async signal=>{observedSignal=signal;return new Promise(()=>{});},{observationTimeoutMs:10}),/observation_failed/);
+    await assert.rejects(resolveBuildActivation(f.db,permit,async signal=>{observedSignal=signal;return new Promise(()=>{});},{observationTimeoutMs:10}),{message:'deployment_observation_failed_timeout'});
     assert.equal(observedSignal.aborted,true);assert.equal(f.row().state,'activating');
+    for(const code of ['serving_observation_mismatch','publication_activation_pending','publication_identity_mismatch',
+      'publication_provider_unavailable','publication_read_scope_invalid','publication_read_unavailable','publication_read_aborted']){
+      await assert.rejects(resolveBuildActivation(f.db,permit,async()=>{throw Error(code);}),{message:code});
+      assert.equal(f.row().state,'activating');
+    }
+    for(const code of ['PRIVATE','publication_provider_unavailable PRIVATE','serving_observation_private'])
+      await assert.rejects(resolveBuildActivation(f.db,permit,async()=>{throw Error(code);}),{message:'deployment_observation_failed'});
     assert.equal(await resolveBuildActivation(f.db,permit,async()=>f.after),'awaiting_receipt');
     const scheduled=[],timer=globalThis.setTimeout;
     // An unchanged generic caller still receives the original three-second bound.
@@ -134,6 +141,12 @@ test('resolve-only observation timeout is explicit, bounded, aborts and leaves e
     try{assert.equal(await resolveBuildActivation(f.db,permit,async()=>f.after),'awaiting_receipt');}finally{globalThis.setTimeout=original;}
     assert.deepEqual(scheduled,[3000]);
   }finally{f.close();}
+});
+
+test('observed serving timeout rejects invalid bounds before reading claims or calling adapters',async()=>{
+  const unused=()=>assert.fail('Invalid timeout must not reach original claims or adapters');
+  for(const observationTimeoutMs of [0,9,120_001,1.5,NaN,Infinity])
+    await assert.rejects(reconcileObservedServingActivation(null,null,null,null,null,null,null,null,unused,unused,new Date(),{observationTimeoutMs}),/invalid_observation_timeout/);
 });
 test('preactivation keeps its three-second bound and aborts failed observers before any activation CAS',async t=>{
   const f=await setup();
