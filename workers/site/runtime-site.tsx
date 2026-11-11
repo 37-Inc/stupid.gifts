@@ -143,7 +143,8 @@ function page(path:string,view:RuntimeCatalogView,p:Prepared,options:RuntimeSite
     title='Stupid gifts. Excellent taste.';description='Stupid Gifts: Very bad ideas. Carefully considered.';
     schema={'@context':'https://schema.org','@type':'ItemList',numberOfItems:props.cards.length,itemListElement:props.cards.map((p,i)=>({'@type':'ListItem',position:i+1,name:p.title,url:ORIGIN+'/gifts/'+p.slug}))};}
   else if(path==='/h'||/^\/h\/[a-z0-9][a-z0-9-]{0,59}$/.test(path)&&p.names.has(path.slice(3))){
-    props.kind='show';props.action=path;props.products=p.showIds(path==='/h'?p.activeName:path.slice(3)).flatMap(id=>p.byId.get(id)??[]);
+    const showName=path==='/h'?p.activeName:path.slice(3);
+    props.kind='show';props.action=path;props.showPreviews=showName==='matan';props.products=p.showIds(showName).flatMap(id=>p.byId.get(id)??[]);
     title='Saved picks';description='The saved Stupid Gifts lineup.';indexable=false;
   }else if(path==='/random-gift'){props.kind='random';props.cards=p.cards.slice(0,1);title='A random stupid gift';description='Find something absurd, useful, and deeply unnecessary.';}
   else if(path==='/howie'){props.kind='howie';title='From the show';description='No episode selection has been published.';indexable=false;}
