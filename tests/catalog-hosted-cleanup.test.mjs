@@ -37,6 +37,45 @@ test('accepted original run is registered idempotently with its original first e
   assert.deepEqual(f.pointer(),before);assert.equal(JSON.parse(before).runs[0].dueAt,DUE);
   const result=await cleanupHostedRuns(f.runtime,()=>{throw Error('not due');},{now:()=>NOW,open:f.open});assert.equal(result.state,'current');assert.equal(f.opened(),0);
 });
+test('registration merges a concurrent cleanup pointer CAS conflict without dropping another original run',async()=>{
+  const f=fixture(),write=f.runtime.state.pointer,other={runId:'concurrent-original',source:SOURCE,manifestSha256:HASH,dueAt:DUE};let conflicted=false;
+  f.runtime.state.pointer=async(name,file,value,expected)=>{
+    if(!conflicted){conflicted=true;await write(name,file,{schemaVersion:1,runs:[other]},f.pointer());throw Error('catalog_object_store_conflict');}
+    return write(name,file,value,expected);
+  };
+  await registerHostedCleanup(f.runtime,f.record);
+  assert.deepEqual(JSON.parse(f.pointer()).runs.map(r=>r.runId),[other.runId,'fixture-run']);
+  const before=f.pointer();await registerHostedCleanup(f.runtime,f.record);assert.deepEqual(f.pointer(),before);
+});
+test('expired cleanup merges new registrations committed while old bodies purge and retries only pointer conflicts',async()=>{
+  const f=fixture();await registerHostedCleanup(f.runtime,f.record);
+  const old=JSON.parse(f.objects.get('runs/fixture-run/manifest.json').bytes),next={...old,runId:'newly-accepted-original'};
+  f.objects.set('runs/'+next.runId+'/manifest.json',{bytes:bytes(next)});
+  const result=await cleanupHostedRuns(f.runtime,async()=>f.repository,{now:()=>DUE,open:async options=>{
+    const w=await f.open(options);return{...w,purgeExpired:async()=>{
+      await registerHostedWorkspaceCleanup(f.runtime,next);return w.purgeExpired();
+    }};
+  }});
+  assert.equal(result.state,'cleaned');assert.deepEqual(JSON.parse(f.pointer()).runs.map(r=>r.runId),[next.runId]);
+  assert.equal(JSON.parse(f.pointer()).runs[0].dueAt,DUE);
+});
+test('lost cleanup-pointer acknowledgement preserves actual new registration and same-run retry does not refetch',async()=>{
+  const f=fixture(),write=f.runtime.state.pointer;let uncertain=true;
+  f.runtime.state.pointer=async(...args)=>{const result=await write(...args);if(uncertain){uncertain=false;throw Error('catalog_object_store_write_unknown');}return result;};
+  await assert.rejects(registerHostedCleanup(f.runtime,f.record),/write_unknown/);
+  const exact=f.pointer();await registerHostedCleanup(f.runtime,f.record);assert.deepEqual(f.pointer(),exact);assert.equal(f.opened(),0);
+});
+test('cleanup completion CAS conflict cannot overwrite a newly registered run',async()=>{
+  const f=fixture();await registerHostedCleanup(f.runtime,f.record);const write=f.runtime.state.pointer,
+    other={runId:'new-accepted-original',source:SOURCE,manifestSha256:HASH,dueAt:DUE};let conflicted=false;
+  f.runtime.state.pointer=async(name,file,value,expected)=>{
+    if(!conflicted){conflicted=true;const current=JSON.parse(f.pointer());current.runs.push(other);
+      await write(name,file,current,f.pointer());throw Error('catalog_operator_state_pointer_conflict');}
+    return write(name,file,value,expected);
+  };
+  assert.equal((await cleanupHostedRuns(f.runtime,async()=>f.repository,{now:()=>DUE,open:f.open})).state,'cleaned');
+  assert.deepEqual(JSON.parse(f.pointer()).runs,[other]);assert.equal(f.purged(),1);
+});
 test('due housekeeping uses only original source/config; unexpired bodies retain the queue, all-purged clears it',async()=>{
   const f=fixture();await registerHostedCleanup(f.runtime,f.record);f.setRetained(true);
   const checkout=async source=>{assert.equal(source,SOURCE);return f.repository;};

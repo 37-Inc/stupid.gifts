@@ -19,6 +19,16 @@ or model keys. `code-only-serving` tracks serving configuration separately from
 the unchanged genuine catalog `last-success` pointer. Lost acknowledgements use
 the same saved package, owner and exact readback, never a replacement run.
 
+The `catalog-production` concurrency fence is job-scoped. Acceptance and the
+pending-pointer handoff finish before a separate, independently serialized
+`catalog-cleanup` job restores one due historical workspace. Cleanup receives
+only private R2 credentials, not supplier/model or Cloudflare application keys.
+It retains original source/config/deadlines; queue CAS conflicts merge fresh
+registrations rather than overwriting them. Failure does not reverse acceptance.
+Hosted generated checkout output disappears with its ephemeral runner; do not
+download the accepted package into a new runner just to delete those local files.
+Retained R2 packages still use their original registered expiry, without renewal.
+
 Normal maintenance streams phase start/completion and elapsed time into Actions
 logs. Confirmed atomic D1 writes use their acknowledged next-owner cursor;
 only uncertain responses trigger the extra immutable receipt/owner readback.
@@ -64,6 +74,15 @@ prebuild attempts are terminal, not recovery candidates.
   build/activation boundaries. Unpublished private edits are neither promoted nor
   asserted unchanged; they belong to the next normal catalog publication. This
   avoids repeated private source/vector recapture without caching mutable truth.
+  Within one live invocation, already authenticated public bytes are reused only
+  with in-process provenance bound to the same D1 client, run, exact input and
+  frozen owner generation/epoch. Each publication boundary still checks actual
+  catalog/projection receipts, original native journal hashes, watermarks,
+  pending work, exact immutable/sealed projection-trigger definitions and row
+  count. Missing/changed trigger protection falls back to a full authenticated
+  read. New clients, restored inputs and new invocations authenticate again.
+  No schema migration/out-of-band DDL is permitted under an active publication
+  owner. This is not a persistent snapshot cache or private-source waiver.
 - Acceptance checks the actual public identity, resolved build, idle owner and
   original genuine catalog receipt. The separate private serving-only receipt
   lives in `daily-catalog-care/code-only/<label>/success.json`. Catalog
@@ -71,10 +90,44 @@ prebuild attempts are terminal, not recovery candidates.
 - A committed final-resolve response lost in transit resumes from body-free
   controls. It does not reacquire ownership or reconstruct expired bodies.
 - Accepted generated-output cleanup uses the source-only cleanup capability
-  after deployment locks are released. Cleanup attention is advisory; retained
-  packages, original manifests, accounting and receipts are preserved.
+  after deployment locks are released for a persistent local operator. Hosted
+  runners skip that redundant step; their separate expiry job retains the
+  original manifests, accounting and receipts.
 
 An existing successful label is a historical no-op, not proof it is still the
 current serving release. `status` reads saved records only. Missing credentials,
 accepted-public/receipt/native barrier drift or unresolved provider state requires attention; none
 authorizes another merchant batch, takeover, quota reset or blind POST retry.
+
+## Separation boundary and next transition
+
+This is a shorter release critical section, **not independent application
+deployment**. App promotion still waits for an actual pending catalog run. The
+Worker compiles a snapshot and serves snapshot-specific static HTML/assets, so
+UI delivery still rebuilds/repackages that catalog. No bulk prepared-artifact
+pipeline, second publisher, lock removal, new scheduler or accepted-pointer
+rewrite is introduced. Existing stale-serving/prior checks and frozen replay
+compatibility remain; this change adds no new stale-code rollback guarantee.
+
+Offline November 10 checks (Node 22, synthetic SQLite/D1-REST fixture, 32 identities):
+four fresh authentications took 24ms/40 fixture transport requests/four public-page
+reads; four same-owner boundary checks took 10ms/28 requests/zero public-page
+reads. These compare the two current proof paths, not production throughput or
+billing. A coordinator fixture completed catalog acceptance and the next code
+handoff in 10ms while historical cleanup remained blocked. That proves the local
+handoff boundary, not GitHub scheduling latency or full-catalog deployment time.
+The actual publisher fixture also rejects native-barrier drift during build
+before upload, then reuses that same package and survives uncertain activation
+with one build/upload/activation and zero native, supplier or model writes.
+
+The next independently useful transition needs one immutable accepted runtime
+catalog reference, consumed by the existing Worker/renderer rather than baked
+into every app version. Keep D1 and the existing catalog writer canonical; reuse
+R2/versioned metadata and current routes/rendering primitives. An app release
+must preserve the current accepted catalog reference; a later catalog acceptance
+must advance that reference without deploying an older Worker. The pointer
+handoff must remain serialized/CAS-bound and uncertain writes must reconcile by
+exact readback. Verify products, historical URLs, images, short copy, articles,
+native search provenance and fallback before making that serving transition.
+That renderer/data change is not implemented here; roadmap-lbbz1.16.2 remains
+in progress. Admin UI and other catalog work are outside this slice.

@@ -463,7 +463,7 @@ else{
       ...(approvalSha&&!['provider','admission-repair'].includes(recoveryPhase)?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})},
       recovering?{repository:config.publication.sourceRoot,...(recoveryPhase==='admission-repair'?{repairSavedAdmission:true}:{})}:{});
     await remember(result,entry,config,directory);console.log(JSON.stringify(weeklyCommandSummary(result)));
-    if(result.state==='finalized'){
+    if(result.state==='finalized'&&!RUNTIME.hosted){
       await cleanupAcceptedPublication(entry.workspace,config.runId);
     }
   }else refuse('command');

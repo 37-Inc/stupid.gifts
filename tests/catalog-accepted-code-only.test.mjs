@@ -20,7 +20,7 @@ import {createPublishedApprovedCatalogSeal,catalogSuccessorBytes,readApprovedPri
 import {createD1CatalogMaintenanceStore} from '../scripts/catalog/maintenance-d1.ts';
 import {createSealedSnapshotEnvelope} from '../scripts/catalog/export-d1-snapshot.ts';
 import {prepareOwnedApprovedCohortPlan,settleOwnedApprovedCohortVectorProof,readActivatedCatalogVectors,deliverOwnedApprovedCohortVector} from '../scripts/catalog/owned-vector-delivery.ts';
-import {readAcceptedCodeOnlyCatalog,acceptedCodeOnlyOperationKey,assertAcceptedCodeOnlyBinding,acceptedCodeOnlyControl} from '../scripts/catalog/accepted-code-only.ts';
+import {readAcceptedCodeOnlyCatalog,recheckAcceptedCodeOnlyCatalog,acceptedCodeOnlyOperationKey,assertAcceptedCodeOnlyBinding,acceptedCodeOnlyControl} from '../scripts/catalog/accepted-code-only.ts';
 import {executePublication} from '../scripts/catalog/publish-release.ts';
 import {openRunWorkspace} from '../scripts/catalog/run-workspace.ts';
 import {createCatalogD1Rest} from '../scripts/catalog/d1-write-rest.ts';
@@ -139,6 +139,55 @@ test('accepted published reader rejects actual public, native anchor and genuine
   f.sql.prepare("UPDATE publication_receipts SET completed_at='2000-01-01T00:00:00.000Z' WHERE release_id=?").run(f.seal.publication.releaseId);
   await assert.rejects(f.read());
   f.sql.prepare('UPDATE publication_receipts SET completed_at=? WHERE release_id=?').run(receipt.completed_at,f.seal.publication.releaseId);f.unchanged();
+});
+
+test('same-invocation accepted proof skips full public rows but retains fresh schema, receipt, native and owner checks',async t=>{
+  const f=await fixture(t),projectionReads=queries=>queries.filter(q=>q.includes('LEFT JOIN catalog_public_products p')).length;
+  const fullStart=f.queryText.length,fullMetrics=f.metrics(),fullTime=performance.now();
+  for(let i=0;i<4;i++)await f.read();
+  const full={elapsedMs:Math.round(performance.now()-fullTime),requests:f.metrics().requests-fullMetrics.requests,
+    publicPageReads:projectionReads(f.queryText.slice(fullStart))};
+  const checkStart=f.queryText.length,checkMetrics=f.metrics(),checkTime=performance.now();
+  for(let i=0;i<4;i++)await recheckAcceptedCodeOnlyCatalog({db:f.db,owner:f.owner,input:f.input,runReference:'code-only'});
+  const repeated=f.queryText.slice(checkStart),checked={elapsedMs:Math.round(performance.now()-checkTime),requests:f.metrics().requests-checkMetrics.requests,
+    publicPageReads:projectionReads(repeated)};
+  assert.equal(full.publicPageReads,4);assert.equal(checked.publicPageReads,0);
+  assert.ok(repeated.some(q=>q.includes('sqlite_master')));assert.ok(repeated.some(q=>q.includes('count(*) n FROM catalog_public_products')));
+  assert.ok(repeated.some(q=>q.includes('FROM catalog_vector_deliveries')));assert.ok(repeated.some(q=>q.includes('FROM publication_receipts')));
+  assert.ok(repeated.some(q=>q.includes('vector_sync_outbox')));assert.ok(repeated.some(q=>q.includes('mutation_fenced')));
+  assert.ok(checked.requests<full.requests);f.unchanged();
+  t.diagnostic(JSON.stringify({localFixture:true,identities:32,boundaries:4,full,checked,supplierCalls:0,modelCalls:0}));
+  // Serialization/another client has no process provenance and reauthenticates.
+  for(const options of [{input:structuredClone(f.input),db:f.db},{input:f.input,db:{prepare:f.db.prepare.bind(f.db),batch:f.db.batch.bind(f.db)}}]){
+    const start=f.queryText.length;await recheckAcceptedCodeOnlyCatalog({...options,owner:f.owner,runReference:'code-only'});
+    assert.equal(projectionReads(f.queryText.slice(start)),1);
+  }
+  f.sql.exec('DROP TRIGGER catalog_public_immutable');
+  const unprotectedStart=f.queryText.length;
+  for(let i=0;i<2;i++)await recheckAcceptedCodeOnlyCatalog({db:f.db,owner:f.owner,input:f.input,runReference:'code-only'});
+  assert.equal(projectionReads(f.queryText.slice(unprotectedStart)),2,'Missing schema protection must retain full-read compatibility, not introduce a new stop');
+});
+
+test('same-invocation proof cannot mask source, owner, schema, receipt, pending or native drift',async t=>{
+  const cases={
+    'caller packet mutation':f=>{f.input.revision.packet.rows[0].description='changed';},
+    'owner epoch mutation':f=>{f.owner.epoch++;},
+    'owner generation mutation':f=>{f.owner.generation++;},
+    'actual owner cursor drift':f=>{f.sql.prepare('UPDATE catalog_mutation_scopes SET mutation_epoch=mutation_epoch+1').run();},
+    'authority source mutation':f=>{f.input.authority.request.codeSha='1'.repeat(40);},
+    'pending native write':f=>{f.sql.prepare("UPDATE vector_sync_outbox SET status='pending' WHERE sequence=(SELECT max(sequence) FROM vector_sync_outbox)").run();},
+    'global watermark drift':f=>{f.sql.prepare('UPDATE vector_sync_outbox SET sequence=sequence+1 WHERE sequence=(SELECT max(sequence) FROM vector_sync_outbox)').run();},
+    'catalog receipt drift':f=>{f.sql.prepare("UPDATE publication_receipts SET completed_at='2000-01-01T00:00:00.000Z' WHERE release_id=?").run(f.seal.publication.releaseId);},
+    'projection receipt drift':f=>{f.sql.exec('DROP TRIGGER catalog_projection_receipt_immutable');f.sql.prepare('UPDATE catalog_projection_receipts SET projection_sha256=? WHERE catalog_revision=?').run('1'.repeat(64),f.authority.request.sourceRevision);},
+    'native journal drift':f=>{f.sql.exec('DROP TRIGGER catalog_vector_delivery_complete_immutable');f.sql.prepare("UPDATE catalog_vector_deliveries SET evidence_json='[]' WHERE delivery_id=?").run(f.input.revision.nativeHistory[0].source.deliveryId);},
+    'dropped immutable trigger with changed public field':f=>{f.sql.exec('DROP TRIGGER catalog_public_immutable');f.sql.prepare("UPDATE catalog_public_products SET description='changed' WHERE catalog_revision=? AND public_id=?").run(f.authority.request.sourceRevision,uuid(1));},
+    'same-name ineffective trigger with changed public field':f=>{f.sql.exec('DROP TRIGGER catalog_public_immutable; CREATE TRIGGER catalog_public_immutable BEFORE UPDATE ON catalog_public_products BEGIN SELECT 1; END');f.sql.prepare("UPDATE catalog_public_products SET description='changed' WHERE catalog_revision=? AND public_id=?").run(f.authority.request.sourceRevision,uuid(1));},
+    'deleted public row':f=>{f.sql.prepare('DELETE FROM catalog_public_products WHERE catalog_revision=? AND public_id=?').run(f.authority.request.sourceRevision,uuid(1));},
+  };
+  for(const [name,change]of Object.entries(cases))await t.test(name,async t=>{
+    const f=await fixture(t);change(f);
+    await assert.rejects(recheckAcceptedCodeOnlyCatalog({db:f.db,owner:f.owner,input:f.input,runReference:'code-only'}));
+  });
 });
 
 test('mixed accepted catalog preserves original finite overlays, permanent fallbacks and completion authority',async t=>{
@@ -269,13 +318,16 @@ test('actual mixed serving-only publisher resumes uncertain activation with one 
     retention:{reviewReference:'test-only/original-window',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint']
       .map(kind=>[kind,{maxAgeMs:24*3600000,notAfter:until}]))},budgetCaps:{httpRequests:5000,sqlStatements:12000},now:()=>f.now().toISOString()};
   workspace=await openRunWorkspace(wsOptions);
-  const counts={uploads:0,activations:0,builds:0,nativeWrites:0};let uploaded=false,active=false,uploadedConfig,identityFailure=true,loseResolve=false;
+  const counts={uploads:0,activations:0,builds:0,nativeWrites:0};let uploaded=false,active=false,uploadedConfig,identityFailure=true,loseResolve=false,
+    publicPageReads=0,poisonBuild=true;
+  const pendingVector=f.sql.prepare('SELECT sequence,status FROM vector_sync_outbox LIMIT 1').get();
   const response=result=>Response.json({success:true,result}),checkpoint=async()=>(await workspace.readCheckpoint({controlOnly:true})).checkpoint;
   const base=`https://api.cloudflare.com/client/v4/accounts/${f.accountId}`,worker=`${base}/workers/scripts/${config.workerName}`;
   const raw=async(url,init={})=>{init.signal?.throwIfAborted();const u=new URL(url);
     if(url===`${base}/d1/database/${f.databaseId}`)return response({uuid:f.databaseId,name:config.database.name,read_replication:{mode:'disabled'}});
     if(url===`${base}/d1/database/${f.databaseId}/query`){const batch=JSON.parse(init.body).batch,result=[];f.sql.exec('BEGIN');
-      try{for(const q of batch){const before=f.sql.prepare('SELECT total_changes() n').get().n,rows=f.sql.prepare(q.sql).all(...q.params).map(row=>({...row}));
+      try{for(const q of batch){if(q.sql.includes('LEFT JOIN catalog_public_products p'))publicPageReads++;
+        const before=f.sql.prepare('SELECT total_changes() n').get().n,rows=f.sql.prepare(q.sql).all(...q.params).map(row=>({...row}));
         const changes=f.sql.prepare('SELECT total_changes() n').get().n-before;
         result.push({success:true,results:rows,meta:{served_by_primary:true,rows_read:rows.length,rows_written:changes,changes}});}f.sql.exec('COMMIT');}
       catch(error){f.sql.exec('ROLLBACK');throw error;}
@@ -328,14 +380,16 @@ test('actual mixed serving-only publisher resumes uncertain activation with one 
         'site-identity.json':bytes(siteIdentityBytes(context.sourceMode)),'feed-plan.json':bytes(createStaticFeedPlan(snapshot,context.catalogSnapshotSha256))};
       for(const[name,b]of Object.entries(outputs))await put(path.join(sourceRoot,'build/stupid-gifts',name),b);
       for(const[name,b]of assembled.assets)await put(path.join(sourceRoot,'static-site/out',name.slice(1)),b);
+      if(poisonBuild){poisonBuild=false;f.sql.prepare("UPDATE vector_sync_outbox SET status='pending' WHERE sequence=?").run(pendingVector.sequence);}
     }else if(input.args.includes('upload')){counts.uploads++;uploadedConfig=JSON.parse(await fs.readFile(input.args[input.args.indexOf('--config')+1]));
       const endpoint=input.env.CLOUDFLARE_API_BASE_URL;assert.equal(new URL(endpoint).hostname,'127.0.0.1');
       for(const route of [`/accounts/${f.accountId}/workers/scripts/${config.workerName}/assets-upload-session`,`/accounts/${f.accountId}/workers/assets/upload?base64=true`,
         `/accounts/${f.accountId}/workers/scripts/${config.workerName}/versions?bindings_inherit=strict`]){
         const reply=await fetch(`${endpoint}${route}`,{method:'POST',body:'{}'});assert.equal(reply.status,200);await reply.arrayBuffer();}}
   };
+  let servingInput=f.input;
   const execute=async(completed=false)=>executePublication({db:io.db,owner:(await checkpoint()).owner,revision:completed?null:r,
-    acceptedCatalog:completed?acceptedCodeOnlyControl(f.seal,f.authority):f.input,requestId:queued.requestId,
+    acceptedCatalog:completed?acceptedCodeOnlyControl(f.seal,f.authority):servingInput,requestId:queued.requestId,
     runReference:config.releaseId,workspace,config,credentials:{cloudflareToken:'FIXTURE_ONLY',identityAuthorization:'Basic FIXTURE_ONLY'},dependencies:{fetch:io.fetch,
       observationFetch:io.observationFetch,command:accountedPublicationUploadCommand({workspace,scope:{accountId:f.accountId,workerName:config.workerName},send:raw,command}),now:f.now}});
   const originalTitle=f.sql.prepare('SELECT title FROM products WHERE public_id=?').get(uuid(1)).title;
@@ -345,7 +399,12 @@ test('actual mixed serving-only publisher resumes uncertain activation with one 
     finally{f.sql.prepare('UPDATE products SET title=? WHERE public_id=?').run(originalTitle,uuid(1));}
   };
   const denied=await execute(true);assert.equal(denied.state,'pending');assert.equal(denied.errorCode,'publication_serving_settlement_scope');assert.equal(counts.uploads,0);
+  const stale=await execute();assert.equal(stale.state,'pending');assert.match(stale.errorCode,/^(?:accepted_code_only_source_changed|catalog_d1_result_unknown)$/);
+  assert.deepEqual(counts,{uploads:0,activations:0,builds:1,nativeWrites:0});assert.equal(publicPageReads,1);
+  f.sql.prepare('UPDATE vector_sync_outbox SET status=? WHERE sequence=?').run(pendingVector.status,pendingVector.sequence);
+  servingInput=structuredClone(f.input); // A restored invocation has no process-local provenance.
   const first=await withPrivateDrift();assert.equal(first.state,'pending',JSON.stringify(first));assert.equal(counts.activations,1,JSON.stringify(first));assert.equal(counts.uploads,1);f.unchanged();
+  assert.equal(publicPageReads,2,'Each active invocation reads public rows once, never once per activation boundary');
   const expectedManifestSha256=workspace.manifestSha256;await workspace.close();workspace=await openRunWorkspace({...wsOptions,mode:'resume',expectedManifestSha256});io=await transports();
   loseResolve=true;const uncertain=await withPrivateDrift();assert.equal(uncertain.state,'pending',JSON.stringify(uncertain));f.unchanged();
   assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'idle');

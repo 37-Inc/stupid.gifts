@@ -138,8 +138,14 @@ original config SHA instead: the original writing owner and finite cohort must
 match, saved responses and committed receipts are reused, and only originally
 captured unattempted work can execute. No new batch or source/config relabeling.
 Historical execution adoption stays local-only. Completed special
-recovery helpers never replay. Post-acceptance output cleanup is advisory and
-holds source locks, not database/Worker deployment locks.
+recovery helpers never replay. Persistent local post-acceptance output cleanup
+is advisory and holds source locks, not database/Worker deployment locks.
+Hosted generated output leaves with its ephemeral runner. Historical expired
+body/package cleanup runs in a dependent `catalog-cleanup` job after the
+job-scoped `catalog-production` queue releases, retaining original registrations,
+sources and deadlines. It cannot hold application shipping behind old cleanup.
+App promotion still waits for pending catalog acceptance; runtime catalog/data
+separation is not yet implemented.
 
 Credentials come only from reviewed local Keychain/OAuth references or explicitly
 approved hosted secrets. Access failure needs the exact attended action; never
