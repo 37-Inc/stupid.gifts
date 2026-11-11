@@ -14,7 +14,7 @@ import { createD1CatalogMaintenanceStore, loadMaintenanceVectorPayload } from '.
 import { createD1CatalogTelemetryStore } from './telemetry-d1.ts';
 import { createCatalogProviderEvidence } from './provider-evidence.ts';
 import { createVectorizeRestAdapters } from './vectorize-rest.ts';
-import { deliverOwnedOutboxEvent, deliverOwnedApprovedCohortVector, prepareOwnedApprovedCohortPlan, settleOwnedApprovedCohortVectorProof } from './owned-vector-delivery.ts';
+import { deliverOwnedOutboxEvent, deliverOwnedApprovedCohortVector, deliverOwnedApprovedCohortBatch, prepareOwnedApprovedCohortPlan, settleOwnedApprovedCohortVectorProof } from './owned-vector-delivery.ts';
 import { canonicalJson, sha256 } from './migration.ts';
 import { decodePgvectorSendBase64 } from './pgvector-binary.ts';
 import { openRunWorkspace, readRunWorkspace, WORKSPACE_BLOB_LIMITS } from './run-workspace.ts';
@@ -811,6 +811,32 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         ||vectorIds.some(id=>!plan.products.some(p=>p.publicId===id)&&!plan.absentIds.includes(id)))throw new Error('weekly_vector_plan_changed');
       for(let index=Number(state().vectorOffset)||0;index<vectorIds.length;index++){
         const publicId=vectorIds[index];
+        // New runtime-data runs batch approved upserts; deletes and historical
+        // original-vector imports keep their existing individual proof path.
+        const batchIds:string[]=[];
+        if(config.publication.runtimeCatalog&&adapters.dispatchBatch){
+          for(const id of vectorIds.slice(index,index+8)){
+            if(!plan.products.some(p=>p.publicId===id)||!request.approval.changes.some(c=>c.publicId===id)||originals[id])break;
+            batchIds.push(id);
+          }
+        }
+        if(batchIds.length){
+          const started=Date.now();let completed=0;
+          for(let pass=0;pass<4;pass++){
+            const result=await deliverOwnedApprovedCohortBatch({db,owner:cp.owner!,revision,publicIds:batchIds,adapters});await write({owner:result.owner});
+            if(result.state==='expired')return{state:'attention',phase:cp.phase,reason:'expired_vector',budget:await ws.budget()};
+            if(result.state==='complete'){
+              completed=result.publicIds.length;
+              await write({state:{...state(),vectorOffset:index+completed}});
+              console.info(JSON.stringify({state:'publication_progress',phase:'native_batch',stage:'complete',products:completed,elapsedMs:Date.now()-started}));
+              break;
+            }
+            const errorCode=await pendingVectorCode(db,result);
+            if(pass===3||errorCode==='mutation_unknown')return{state:'pending',phase:cp.phase,errorCode,budget:await ws.budget()};
+            if(errorCode==='not_visible')await(dependencies.wait??sleep)(45000);
+          }
+          index+=completed-1;continue;
+        }
         // Replaying complete earlier journal entries recovers only their own
         // recorded epoch; the exact current checkpoint owner is never replaced
         // with an arbitrary DB cursor. Original signed zero stays native bytes.

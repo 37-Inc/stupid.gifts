@@ -33,6 +33,8 @@ test('publication progress streams split lines before exit and never echoes raw 
   assert.deepEqual(hostedPublicationProgress(JSON.stringify(inventory)),{state:'progress',step:'publication',phase:'inventory',stage:'start',products:3407,elapsedMs:0});
   assert.equal(hostedPublicationProgress(JSON.stringify({...inventory,token:'secret'})),undefined);
   assert.equal(hostedPublicationProgress(JSON.stringify({...inventory,stage:'secret'})),undefined);
+  assert.equal(hostedPublicationProgress(JSON.stringify({...inventory,stage:'reused'})).stage,'reused');
+  assert.equal(hostedPublicationProgress(JSON.stringify({...inventory,phase:'native_batch',stage:'complete',products:4})).products,4);
   const phase={state:'catalog_phase_progress',phase:3,totalPhases:14,stage:'complete',elapsedMs:123};
   assert.deepEqual(hostedPublicationProgress(JSON.stringify(phase)),{...phase,state:'progress',step:'catalog'});
   for(const changed of [{phase:15},{stage:'private'},{product:'private'}])assert.equal(hostedPublicationProgress(JSON.stringify({...phase,...changed})),undefined);
@@ -599,14 +601,12 @@ test('editorial preview uses the same stable source checkout as routine care and
   assert.match(code,/const repository=await defaults\(runtime,process\.env\)\.checkout\(source\);\s*console\.log\(JSON\.stringify\(await previewHostedHomepage\(runtime,\{repository,source,day:/);
   assert.doesNotMatch(code,/previewHostedHomepage\(runtime,\{repository:ROOT/);
 });
-test('one Pacific workflow remains main-only, protected, serialized and has no PR/push trigger',async()=>{
+test('one externally clocked workflow remains main-only, protected, serialized and has no cron/PR/push trigger',async()=>{
   const yaml=await readFile(new URL('../.github/workflows/catalog-manual.yml',import.meta.url),'utf8');
   assert.match(yaml,/workflow_dispatch:/);assert.doesNotMatch(yaml,/\b(?:pull_request|push):/);
-  assert.match(yaml,/cron: '30 8 \* \* \*'/);assert.match(yaml,/cron: '30 20 \* \* \*'/);assert.match(yaml,/cron: '30 10 \* \* \*'/);
-  assert.equal((yaml.match(/timezone: America\/Los_Angeles/g)||[]).length,4);
-  assert.match(yaml,/cron: '30 22 \* \* \*'/);
-  assert.match(yaml,/inputs.mode \|\| \(\(github.event.schedule == '30 20 \* \* \*' \|\| github.event.schedule == '30 22 \* \* \*'\) && 'photos' \|\| 'full'\)/);
-  assert.match(yaml,/CATALOG_SCHEDULE: \$\{\{ github.event.schedule \|\| '' \}\}/);
+  assert.doesNotMatch(yaml,/\n\s+schedule:|\n\s+- cron:/);
+  assert.match(yaml,/CATALOG_MODE: \$\{\{ inputs.mode \}\}/);
+  assert.match(yaml,/CATALOG_SCHEDULED_AT: \$\{\{ inputs.scheduled_at \|\| '' \}\}/);
   assert.match(yaml,/group: catalog-production/);assert.match(yaml,/cancel-in-progress: false/);assert.match(yaml,/environment: Production/);
   assert.doesNotMatch(yaml,/\nconcurrency:/,'Whole-workflow concurrency would keep historical cleanup in the publication queue');
   const cleanup=yaml.slice(yaml.indexOf('\n  cleanup:'));

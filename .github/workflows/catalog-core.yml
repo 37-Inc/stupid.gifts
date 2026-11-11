@@ -13,6 +13,9 @@ on:
       - 'static-site/runtime/**'
       - '.github/workflows/app-deploy.yml'
       - 'migrations/d1/001[89]*.sql'
+      - 'migrations/d1/0020*.sql'
+      - 'workers/catalog-clock.mjs'
+      - 'wrangler.catalog-clock.jsonc'
       - 'tests/runtime-*.test.mjs'
       - 'tests/catalog-*.test.mjs'
       - 'package*.json'
@@ -46,6 +49,8 @@ jobs:
       - run: node --import tsx --test tests/runtime-*.test.mjs
       - run: node --import tsx --test tests/catalog-title-repairs.test.mjs tests/catalog-short-copy.test.mjs tests/catalog-provider-evidence.test.mjs
       - run: node --import tsx --test tests/catalog-semantic-delta.test.mjs tests/catalog-photo-vector-reuse.test.mjs tests/catalog-publication-read-fetch.test.mjs
+      - run: node --import tsx --test tests/catalog-clock.test.mjs tests/catalog-vectorize-rest.test.mjs
+      - run: node --import tsx --test --test-name-pattern="native batch|batch intent|eight-product|unchanged source|source counter" tests/catalog-approved-cohort.test.mjs tests/catalog-permanent-native-reader.test.mjs
       - run: node --import tsx --test tests/catalog-editorial-equivalence.test.mjs
       - run: node --import tsx --test --test-name-pattern="acknowledged indexing waits in the same driver|prepared freezing revision reuses|atomic multi-product receipt|Monday discovery publishes through a real permanent predecessor" tests/catalog-cloudflare-weekly.test.mjs tests/catalog-approved-cohort.test.mjs
       - run: node --import tsx --test tests/catalog-d1-write-rest.test.mjs tests/catalog-maintenance-d1.test.mjs tests/catalog-daily-operator.test.mjs tests/catalog-publication-recovery-budget.test.mjs tests/catalog-telemetry-d1.test.mjs tests/catalog-exact-admission.test.mjs tests/catalog-workspace-successor.test.mjs

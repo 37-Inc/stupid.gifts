@@ -13,6 +13,7 @@ import {checkCloudflareRunner} from './check-cloudflare-runner.ts';
 import {catalogD1FailureDetail} from './d1-write-rest.ts';
 import {hostedRunRecord,hostedRunKey,validAdmissionAsins,validSavedAdmissionRun} from './hosted-run-record.mjs';
 import {loadSavedAdmission} from './saved-admission.mjs';
+import {catalogScheduledTime} from '../../lib/catalog/clock-slot.mjs';
 export {hostedRunRecord} from './hosted-run-record.mjs';
 
 const exec=promisify(execFile),HASH=/^[a-f0-9]{64}$/,SOURCE=/^[a-f0-9]{40}$/,ASIN=/^[A-Z0-9]{10}$/;
@@ -93,9 +94,9 @@ export function hostedPublicationProgress(line){
     &&['start','complete'].includes(value.stage)&&[value.phase,value.totalPhases,value.elapsedMs].every(n=>Number.isSafeInteger(n)&&n>=0)
     &&value.phase>0&&value.phase<=value.totalPhases)
     return{...value,state:'progress',step:'catalog'};
-  if(exact(value,'state,phase,stage,products,elapsedMs')&&value.state==='publication_progress'&&value.phase==='inventory'
-    &&['start','complete'].includes(value.stage)&&[value.products,value.elapsedMs].every(n=>Number.isSafeInteger(n)&&n>=0))
-    return{state:'progress',step:'publication',phase:'inventory',stage:value.stage,products:value.products,elapsedMs:value.elapsedMs};
+  if(exact(value,'state,phase,stage,products,elapsedMs')&&value.state==='publication_progress'&&['inventory','native_batch'].includes(value.phase)
+    &&['start','complete','reused'].includes(value.stage)&&[value.products,value.elapsedMs].every(n=>Number.isSafeInteger(n)&&n>=0))
+    return{state:'progress',step:'publication',phase:value.phase,stage:value.stage,products:value.products,elapsedMs:value.elapsedMs};
   const metrics=['completedBytes','completedFiles','totalFiles','blocks','elapsedMs'];
   if(!exact(value,'state,phase,'+metrics.join(','))||value.state!=='publication_progress'||value.phase!=='package'
     ||metrics.some(k=>!Number.isSafeInteger(value[k])||value[k]<0)||value.completedFiles>value.totalFiles)return;
@@ -425,8 +426,9 @@ async function main(){
   const admitSavedRun=savedRun||undefined;
   const runtime=automationRuntime(),source=process.env.GITHUB_SHA;
   if((await exec('git',['rev-parse','HEAD'],{cwd:ROOT,env:hostedCommandEnvironment(process.env,{credentials:false})})).stdout.trim()!==source)fail('reviewed_source');
-  const now=new Date(),capturedDay=hostedInvocationDay(mode,now);
-  console.log(JSON.stringify({state:'started',mode,scheduledEvent:process.env.CATALOG_SCHEDULE||null,runDay:capturedDay,startedAt:now.toISOString()}));
+  const now=new Date(),scheduledAt=catalogScheduledTime(mode,process.env.CATALOG_SCHEDULED_AT),capturedDay=hostedInvocationDay(mode,scheduledAt??now);
+  console.log(JSON.stringify({state:'started',mode,scheduledEvent:scheduledAt?'cloudflare':null,
+    scheduledAt:scheduledAt?.toISOString()??null,startDelayMs:scheduledAt?now.getTime()-scheduledAt.getTime():null,runDay:capturedDay,startedAt:now.toISOString()}));
   if(mode==='cleanup'){
     if(canaryId||admissionList||savedRun)fail('invocation');
     const {cleanupHostedRuns}=await import('./hosted-cleanup.mjs'),checkout=defaults(runtime,process.env).checkout;

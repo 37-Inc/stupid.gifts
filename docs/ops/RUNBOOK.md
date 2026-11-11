@@ -10,8 +10,13 @@ site with an old checkout or modify a source while its run is active.
 
 ## Current mode
 
-The single GitHub catalog workflow owns 08:30 Pacific full care, 20:30 due-photo
-care, a 10:30 morning catch-up and a 22:30 evening catch-up using the same respective run identities. Photo-only keys use the evening slot's UTC date so a late overnight dispatch cannot reserve the following evening; full care retains Pacific dates. Saved pending records always keep their original day/source/config. The old
+The Cloudflare `stupid-gifts-catalog-clock` dispatches the single GitHub catalog
+workflow at 08:30 Pacific full care, 20:30 due-photo care, a 10:30 morning catch-up
+and a 22:30 evening catch-up using the same respective run identities. GitHub's
+cron triggers are removed. Each dispatch carries the original due timestamp, so
+runner/queue delay cannot change its day. Photo-only keys use the evening slot's
+UTC date; full care retains Pacific dates. Saved pending records always keep
+their original day/source/config. The old
 `goose-gifts-daily-ops` Codex writing timer remains paused after cutover. Never
 enable both. The explicitly activated private automation policy enables scaled
 due-work, daily visual admission and API homepage editing; absence/disablement
@@ -19,6 +24,40 @@ retains the legacy ten-product/Monday/model-free policy.
 See [HOSTED_CATALOG.md](HOSTED_CATALOG.md)
 for shadow, canary, explicit activation and single-writer recovery, and
 [the approved spec](CATALOG_AUTOMATION_SPEC.md) for successor behavior.
+
+### November 11 speed and clock changes
+
+- Data-only care no longer installs the isolated legacy uploader. Only explicit
+  `code` recovery needs it. Application deployments remain separate.
+- New runtime-data runs group native upserts (at most eight, reduced by encoded
+  payload size). One acknowledged mutation covers each group; every original
+  product journal, exact native bytes, source check and owner fence remains.
+  Pending groups resume as groups, never individual re-dispatches. Deletes and
+  frozen historical runs retain their original path.
+- Migration `0020` adds a source-change counter maintained by database triggers.
+  A full inventory proof is reused in the same process only while that counter,
+  owner and inventory digest match. Any source write forces another scan; an
+  absent migration keeps the original full-scan behavior. Accounting remains
+  durable and unchanged; fewer requests mean fewer accounting round trips.
+- The separate `stupid-gifts-catalog-clock` Worker is staged disabled and deployed
+  with its reviewed cron only **after this workflow change is merged**. Its only
+  secret can dispatch Actions on `37-Inc/stupid.gifts` (plus
+  GitHub's mandatory Metadata read); it has no catalog/provider/storage binding
+  and no public trigger. Token expiry: **2027-02-09**. Renew before that date.
+  At cutover, disable GitHub cron before enabling Cloudflare's UTC/DST-filtered
+  clock. Keep the existing morning/evening and two-hour catch-up slots, passing
+  the original `scheduled_at` to the same coordinator. Never run two clocks.
+- Log intended slot, actual start/delay, inventory `complete` versus `reused`,
+  and native batch size/duration. A dispatch ACK is not a catalog acceptance.
+
+Measured baseline: November 11 run `43016472526` started 7h29m late and the
+catalog job took 3h47m48s. Forty serial native updates spanned 111m03s; four
+3,430-identity scans totaled 19m01s; separate cleanup took 29m50s. Local tests
+prove four native gifts share one mutation and repeated unchanged inventory
+checks avoid another full scan. These are operation-count improvements, **not**
+yet a measured production-duration claim. Use the next normal due-work run;
+do not fetch an extra batch just to benchmark. Beads: `roadmap-lbbz1.36` and
+the existing unattended observation task `roadmap-lbbz1.16.1`.
 
 November 6 baseline: 3,390 identities, 3,347 public gifts, 43 holds, 37 optional
 articles and roughly 7,008 static files. These are observations, not growth caps.

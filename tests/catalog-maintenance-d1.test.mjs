@@ -1015,7 +1015,8 @@ test('0010 is additive on populated FK/FTS/projection/history/outbox rows and pr
   const sqlite=new DatabaseSync(':memory:');
   try {
     const names=(await readdir(new URL('../migrations/d1/',import.meta.url))).filter(name => /^00\d\d_.*\.sql$/.test(name)).sort();
-    for(const name of names.filter(name => !name.startsWith('0010_')))sqlite.exec(await readFile(new URL(`../migrations/d1/${name}`,import.meta.url),'utf8'));
+    // This historical upgrade starts before 0010; later migrations may depend on it.
+    for(const name of names.filter(name => name < '0010_'))sqlite.exec(await readFile(new URL(`../migrations/d1/${name}`,import.meta.url),'utf8'));
     const row=convertSourceRow('products',rawProduct(1),{catalogRevision:'r-archive',archiveId:'test',timestamps:{'products.created_at':{timezone:'unresolved',evidence:'fixture unresolved creation'}},now:new Date(NOW)});
     row.title='Synthetic searchable fixture';const keys=Object.keys(row);
     sqlite.prepare(`INSERT INTO products(${keys.join(',')}) VALUES(${keys.map(() => '?').join(',')})`).run(...keys.map(key => row[key]));
