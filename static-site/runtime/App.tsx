@@ -20,7 +20,7 @@ export interface RuntimePageProps {
   kind:'home'|'show'|'howie'|'product'|'held'|'random'|'guides'|'guide'|'privacy'|'missing';
   products:PublicCatalogProduct[];cards:CatalogCard[];related?:PublicCatalogProduct[];
   catalogRevision:string;version:string;next:string|null;poolSize:number;
-  action:string;guide?:GiftGuideDefinition;guides:Array<Pick<GiftGuideDefinition,'slug'|'title'|'intro'>>;
+  action:string;showPreviews?:boolean;guide?:GiftGuideDefinition;guides:Array<Pick<GiftGuideDefinition,'slug'|'title'|'intro'>>;
   analytics:boolean;disclosures:Record<string,string>;
   photoIndex:string|null;photoSlots:string[];eligibleUntil:string|null;
 }
@@ -36,8 +36,8 @@ function Chrome({children,analytics}:{children:React.ReactNode;analytics:boolean
         <a href="https://www.pinterest.com/stupid_gifts/" target="_blank" rel="noopener noreferrer">Pinterest<span className="sr-only"> (opens in a new tab)</span></a>
         <a href={`mailto:${PUBLIC_CONTACT_EMAIL}`}>Contact</a><a href="/privacy">Privacy</a></div></footer></>;
 }
-function Grid({products,show=false}:{products:PublicCatalogProduct[];show?:boolean}){
-  return <div className="catalog-grid" aria-label="Gifts">{products.map((p,index)=><ProductCard key={p.publicId} product={p}
+function Grid({products,show=false,children}:{products:PublicCatalogProduct[];show?:boolean;children?:React.ReactNode}){
+  return <div className="catalog-grid" aria-label="Gifts">{children}{products.map((p,index)=><ProductCard key={p.publicId} product={p}
     lead={show&&index===0} eager={show} context={show?'show-curated':'catalog'}/>)}</div>;
 }
 function Detail({product,related=[]}:{product:PublicCatalogProduct;related?:PublicCatalogProduct[]}){
@@ -57,7 +57,7 @@ export function RuntimeApp(props:RuntimePageProps){
   let content:React.ReactNode;
   if(props.kind==='home'||props.kind==='show')content=<><div className="opening-line"><h1>Stupid gifts. <span>Excellent taste.</span></h1></div>
     <Search action={props.action as '/'} autoSearch={props.kind!=='show'}>{props.kind==='show'
-      ?<ShowLineup catalogRevision={props.catalogRevision} action={props.action}><ShowPreviews/><Grid products={props.products} show/></ShowLineup>
+      ?<ShowLineup catalogRevision={props.catalogRevision} action={props.action}><Grid products={props.products} show>{props.showPreviews&&<ShowPreviews/>}</Grid></ShowLineup>
       :<><CatalogFeed initial={props.cards} next={props.next} catalogRevision={props.catalogRevision} version={props.version}/>
         <section className="section-block"><div className="section-heading"><h2>Gift guides</h2><a className="text-action" href="/gift-guides">All guides</a></div>
           <div className="guide-links">{props.guides.slice(0,2).map(g=><a key={g.slug} href={`/gift-guides/${g.slug}`}>{g.title}<Icon name="chevron"/></a>)}

@@ -96,6 +96,23 @@ test('runtime pages retain saved/custom shows, submit-only search, product links
   assert.equal((await f.request('/',{method:'HEAD'})).body,null);
 });
 
+test('runtime preview mounting follows the resolved show, never archived lineups',async t=>{
+  const f=await runtimeFixture(t),props=async path=>JSON.parse((await(await f.request(path)).text()).match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);
+  assert.equal((await props('/h')).showPreviews,false);
+  assert.equal((await props('/h/billy-ray')).showPreviews,false);
+  assert.equal((await props('/h/matan')).showPreviews,true);
+  f.collections[1].payload_json=JSON.stringify({name:'matan'});f.collections[1].revision++;f.head.version++;f.time.now+=6000;
+  assert.equal((await props('/h')).showPreviews,true);
+  assert.equal((await props('/h/billy-ray')).showPreviews,false);
+  f.collections[1].payload_json=JSON.stringify({name:'billy-ray'});f.collections[1].revision++;f.head.version++;f.time.now+=6000;
+  assert.equal((await props('/h')).showPreviews,false);
+  // The hydrated preview component returns cards directly, so its mount must
+  // be a child of the same grid before the ordinary saved ProductCards.
+  const app=await fs.readFile(new URL('../static-site/runtime/App.tsx',import.meta.url),'utf8');
+  assert.match(app,/<Grid products=\{props.products\} show>\{props.showPreviews&&<ShowPreviews\/>\}<\/Grid>/);
+  assert.match(app,/className="catalog-grid" aria-label="Gifts">\{children\}\{products.map/);
+});
+
 test('runtime assets only read accepted digest-bound public keys and fail closed on expiry/corruption',async t=>{
   const f=await runtimeFixture(t),bytes=new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>'),sha256=await runtimeDigest(bytes),asset={sha256,eligibleUntil:null,contentType:'image/svg+xml'};
   f.data.assets['/images/owned.svg']=asset;f.objects.set(runtimeAssetKey(asset),bytes);await f.publish();
