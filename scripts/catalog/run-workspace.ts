@@ -35,6 +35,8 @@ export interface PublicationControl {
   vectorPlan:{catalogRevision:string;planSha256:string;ids:string[]}; packageSha256:string|null;
   uploadMarker:string; versionReference:string|null; deploymentMarker:string; deploymentId:string|null;
   receiptSha256?:string;
+  /** Body-free evidence of an already-live exact original serving version. */
+  observedActivation?:{kind:'observed-serving-activation';observedAt:string;deploymentId:string;marker:string};
 }
 export interface RuntimePublicationControl {
   schemaVersion:1;configSha256:string;requestId:string;runReference:string;releaseId:string;
@@ -296,7 +298,7 @@ function control(value:WorkspaceControl|undefined) {
   }
   if(!value.publication)return;
   json(value,MAX_JSON);const p=value.publication;
-  if(!exact(p,['schemaVersion','configSha256','requestId','runReference','stage','build','publication','intent','permit','vectorPlan','packageSha256','uploadMarker','versionReference','deploymentMarker','deploymentId',...(p.receiptSha256===undefined?[]:['receiptSha256'])])
+  if(!exact(p,['schemaVersion','configSha256','requestId','runReference','stage','build','publication','intent','permit','vectorPlan','packageSha256','uploadMarker','versionReference','deploymentMarker','deploymentId',...(p.receiptSha256===undefined?[]:['receiptSha256']),...(p.observedActivation===undefined?[]:['observedActivation'])])
     ||p.schemaVersion!==1||!hash(p.configSha256)||!key(p.requestId)||!refString(p.runReference)
     ||!['claimed','built','uploading','uploaded','activating','published'].includes(p.stage)
     ||!exact(p.build,['requestId','token','runReference','leaseUntil','request'])||!key(p.build.requestId)||!key(p.build.token)||!refString(p.build.runReference))fail('control');
@@ -312,6 +314,13 @@ function control(value:WorkspaceControl|undefined) {
     ||new Set(p.vectorPlan.ids).size!==p.vectorPlan.ids.length||p.packageSha256!==null&&!hash(p.packageSha256)
     ||![p.uploadMarker,p.deploymentMarker].every(refString)||[p.versionReference,p.deploymentId].some(v=>v!==null&&!refString(v))
     ||p.receiptSha256!==undefined&&!hash(p.receiptSha256))fail('control');
+  if(p.observedActivation){const o=p.observedActivation;
+    if(!exact(o,['kind','observedAt','deploymentId','marker'])||o.kind!=='observed-serving-activation'
+      ||![o.deploymentId,o.marker].every(refString)||o.marker!==p.deploymentMarker||!p.publication||!p.versionReference||!hash(p.packageSha256)
+      ||p.deploymentId!==null&&p.deploymentId!==o.deploymentId
+      ||p.intent?.nextExpiry!==null||!['uploaded','activating','published'].includes(p.stage))fail('control');
+    time(o.observedAt);
+  }
   if(p.requestId!==p.build.requestId||p.runReference!==p.build.runReference
     ||p.publication&&p.intent&&!same(p.publication.intent,p.intent)
     ||p.permit&&(p.permit.requestId!==p.requestId||p.permit.token!==p.build.token||p.permit.runReference!==p.runReference
@@ -656,6 +665,16 @@ function validateControlTransition(old:CheckpointControl,next:CheckpointControl,
   if(!same(old.pins,next.pins)||!same(old.phaseComplete,next.phaseComplete)
     ||!old.control?.publication||!next.control?.publication)fail('control_reconciliation');
   const prior=old.control.publication,current=next.control.publication;
+  // Readback-only progress needs no expired package/checkpoint body. This is
+  // shape permission, not activation authority: the publisher still verifies
+  // the exact provider version/public identity/native state and core's D1 CAS.
+  if(state.requestLimit==='observe'&&next.phase==='attention'&&old.owner?.phase==='freezing'&&same(old.owner,next.owner)
+    &&prior.permit===null&&current.permit===null&&current.observedActivation&&hash(prior.packageSha256)
+    &&prior.intent?.nextExpiry===null&&['uploading','uploaded','activating'].includes(prior.stage)
+    &&['uploaded','activating'].includes(current.stage)&&!(prior.stage==='activating'&&current.stage!=='activating')
+    &&current.versionReference!==null&&(prior.versionReference===null||prior.versionReference===current.versionReference)
+    &&(prior.observedActivation===undefined||same(prior.observedActivation,current.observedActivation))
+    &&same({...prior,stage:current.stage,versionReference:current.versionReference,observedActivation:current.observedActivation},current))return;
   if((state.requestLimit==='observe'||state.recovery?.scope==='approved-permanent-finalization'||state.finish)&&prior.stage==='published'
     &&same(prior,current)&&hash(prior.receiptSha256)&&['published','finalized'].includes(next.phase)){
     recoveryPermit({...state,checkpoint:{sha256:state.checkpoint!.sha256,checkpoint:next}},true,true);

@@ -430,7 +430,7 @@ for(const scenario of ['uncertain activation','external promotion','external pro
   const until=new Date(f.now().getTime()+24*3600000).toISOString(),wsOptions={directory:path.join(directory,'private'),repository:sourceRoot,mode:'create',
     runId:config.releaseId,codeSha,configSha256:sha256(canonicalJson(config)),scope:{...scope,accountId:f.accountId,databaseId:f.databaseId,databaseName:config.database.name,workerName:config.workerName},
     retention:{reviewReference:'test-only/original-window',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint']
-      .map(kind=>[kind,{maxAgeMs:24*3600000,notAfter:until}]))},budgetCaps:{httpRequests:5000,sqlStatements:12000},now:()=>f.now().toISOString()};
+      .map(kind=>[kind,{maxAgeMs:24*3600000,notAfter:until}]))},budgetCaps:{httpRequests:5000,sqlStatements:12000},requestLimit:'observe',now:()=>f.now().toISOString()};
   workspace=await openRunWorkspace(wsOptions);
   if(interruptedUpload){const writeCheckpoint=workspace.writeCheckpoint.bind(workspace);let crash=true;
     workspace={...workspace,writeCheckpoint:async(expected,next)=>{
@@ -511,10 +511,10 @@ for(const scenario of ['uncertain activation','external promotion','external pro
         `/accounts/${f.accountId}/workers/scripts/${config.workerName}/versions?bindings_inherit=strict`]){
         const reply=await fetch(`${endpoint}${route}`,{method:'POST',body:'{}'});assert.equal(reply.status,200);await reply.arrayBuffer();}}
   };
-  let servingInput=f.input;
+  let servingInput=f.input,routineCare=externallyPromoted;
   const execute=async(completed=false)=>executePublication({db:io.db,owner:(await checkpoint()).owner,revision:completed?null:r,
     acceptedCatalog:completed?acceptedCodeOnlyControl(f.seal,f.authority):servingInput,requestId:queued.requestId,
-    runReference:config.releaseId,workspace,config,credentials:{cloudflareToken:'FIXTURE_ONLY',identityAuthorization:'Basic FIXTURE_ONLY'},dependencies:{fetch:io.fetch,
+    runReference:config.releaseId,workspace,config,routineCare,credentials:{cloudflareToken:'FIXTURE_ONLY',identityAuthorization:'Basic FIXTURE_ONLY'},dependencies:{fetch:io.fetch,
       observationFetch:io.observationFetch,command:accountedPublicationUploadCommand({workspace,scope:{accountId:f.accountId,workerName:config.workerName},send:raw,command}),now:f.now}});
   const originalTitle=f.sql.prepare('SELECT title FROM products WHERE public_id=?').get(uuid(1)).title;
   const withPrivateDrift=async()=>{
@@ -531,12 +531,23 @@ for(const scenario of ['uncertain activation','external promotion','external pro
   }
   const first=await withPrivateDrift();assert.equal(first.state,'pending',JSON.stringify(first));assert.equal(counts.activations,externallyPromoted?0:1,JSON.stringify(first));assert.equal(counts.uploads,1);f.unchanged();
   if(!externallyPromoted)assert.equal(publicPageReads,2,'Each active invocation reads public rows once, never once per activation boundary');
-  if(externallyPromoted){active=true;f.advance(16*60_000); // LOCAL separately authorized promotion, not a publisher API call.
+  const originalSnapshot=canonicalJson(r.snapshot),originalAuthority=canonicalJson(f.authority);
+  if(externallyPromoted){active=true;
+    const finiteExpiry=Math.min(...r.snapshot.products.filter(p=>p.eligibleUntil!==null).map(p=>Date.parse(p.eligibleUntil)));
+    assert.ok(Number.isFinite(finiteExpiry));f.advance(finiteExpiry-f.now().getTime()+1); // LOCAL separately authorized promotion after original finite expiry.
+    await fs.rm(path.join(workspace.directory,'packages',config.releaseId),{recursive:true});
     assert.equal((await checkpoint()).control.publication.stage,interruptedUpload?'uploading':'uploaded');
     assert.ok(f.sql.prepare('SELECT lease_until FROM catalog_build_requests WHERE request_id=?').get(queued.requestId).lease_until<=f.now().toISOString());
     assert.ok(f.sql.prepare('SELECT lease_until FROM publication_outbox WHERE release_id=?').get(config.releaseId).lease_until<=f.now().toISOString());}
   const expectedManifestSha256=workspace.manifestSha256;await workspace.close();workspace=await openRunWorkspace({...wsOptions,mode:'resume',expectedManifestSha256});io=await transports();
+  if(externallyPromoted){
+    const before=canonicalJson(await checkpoint());routineCare=false;
+    try{assert.equal((await withPrivateDrift()).state,'pending');assert.equal(canonicalJson(await checkpoint()),before);}
+    finally{routineCare=true;}
+    assert.deepEqual(counts,{uploads:1,activations:0,builds:1,nativeWrites:0});
+  }
   const originalPending=(await checkpoint()).pins.publicationUploadPending;
+  const originalControl=(await checkpoint()).control.publication,originalPins=canonicalJson((await checkpoint()).pins);
   if(interruptedUpload){
     assert.ok(originalPending);assert.equal((await checkpoint()).pins.publicationUploadAcknowledged,undefined);
     const before=canonicalJson(await checkpoint()),claims=()=>canonicalJson({build:f.sql.prepare('SELECT * FROM catalog_build_requests WHERE request_id=?').get(queued.requestId),
@@ -548,16 +559,30 @@ for(const scenario of ['uncertain activation','external promotion','external pro
     assert.deepEqual(counts,{uploads:1,activations:0,builds:1,nativeWrites:0});
   }
   loseResolve=true;let uncertain=await withPrivateDrift();assert.equal(uncertain.state,'pending',JSON.stringify(uncertain));f.unchanged();
-  if(externallyPromoted){assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'activating');
+  if(externallyPromoted){assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'activating',JSON.stringify(uncertain));
     assert.equal((await checkpoint()).control.publication.stage,'activating'); // Normal CLI can recognize the lost-CAS phase transition.
+    const view=await workspace.readCheckpoint({controlOnly:true}),p=view.checkpoint.control.publication;
+    for(const changed of [
+      {...p,observedActivation:{...p.observedActivation,observedAt:new Date(Date.parse(p.observedActivation.observedAt)+1).toISOString()}},
+      {...p,observedActivation:{...p.observedActivation,marker:'not-the-original-deployment'}},
+      {...p,build:{...p.build,token:uuid(498)}},
+    ]){
+      await assert.rejects(workspace.writeControlCheckpoint(view.sha256,{phase:'attention',owner:view.checkpoint.owner,
+        control:{publication:changed}}),/run_workspace_/);
+      assert.deepEqual(await workspace.readCheckpoint({controlOnly:true}),view);
+    }
     uncertain=await withPrivateDrift();assert.equal(uncertain.state,'pending',JSON.stringify(uncertain));assert.equal(observedCas,1);}
   assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'idle');
   assert.equal(f.sql.prepare('SELECT state FROM catalog_build_requests WHERE request_id=?').get(queued.requestId).state,'resolved');
   assert.equal(f.sql.prepare('SELECT count(*) n FROM publication_receipts WHERE release_id=?').get(config.releaseId).n,0);
   const expectedCounts={uploads:1,activations:externallyPromoted?0:1,builds:1,nativeWrites:0};assert.deepEqual(counts,expectedCounts);
-  if(externallyPromoted){const cp=await checkpoint(),pin=cp.pins.publicationObservedActivation;assert.ok(pin);
-    const proof=await workspace.readArtifact(pin);assert.equal(proof.observation.kind,'observed-serving-activation');assert.equal(proof.observation.deploymentId,deployment);
+  if(externallyPromoted){const cp=await checkpoint(),observation=cp.control.publication.observedActivation;assert.ok(observation);
+    assert.equal(observation.kind,'observed-serving-activation');assert.equal(observation.deploymentId,deployment);
+    assert.equal(canonicalJson(cp.pins),originalPins);assert.deepEqual(cp.control.publication.build,originalControl.build);
+    assert.deepEqual(cp.control.publication.publication,originalControl.publication);
     if(interruptedUpload){assert.deepEqual(cp.pins.publicationUploadPending,originalPending);assert.equal(cp.pins.publicationUploadAcknowledged,undefined);}}
   const manifestAfterResolve=workspace.manifestSha256;await workspace.close();workspace=await openRunWorkspace({...wsOptions,mode:'resume',expectedManifestSha256:manifestAfterResolve});io=await transports();
   assert.equal((await execute(true)).state,'published');assert.deepEqual(counts,expectedCounts);f.unchanged();
+  assert.equal(canonicalJson(r.snapshot),originalSnapshot);assert.equal(canonicalJson(f.authority),originalAuthority);
+  if(externallyPromoted)await assert.rejects(fs.stat(path.join(workspace.directory,'packages',config.releaseId)),{code:'ENOENT'});
 });
