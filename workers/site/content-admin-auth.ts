@@ -1,4 +1,3 @@
-import {createRemoteJWKSet,jwtVerify} from 'jose';
 import type {JWTVerifyGetKey} from 'jose';
 
 export interface ContentAdminAuthEnv {
@@ -13,6 +12,8 @@ export async function contentAdminActor(request:Request,env:ContentAdminAuthEnv,
     ||!audience||!/^[a-f0-9]{64}$/.test(audience)||!env.CONTENT_ADMIN_STAFF_EMAILS)return null;
   const token=request.headers.get('Cf-Access-Jwt-Assertion');if(!token||token.length>16000)return null;
   try{
+    // Public/disabled routes neither load the admin JWT library nor perform IO.
+    const {createRemoteJWKSet,jwtVerify}=await import('jose');
     if(!keys){
       if(cached?.issuer!==issuer)cached={issuer,keys:createRemoteJWKSet(new URL(issuer+'/cdn-cgi/access/certs'),{timeoutDuration:5000})};
       keys=cached!.keys;
