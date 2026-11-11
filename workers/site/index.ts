@@ -120,6 +120,9 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
   releaseIdentity?: unknown;
   canonicalOrigin?: string;
   now?: () => number;
+  /** Runtime exports retain the exact repaired-copy legacy-vector exclusion. */
+  repairedPublicIds?: readonly string[];
+  legacyPublicFieldsSha256?: Readonly<Record<string,string>>;
 }) {
   const now = options.now || Date.now;
   const { manifest, snapshot } = options;
@@ -153,7 +156,7 @@ export function createSiteWorker<Env extends SiteEnv>(options: {
   const adapters = options.searchAdapters;
   let derivedSemantic: DerivedSemanticSearch | null | undefined;
   if (Object.hasOwn(manifest, 'semanticCatalog')) {
-    try { derivedSemantic = createDerivedSemanticSearch(snapshot, manifest.semanticCatalog); }
+    try { derivedSemantic = createDerivedSemanticSearch(snapshot, manifest.semanticCatalog, options.repairedPublicIds, options.legacyPublicFieldsSha256); }
     catch { derivedSemantic = null; } // Invalid proof cannot open legacy semantic serving.
   }
   const search = adapters ? createSearchHandler({
