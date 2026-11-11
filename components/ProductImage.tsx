@@ -1,6 +1,5 @@
 'use client';
 
-import Image from 'next/image';
 import { useState } from 'react';
 import { cleanAmazonImageUrl } from '@/lib/image-utils';
 
@@ -32,16 +31,19 @@ export function ProductImage({ imageUrl, alt, className = '', sizes, priority = 
   }
 
   return (
-    <Image
+    // Native images work in both the retained Next export and runtime React
+    // renderer. The previous Next image was already explicitly unoptimized.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
       src={normalizedImageUrl}
       alt={alt}
-      fill
+      style={{position:'absolute',inset:0,width:'100%',height:'100%'}}
       className={className}
       sizes={sizes}
-      priority={priority}
-      unoptimized
+      loading={priority?'eager':'lazy'}
+      fetchPriority={priority?'high':'auto'}
+      decoding="async"
       onError={() => {
-        console.error(`Failed to load image: ${normalizedImageUrl}`);
         setError(true);
       }}
     />

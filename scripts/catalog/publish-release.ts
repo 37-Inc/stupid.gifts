@@ -81,6 +81,8 @@ export interface PublicationConfig {
     derivedCatalog?:{path:string;sha256:string;indexName:string}};
   /** Public build inputs only; omission preserves historical hashes/default-off. */
   publicAnalytics?:{enabled:boolean;posthogKey:string;posthogHost:string};
+  /** Data publication: no application build, version upload or activation. */
+  runtimeCatalog?:{schemaVersion:1;previousReleaseId:string;previousDataSha256:string;homepageRevision:number};
 }
 const KEY=/^[a-zA-Z0-9._-]{1,200}$/;
 const HASH=/^[a-f0-9]{64}$/;
@@ -91,7 +93,7 @@ const exact=(v:object,keys:string)=>Object.keys(v).sort().join(',')===keys;
 const sameRef=(a:ArtifactRef|undefined,b:ArtifactRef|undefined)=>canonicalJson(a??null)===canonicalJson(b??null);
 const sha256=(value:string|Uint8Array)=>createHash('sha256').update(value).digest('hex');
 export function validatePublicationConfig(input:PublicationConfig):Readonly<PublicationConfig> {
-  if(!input||!exact(input,`${Object.hasOwn(input,'acceptedCatalog')?'acceptedCatalog,':''}accountId,codeSha,compatibilityDate,database,environment,${Object.hasOwn(input,'homepage')?'homepage,':''}identityOrigin,indexName,${Object.hasOwn(input,'merchandising')?'merchandising,':''}prior,${Object.hasOwn(input,'publicAnalytics')?'publicAnalytics,':''}releaseId,schemaVersion,${Object.hasOwn(input,'semanticSearch')?'semanticSearch,':''}${Object.hasOwn(input,'servingPrior')?'servingPrior,':''}sourceMode,sourceRoot,workerName`)
+  if(!input||!exact(input,`${Object.hasOwn(input,'acceptedCatalog')?'acceptedCatalog,':''}accountId,codeSha,compatibilityDate,database,environment,${Object.hasOwn(input,'homepage')?'homepage,':''}identityOrigin,indexName,${Object.hasOwn(input,'merchandising')?'merchandising,':''}prior,${Object.hasOwn(input,'publicAnalytics')?'publicAnalytics,':''}releaseId,${Object.hasOwn(input,'runtimeCatalog')?'runtimeCatalog,':''}schemaVersion,${Object.hasOwn(input,'semanticSearch')?'semanticSearch,':''}${Object.hasOwn(input,'servingPrior')?'servingPrior,':''}sourceMode,sourceRoot,workerName`)
     ||input.schemaVersion!==1||!['staging','production'].includes(input.environment)||!/^[a-f0-9]{32}$/.test(input.accountId)
     ||!RESOURCE.test(input.workerName)||input.environment==='staging'&&!WORKERS_DEV_NAME.test(input.workerName)
     ||!RESOURCE.test(input.indexName)||!input.database||!exact(input.database,'id,name')
@@ -101,6 +103,10 @@ export function validatePublicationConfig(input:PublicationConfig):Readonly<Publ
     ||new Date(`${input.compatibilityDate}T00:00:00.000Z`).toISOString().slice(0,10)!==input.compatibilityDate)
     throw new Error('publication_configuration_invalid');
   if(Object.hasOwn(input,'homepage')&&!readHomepageEdition(input.homepage))throw new Error('publication_homepage_invalid');
+  if(input.runtimeCatalog&&(!exact(input.runtimeCatalog,'homepageRevision,previousDataSha256,previousReleaseId,schemaVersion')
+    ||input.runtimeCatalog.schemaVersion!==1||!KEY.test(input.runtimeCatalog.previousReleaseId)||!HASH.test(input.runtimeCatalog.previousDataSha256)
+    ||!Number.isSafeInteger(input.runtimeCatalog.homepageRevision)||input.runtimeCatalog.homepageRevision<0
+    ||input.runtimeCatalog.previousReleaseId!==input.prior?.releaseId||input.acceptedCatalog))throw Error('publication_runtime_invalid');
   if(Object.hasOwn(input,'merchandising')&&!readMerchandising(input.merchandising))throw new Error('publication_merchandising_invalid');
   const identity=siteIdentityFor(input.sourceMode); const origin=new URL(input.identityOrigin);
   if(origin.protocol!=='https:'||origin.origin!==input.identityOrigin||origin.username||origin.password

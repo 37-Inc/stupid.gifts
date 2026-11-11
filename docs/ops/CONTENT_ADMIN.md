@@ -1,32 +1,31 @@
-# Content admin API — private requests, not another publisher
+# Content admin API — private drafts and runtime collections
 
-This first slice of `roadmap-lbbz1.32` provides authenticated read/status and
-versioned **draft requests** in the existing site Worker and D1 database.
+`roadmap-lbbz1.32` provides authenticated read/status, versioned draft requests
+and immediate runtime collection application in the existing Worker/D1.
 There is no dashboard, new Worker/service, scheduler, GitHub API token or second
 ingestion path. Nothing is enabled by default. The existing `/admin` and
 `/api/admin` routes remain retired.
 
 ## Explicit boundary
 
-Every successful write returns HTTP202, `state: awaiting_application`,
+Admission, copy and visibility writes return HTTP202, `state: awaiting_application`,
 `publication: not_requested` and `applicationEnabled: false`. Saving an admission
-does **not** start a job or call Amazon/OpenAI. Editing text/visibility, ordering
-a collection, selecting an active show, and restoring a version save a request;
-they do **not** change the public site. GET distinguishes `published` data from
+does **not** start a job or call Amazon/OpenAI. Ordering a collection, selecting
+an active show, and restoring a version use the shared
+runtime collection service when enabled: HTTP200 and `application.state:applied`
+mean the actual version/head transaction committed, visible within five seconds
+without a Worker deploy. GET distinguishes `published` data from
 the latest `request`. Do not describe a saved draft as an accepted catalog or
 claim live job progress that this API has not observed.
 
-Runtime publication is still coupled to static HTML. The next part of `.16.2`
-must expose a shared product/collection publication service before these requests
-can be safely applied by the single coordinator without a full site build.
-This PR deliberately does not add a temporary auto-dispatch bridge, fake
-completion state or direct product-table writer that would need replacement.
-`.32` remains in progress until application/status reconciliation, private
-campaign actions, live authentication and runtime collection acceptance work.
+The [runtime catalog](RUNTIME_CATALOG.md) publishes data independently of app
+builds. No temporary GitHub auto-dispatch bridge or direct product-table writer
+is added. `.32` remains in progress for sole-coordinator admission/copy/visibility
+consumption, private campaign actions and verified live staff authentication.
 
-## Authentication and rollout — not performed by this PR
+## Authentication and rollout
 
-Before enabling, review/apply `migrations/d1/0018_content_admin_requests.sql`
+Before enabling, review/apply migrations0018/0019 through the runtime bootstrap
 against the intended database. Configure a path-scoped Cloudflare Access app
 for `stupid.gifts/api/content-admin/*` and a small staff allow policy. Keep the
 public website outside that policy. Confirm the Access app and staff identities
@@ -40,8 +39,8 @@ The reviewed serving package must explicitly retain these nonsecret bindings:
 - `CONTENT_ADMIN_AUD=<that application's 64-character audience>`
 - `CONTENT_ADMIN_STAFF_EMAILS=<comma-separated approved staff emails>`
 
-Missing/invalid configuration denies access. The current publisher does not yet
-carry these new settings, so deployment alone cannot activate this feature.
+Missing/invalid configuration denies access. The app publisher preserves the
+explicit existing nonsecret staff settings; deployment alone cannot invent them.
 Activation is a separate reviewed rollout, not a reason to edit a saved release.
 
 The Worker validates Access's signed RS256 JWT, fixed issuer/audience, expiry
@@ -65,10 +64,10 @@ All paths below are relative to `/api/content-admin`.
 | GET | `/requests` or `/requests/<id>` | Latest50 private requests or one exact request |
 | POST | `/admissions` | Save one exact-ASIN admission request, deduping all existing identities including holds |
 | GET / PUT | `/products/<publicId>` | Read published identity and draft factual title/description/listing intent |
-| GET / PUT | `/collections/homepage` | Read/draft the existing6-anchor/18-rotation homepage schema |
-| GET / PUT | `/collections/<name>` | Read/draft an ordered ID-only show collection, at most24 public products |
+| GET / PUT | `/collections/homepage` | Read/apply the existing6-anchor/18-rotation homepage schema |
+| GET / PUT | `/collections/<name>` | Read/apply an ordered ID-only show collection, at most24 public products |
 | POST | `/collections/<name>/restore` | Append an earlier saved payload as a new revision; retain all versions |
-| GET / PUT | `/active-show` | Read/draft a named show choice, without changing the live active show |
+| GET / PUT | `/active-show` | Read/apply a named saved show choice |
 | GET | `/campaigns` | Current compiled commission preference only; private manual actions remain explicitly unknown |
 
 Every write uses this envelope (example: PUT `/products/<publicId>`):

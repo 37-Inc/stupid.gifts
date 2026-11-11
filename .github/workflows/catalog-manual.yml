@@ -108,6 +108,7 @@ jobs:
       - name: Clean one due original workspace
         env:
           STUPID_GIFTS_OPERATOR_MODE: hosted
+          STUPID_GIFTS_CLOUDFLARE_API_TOKEN: ${{ secrets.STUPID_GIFTS_CLOUDFLARE_API_TOKEN }}
           STUPID_GIFTS_R2_ACCESS_KEY_ID: ${{ secrets.STUPID_GIFTS_R2_ACCESS_KEY_ID }}
           STUPID_GIFTS_R2_SECRET_ACCESS_KEY: ${{ secrets.STUPID_GIFTS_R2_SECRET_ACCESS_KEY }}
         run: |

@@ -37,6 +37,8 @@ import {siteIdentityFor} from '../static-site/lib/site-identity.ts';
 import {guides} from '../static-site/lib/guides.ts';
 import {codeOnlyAuthority} from '../scripts/catalog/code-only-operator.mjs';
 import safeCatalogPayload from '../static-site/public/safe/catalog.json' with {type:'json'};
+import {exportRuntimeCatalog} from '../scripts/catalog/export-runtime-catalog.ts';
+import {publishRuntimeCatalog,readAcceptedRuntimeHandoff} from '../scripts/catalog/publish-runtime-catalog.ts';
 
 async function fixture(t,{codeSha='8'.repeat(40),mixed=false}={}){
   const f=await permanentCatalogFixture(t,{count:32,afterExpiry:!mixed,merchant:mixed});
@@ -122,6 +124,55 @@ test('accepted published reader proves >20 identities without private source or 
   assert.equal(canonicalJson((await f.read()).revision.snapshot),canonicalJson(f.input.revision.snapshot));
   f.sql.prepare('UPDATE products SET title=? WHERE public_id=?').run(originalTitle,uuid(1));f.unchanged();
   await assert.rejects(f.read({...f.owner,epoch:f.owner.epoch+1}));
+});
+
+for(const loss of ['none','commit-ack','checkpoint-ack'])test('runtime data publication uses the original native proof and real receipt without any Worker activation: '+loss,async t=>{
+  const f=await fixture(t);await releaseMutationOwnership(f.db,f.owner);
+  for(const file of ['0018_content_admin_requests.sql','0019_runtime_catalog.sql'])f.sql.exec(await fs.readFile(new URL('../migrations/d1/'+file,import.meta.url),'utf8'));
+  const objects=new Map(),puts=[];
+  const store={async get(key){const bytes=objects.get(key);return bytes?{bytes:new Uint8Array(bytes),etag:'"fixture"'}:null;},async putImmutable(key,bytes){
+    const prior=objects.get(key);if(prior)assert.deepEqual(prior,bytes);else objects.set(key,new Uint8Array(bytes));puts.push(key);return{bytes,etag:'"fixture"'};}};
+  const assets=Object.fromEntries(f.input.revision.snapshot.products.flatMap(p=>[p,...(p.persistent?[p.persistent]:[])]).filter(p=>p.imageUrl.startsWith('/'))
+    .map(p=>[p.imageUrl,{sha256:'a'.repeat(64),contentType:'image/svg+xml',eligibleUntil:null}]));
+  const old=await exportRuntimeCatalog({snapshot:f.input.revision.snapshot,releaseId:f.seal.publication.releaseId,sourceCodeSha:f.authority.request.codeSha,assets,store,registerFinite:async()=>{}});
+  f.sql.prepare('INSERT INTO catalog_runtime_publications(release_id,catalog_revision,data_sha256,source_snapshot_sha256,public_snapshot_sha256,owner_json,created_at) VALUES(?,?,?,?,?,?,?)')
+    .run(f.seal.publication.releaseId,f.input.revision.snapshot.catalogRevision,old.dataSha256,f.seal.snapshotSha256,old.publicSnapshotSha256,'{}',f.now().toISOString());
+  f.sql.prepare('INSERT INTO catalog_runtime_head(singleton,release_id,version,enabled) VALUES(1,?,1,1)').run(f.seal.publication.releaseId);
+  const approval={schemaVersion:1,runId:'runtime-next',catalogRevision:'runtime-next',changes:[]},previous=f.input.revision.snapshot;
+  const request={scope,codeSha:'6'.repeat(40),previous,predecessor:f.seal,approval,approvalSha256:sha256(canonicalJson(approval)),
+    context:{envelopeSha256:sha256(JSON.stringify(createSealedSnapshotEnvelope(previous))+'\n'),snapshotSha256:f.seal.snapshotSha256,
+      projectionSha256:f.seal.projectionReceipt.projection_sha256,sourceExportSha256:f.seal.projectionReceipt.source_export_sha256,
+      vectorSyncWatermark:f.input.revision.vectorSyncWatermark,publicationReceiptWatermark:f.authority.publicationReceiptWatermark,
+      priorPublication:f.seal.publication,cutoff:new Date(f.now().getTime()+3600000).toISOString()}};
+  const claim=await claimMutationOwnership(f.db,scope,{phase:'freezing',ownerReference:'runtime-next',operationKey:approvedCohortOperationKey(request)});
+  const prepared=await prepareOwnedApprovedCohortPlan({db:f.db,owner:claim,request,adapters:f.adapters});
+  const queued=await settleOwnedApprovedCohortVectorProof({db:f.db,owner:prepared.owner,revision:prepared.revision,adapters:f.adapters});
+  const products=canonicalJson(f.sql.prepare('SELECT * FROM products ORDER BY id').all()),native=canonicalJson([...f.index]);
+  const summary={counts:{refresh:{attempted:0,updated:0}},timingsMs:{},usage:{},warnings:[]};
+  let cp={sha256:'0'.repeat(64),checkpoint:{phase:'publishing',owner:queued.owner,state:{requestId:queued.requestId},pins:{},phaseComplete:{sha256:'1'.repeat(64),reference:'summary'},control:{}}},crash=loss==='checkpoint-ack';
+  const workspace={async readCheckpoint(){return structuredClone(cp);},async readArtifact(){return summary;},async writeCheckpoint(expected,value){
+    assert.equal(expected,cp.sha256);if(crash&&value.control.runtimeCatalog.stage==='published'){crash=false;throw Error('synthetic checkpoint lost');}
+    cp={sha256:sha256(canonicalJson(value)),checkpoint:value};return structuredClone(cp);}};
+  let lost=loss==='commit-ack',commits=0;
+  const db={...f.db,prepare:f.db.prepare.bind(f.db),async batch(statements){const result=await f.db.batch(statements);
+    if(f.sql.prepare('SELECT 1 FROM catalog_runtime_publications WHERE release_id=?').get('runtime-next')){
+      commits++;if(lost){lost=false;throw Error('synthetic committed ACK loss');}}
+    return result;}};
+  const config={releaseId:'runtime-next',codeSha:request.codeSha,prior:{releaseId:f.seal.publication.releaseId},
+    runtimeCatalog:{schemaVersion:1,previousReleaseId:f.seal.publication.releaseId,previousDataSha256:old.dataSha256,homepageRevision:0}};
+  const input={db,owner:queued.owner,revision:prepared.revision,requestId:queued.requestId,runReference:'runtime-next',config,configSha256:'f'.repeat(64),workspace,store,now:f.now};
+  if(loss==='checkpoint-ack')await assert.rejects(publishRuntimeCatalog(input),/synthetic checkpoint/);
+  else{const result=await publishRuntimeCatalog(input);assert.equal(result.state,'published');}
+  assert.equal(commits,1,'Only the one data transaction commits');
+  const control=cp.checkpoint.control.runtimeCatalog,handoff=await readAcceptedRuntimeHandoff(db,store,control);
+  assert.equal(handoff.seal.publication.releaseId,'runtime-next');
+  const live=f.sql.prepare('SELECT * FROM catalog_runtime_head').get();assert.equal(live.release_id,'runtime-next');assert.equal(live.version,2);
+  const build=f.sql.prepare('SELECT * FROM catalog_build_requests WHERE request_id=?').get(queued.requestId);
+  assert.equal(build.state,'resolved');assert.equal(build.version_reference,null);assert.match(build.dispatch_reference,/^runtime:[a-f0-9]{64}$/);
+  const owner=f.sql.prepare('SELECT phase,external_pending FROM catalog_mutation_scopes').get();assert.equal(owner.phase,'idle');assert.equal(owner.external_pending,0);
+  assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM products ORDER BY id').all()),products);assert.equal(canonicalJson([...f.index]),native);
+  const seal=await createPublishedApprovedCatalogSeal(db,prepared.revision,handoff.seal.publication);assert.equal(canonicalJson(seal),canonicalJson(handoff.seal));
+  assert.ok(puts.every(key=>key.startsWith('public-')||key.startsWith('runtime-handoffs/')));
 });
 
 test('accepted published reader rejects actual public, native anchor and genuine receipt drift',async t=>{

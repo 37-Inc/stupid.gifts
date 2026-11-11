@@ -157,6 +157,8 @@ export async function codeOnlyMain(argv=process.argv.slice(2)){
       db.prepare('SELECT coalesce(max(rowid),0) n FROM publication_receipts'),db.prepare('SELECT * FROM publication_receipts WHERE release_id=?').bind(seal.publication.releaseId),
       db.prepare('SELECT phase,external_pending FROM catalog_mutation_scopes WHERE environment=? AND index_name=?').bind(SCOPE.environment,SCOPE.indexName),
       db.prepare("SELECT count(*) n FROM vector_sync_outbox WHERE status!='complete'"),db.prepare('SELECT release_id FROM publication_receipts ORDER BY rowid DESC LIMIT 1')]);
+    if((await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='catalog_runtime_head'").all()).results.length
+      &&(await db.prepare('SELECT 1 FROM catalog_runtime_head WHERE enabled=1').all()).results.length)refuse('runtime_app_workflow_required');
     if(rows[2].results.length!==1||sha256(canonicalJson(rows[2].results[0]))!==seal.publication.receiptSha256
       ||rows[3].results.length!==1||rows[3].results[0].phase!=='idle'||rows[3].results[0].external_pending!==0
       ||rows[4].results[0].n!==0||rows[5].results[0]?.release_id!==seal.publication.releaseId)refuse('catalog_or_owner_changed');
