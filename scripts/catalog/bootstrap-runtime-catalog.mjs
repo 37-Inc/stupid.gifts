@@ -23,6 +23,11 @@ import {SHOW_PRESETS,ACTIVE_SHOW_PRESET,selectShowPicks} from '../../static-site
 
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url))),hash=b=>createHash('sha256').update(b).digest('hex'),json=b=>JSON.parse(Buffer.from(b).toString('utf8'));
 const fail=code=>{throw Error('runtime_bootstrap_'+code);};
+export function bootstrapAttention(result){
+  return{state:'attention',step:'original_code_reconciliation',
+    errorCode:/^[a-z][a-z0-9_]{0,149}$/.test(result?.errorCode??'')?result.errorCode:'runtime_bootstrap_original_code_reconciliation_pending',
+    ...(typeof result?.phase==='string'&&/^[a-z_]{1,60}$/.test(result.phase)?{phase:result.phase}:{})};
+}
 export async function bootstrapRuntimeCatalog({runtime,source,root=ROOT,send=fetch,command=promisify(execFile)}){
   if(!runtime.hosted||!runtime.durable)fail('hosted_required');
   const pending=await runtime.durable.get('pointers/pending-run.json');
@@ -31,7 +36,7 @@ export async function bootstrapRuntimeCatalog({runtime,source,root=ROOT,send=fet
     if(hash(bytes)!==ref.sha256)fail('pending_identity_changed');
     const saved=json(bytes);if(saved.kind!=='code')fail('original_catalog_pending');
     const result=await coordinateHostedCatalog({mode:'code',source,day:hostedInvocationDay('code'),runtime});
-    if(result.state!=='accepted')fail('original_code_reconciliation_pending');
+    if(result.state!=='accepted'){console.error(JSON.stringify(bootstrapAttention(result)));fail('original_code_reconciliation_pending');}
   }
   await restoreHostedInputs(runtime.durable,runtime.base,await currentHostedInputs(runtime.durable));
   const pointerBytes=await runtime.state.readPointer('last-success',runtime.care+'/last-success.json'),pointer=json(pointerBytes),sealBytes=await runtime.state.bytes(pointer.control.path);
