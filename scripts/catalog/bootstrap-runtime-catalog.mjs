@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {execFile,execFileSync} from 'node:child_process';
 import {promisify} from 'node:util';
 import {fileURLToPath,pathToFileURL} from 'node:url';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {automationRuntime,CATALOG_SCOPE as SCOPE} from './automation-runtime.mjs';
 import {coordinateHostedCatalog,hostedInvocationDay} from './hosted-coordinator.mjs';
 import {currentHostedInputs,restoreHostedInputs} from './hosted-inputs.ts';
@@ -29,6 +29,17 @@ export function bootstrapAttention(result){
     ...(typeof result?.phase==='string'&&/^[a-z_]{1,60}$/.test(result.phase)?{phase:result.phase}:{}),
     ...(typeof result?.failureAt==='string'&&/^[a-z_]{1,60}_line_\d{1,5}$/.test(result.failureAt)?{failureAt:result.failureAt}:{})};
 }
+/** Append-only attempt telemetry; retries retain every prior known/unknown
+ * reservation. No aggregate quota, new publisher or catalog workspace. */
+export async function bootstrapAccounting(runtime,source){
+  if(!runtime.hosted||!runtime.durable||!/^[a-f0-9]{40}$/.test(source))fail('accounting_scope');
+  const attemptId=randomUUID(),prefix='runtime-bootstrap/'+source+'/d1-attempts/'+attemptId+'/',
+    scope={accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName},
+    put=(name,value)=>runtime.durable.putImmutable(prefix+name+'.json',Buffer.from(JSON.stringify(value)+'\n'));
+  await put('attempt',{schemaVersion:1,source,attemptId,scope,startedAt:new Date().toISOString()});
+  return{attemptId,accounting:{scope,initial:{httpRequests:0,sqlStatements:0,knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:0},
+    reserve:reservation=>put(reservation.id+'/reserved',reservation),settle:(id,result)=>put(id+'/settled',result)}};
+}
 export async function bootstrapRuntimeCatalog({runtime,source,root=ROOT,send=fetch,command=promisify(execFile)}){
   if(!runtime.hosted||!runtime.durable)fail('hosted_required');
   const pending=await runtime.durable.get('pointers/pending-run.json');
@@ -42,7 +53,7 @@ export async function bootstrapRuntimeCatalog({runtime,source,root=ROOT,send=fet
   await restoreHostedInputs(runtime.durable,runtime.base,await currentHostedInputs(runtime.durable));
   const pointerBytes=await runtime.state.readPointer('last-success',runtime.care+'/last-success.json'),pointer=json(pointerBytes),sealBytes=await runtime.state.bytes(pointer.control.path);
   if(hash(sealBytes)!==pointer.control.sha256)fail('accepted_control_changed');const seal=json(sealBytes);catalogSuccessorBytes(seal);
-  const token=await runtime.token(),db=await createCatalogD1Rest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,requestLimit:'observe',
+  const token=await runtime.token(),telemetry=await bootstrapAccounting(runtime,source),db=await createCatalogD1Rest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,requestLimit:'observe',accounting:telemetry.accounting,
     limits:{requests:600,statements:1500,reportedRowsRead:3000000,reportedRowsWritten:40000}});
   const planKey='runtime-bootstrap/'+source+'/plan.json',savedPlanObject=await runtime.durable.get(planKey),savedPlan=savedPlanObject?json(savedPlanObject.bytes):null;
   if(savedPlan&&(savedPlan.source!==source||savedPlan.pointerSha256!==hash(pointerBytes)||savedPlan.sealSha256!==hash(sealBytes)))fail('saved_plan_changed');
@@ -145,7 +156,7 @@ export async function bootstrapRuntimeCatalog({runtime,source,root=ROOT,send=fet
       baseCatalogRevision:data.snapshot.catalogRevision,expectedRevision:0,payload:seed.payload},new Date().toISOString());
     await applyRuntimeCollection(db,saved.request);
   }
-  return{state:'accepted',transport:'runtime-data',...deployed,catalogPublisher:'existing-github-coordinator',metrics:db.metrics()};
+  return{state:'accepted',transport:'runtime-data',...deployed,catalogPublisher:'existing-github-coordinator',d1AccountingAttemptId:telemetry.attemptId,attemptMetrics:db.metrics()};
 }
 async function main(){
   process.umask(0o077);const git=(...args)=>execFileSync('git',args,{cwd:ROOT,encoding:'utf8'}).trim();

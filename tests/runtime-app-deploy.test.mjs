@@ -5,7 +5,8 @@ import path from 'node:path';
 import {stop} from 'esbuild';
 import {deployRuntimeApp} from '../scripts/catalog/deploy-runtime-app.mjs';
 import {CATALOG_SCOPE as SCOPE} from '../scripts/catalog/automation-runtime.mjs';
-import {bootstrapAttention} from '../scripts/catalog/bootstrap-runtime-catalog.mjs';
+import {bootstrapAttention,bootstrapAccounting} from '../scripts/catalog/bootstrap-runtime-catalog.mjs';
+import {createCatalogD1Rest} from '../scripts/catalog/d1-write-rest.ts';
 after(stop);
 test('bootstrap preserves the exact safe coordinator error instead of hiding it, without logging raw provider output',()=>{
   assert.deepEqual(bootstrapAttention({errorCode:'publication_activation_pending',phase:'publishing',failureAt:'retention_line_16',stderr:'SECRET'}),
@@ -14,6 +15,23 @@ test('bootstrap preserves the exact safe coordinator error instead of hiding it,
     {state:'attention',step:'original_code_reconciliation',errorCode:'runtime_bootstrap_original_code_reconciliation_pending'});
 });
 const source='a'.repeat(40),old='00000000-0000-4000-8000-000000000001',next='00000000-0000-4000-8000-000000000002',deployment='00000000-0000-4000-8000-000000000003';
+test('bootstrap uses real advisory D1 accounting and retains unknown attempts across retries without logging SQL or credentials',async()=>{
+  const objects=new Map(),runtime={hosted:true,durable:{async putImmutable(key,bytes){
+    if(objects.has(key))assert.deepEqual(objects.get(key),bytes);else objects.set(key,bytes);}}};
+  const attempt=await bootstrapAccounting(runtime,source);let unavailable=false,calls=0;
+  const fetch=async(url,init)=>{calls++;assert.ok([...objects.keys()].some(k=>k.endsWith('/reserved.json')));
+    if(unavailable)throw Error('synthetic unavailable');
+    if(init.method==='GET')return Response.json({success:true,result:{uuid:SCOPE.databaseId,name:SCOPE.databaseName,read_replication:{mode:'disabled'}}});
+    return Response.json({success:true,result:JSON.parse(init.body).batch.map(()=>({success:true,results:[{catalog_d1_primary:1}],meta:{served_by_primary:true,rows_read:1,rows_written:0,changes:0}}))});};
+  const db=await createCatalogD1Rest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token:'SYNTHETIC_TOKEN',
+    requestLimit:'observe',accounting:attempt.accounting,fetch,limits:{requests:600,statements:1500,reportedRowsRead:3000000,reportedRowsWritten:40000}});
+  assert.equal(calls,2);unavailable=true;await assert.rejects(db.prepare('SELECT 1').all(),/catalog_d1_result_unknown/);
+  assert.ok([...objects].some(([k,v])=>k.endsWith('/settled.json')&&JSON.parse(v).status==='unknown'));
+  const prior=new Map(objects),retry=await bootstrapAccounting(runtime,source);assert.notEqual(retry.attemptId,attempt.attemptId);
+  for(const [k,v]of prior)assert.deepEqual(objects.get(k),v);
+  assert.ok(![...objects.values()].map(String).join('').includes('SYNTHETIC_TOKEN'));
+  assert.ok(![...objects.values()].map(String).join('').includes('SELECT'));
+});
 function fixture({lostActivation=false,lostUpload=false}={}){
   const objects=new Map(),writes=[],state={version:old,marker:null,uploads:0,activations:0},bindings=[{name:'DB',type:'d1',id:SCOPE.databaseId},
     {name:'ASSETS',type:'assets'},{name:'VECTORIZE',type:'vectorize',index_name:SCOPE.indexName},{name:'SEMANTIC_VECTORIZE',type:'vectorize',index_name:'actual-existing-search'},
