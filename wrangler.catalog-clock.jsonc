@@ -8,6 +8,6 @@
   "preview_urls": false,
   "upload_source_maps": false,
   "observability": { "enabled": true },
-  "vars": { "CLOCK_ENABLED": "false" },
-  "triggers": { "crons": [] }
+  "vars": { "CLOCK_ENABLED": "true" },
+  "triggers": { "crons": ["30 3,4,5,6,15,16,17,18 * * *"] }
 }

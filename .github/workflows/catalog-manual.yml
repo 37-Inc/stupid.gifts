@@ -1,17 +1,9 @@
 name: Stupid Gifts — Catalog care
+run-name: Stupid Gifts — ${{ inputs.mode || 'shadow' }} ${{ inputs.scheduled_at || '' }}
 
 on:
-  schedule:
-    - cron: '30 8 * * *'
-      timezone: America/Los_Angeles
-    - cron: '30 20 * * *'
-      timezone: America/Los_Angeles
-    # Same coordinator/run key: resume pending work or recover a missed morning.
-    - cron: '30 10 * * *'
-      timezone: America/Los_Angeles
-    # Same evening photo identity, not a second supplier batch.
-    - cron: '30 22 * * *'
-      timezone: America/Los_Angeles
+  # The scoped Cloudflare clock dispatches this SAME serialized coordinator.
+  # No GitHub cron: there must be one scheduling clock and one catalog writer.
   workflow_dispatch:
     inputs:
       mode:
@@ -70,8 +62,7 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
       - name: Resume the original pending run or perform the explicitly chosen operation
         env:
-          CATALOG_MODE: ${{ inputs.mode || ((github.event.schedule == '30 20 * * *' || github.event.schedule == '30 22 * * *') && 'photos' || 'full') }}
-          CATALOG_SCHEDULE: ${{ github.event.schedule || '' }}
+          CATALOG_MODE: ${{ inputs.mode }}
           CATALOG_SCHEDULED_AT: ${{ inputs.scheduled_at || '' }}
           CATALOG_CANARY_ASIN: ${{ inputs.canary_asin }}
           CATALOG_ADMIT_ASINS: ${{ inputs.admit_asins }}
@@ -93,7 +84,7 @@ jobs:
     needs: catalog
     if: >-
       github.ref == 'refs/heads/main' && needs.catalog.result == 'success' &&
-      (github.event_name == 'schedule' || inputs.mode == 'code' || inputs.mode == 'full' ||
+      (inputs.mode == 'code' || inputs.mode == 'full' ||
        inputs.mode == 'photos' || inputs.mode == 'canary' || inputs.mode == 'admit')
     runs-on: ubuntu-24.04
     environment: Production

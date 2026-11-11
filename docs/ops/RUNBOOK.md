@@ -10,8 +10,13 @@ site with an old checkout or modify a source while its run is active.
 
 ## Current mode
 
-The single GitHub catalog workflow owns 08:30 Pacific full care, 20:30 due-photo
-care, a 10:30 morning catch-up and a 22:30 evening catch-up using the same respective run identities. Photo-only keys use the evening slot's UTC date so a late overnight dispatch cannot reserve the following evening; full care retains Pacific dates. Saved pending records always keep their original day/source/config. The old
+The Cloudflare `stupid-gifts-catalog-clock` dispatches the single GitHub catalog
+workflow at 08:30 Pacific full care, 20:30 due-photo care, a 10:30 morning catch-up
+and a 22:30 evening catch-up using the same respective run identities. GitHub's
+cron triggers are removed. Each dispatch carries the original due timestamp, so
+runner/queue delay cannot change its day. Photo-only keys use the evening slot's
+UTC date; full care retains Pacific dates. Saved pending records always keep
+their original day/source/config. The old
 `goose-gifts-daily-ops` Codex writing timer remains paused after cutover. Never
 enable both. The explicitly activated private automation policy enables scaled
 due-work, daily visual admission and API homepage editing; absence/disablement
@@ -34,8 +39,9 @@ for shadow, canary, explicit activation and single-writer recovery, and
   owner and inventory digest match. Any source write forces another scan; an
   absent migration keeps the original full-scan behavior. Accounting remains
   durable and unchanged; fewer requests mean fewer accounting round trips.
-- The separate `stupid-gifts-catalog-clock` Worker is initially **disabled** with
-  no cron. Its only secret can dispatch Actions on `37-Inc/stupid.gifts` (plus
+- The separate `stupid-gifts-catalog-clock` Worker is staged disabled and deployed
+  with its reviewed cron only **after this workflow change is merged**. Its only
+  secret can dispatch Actions on `37-Inc/stupid.gifts` (plus
   GitHub's mandatory Metadata read); it has no catalog/provider/storage binding
   and no public trigger. Token expiry: **2027-02-09**. Renew before that date.
   At cutover, disable GitHub cron before enabling Cloudflare's UTC/DST-filtered

@@ -427,7 +427,7 @@ async function main(){
   const runtime=automationRuntime(),source=process.env.GITHUB_SHA;
   if((await exec('git',['rev-parse','HEAD'],{cwd:ROOT,env:hostedCommandEnvironment(process.env,{credentials:false})})).stdout.trim()!==source)fail('reviewed_source');
   const now=new Date(),scheduledAt=catalogScheduledTime(mode,process.env.CATALOG_SCHEDULED_AT),capturedDay=hostedInvocationDay(mode,scheduledAt??now);
-  console.log(JSON.stringify({state:'started',mode,scheduledEvent:process.env.CATALOG_SCHEDULE||null,
+  console.log(JSON.stringify({state:'started',mode,scheduledEvent:scheduledAt?'cloudflare':null,
     scheduledAt:scheduledAt?.toISOString()??null,startDelayMs:scheduledAt?now.getTime()-scheduledAt.getTime():null,runDay:capturedDay,startedAt:now.toISOString()}));
   if(mode==='cleanup'){
     if(canaryId||admissionList||savedRun)fail('invocation');
