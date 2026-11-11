@@ -26,7 +26,8 @@ const fail=code=>{throw Error('runtime_bootstrap_'+code);};
 export function bootstrapAttention(result){
   return{state:'attention',step:'original_code_reconciliation',
     errorCode:/^[a-z][a-z0-9_]{0,149}$/.test(result?.errorCode??'')?result.errorCode:'runtime_bootstrap_original_code_reconciliation_pending',
-    ...(typeof result?.phase==='string'&&/^[a-z_]{1,60}$/.test(result.phase)?{phase:result.phase}:{})};
+    ...(typeof result?.phase==='string'&&/^[a-z_]{1,60}$/.test(result.phase)?{phase:result.phase}:{}),
+    ...(typeof result?.failureAt==='string'&&/^[a-z_]{1,60}_line_\d{1,5}$/.test(result.failureAt)?{failureAt:result.failureAt}:{})};
 }
 export async function bootstrapRuntimeCatalog({runtime,source,root=ROOT,send=fetch,command=promisify(execFile)}){
   if(!runtime.hosted||!runtime.durable)fail('hosted_required');

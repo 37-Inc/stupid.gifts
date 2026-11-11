@@ -168,7 +168,7 @@ export type { PublicationControl } from './run-workspace.ts';
 export interface PublicationCommand { file:string;args:string[];cwd:string;env:NodeJS.ProcessEnv;timeoutMs:number }
 // A separate READ-only sender never receives upload/activation dispatches.
 type Dependencies={fetch?:typeof fetch;observationFetch?:typeof fetch;command?:(command:PublicationCommand)=>Promise<void>;now?:()=>Date};
-export type PublicationResult={state:'pending';owner:MutationOwner;errorCode:string;phase?:string}|{
+export type PublicationResult={state:'pending';owner:MutationOwner;errorCode:string;phase?:string;failureAt?:string}|{
   state:'published';owner:null;releaseId:string;receiptSha256:string;receipt:Record<string,unknown>;
 };
 /** A trusted operator's actual retained bridge ledger/log + one independently
@@ -930,7 +930,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
                 throw Error('serving_observation_fenced');
               if(control!.stage!=='activating')await save({stage:'activating'});
             }else await save({stage:'activating'},owner,{publicationObservedActivation:await workspace.putArtifact(proof,{kind:'publication',observedAt:observation.observedAt})});
-          },now());
+          },now(),{observationTimeoutMs:isAccountedPublicationFetch(observationSend)&&isCatalogD1Rest(db)?120_000:30_000});
         await save({stage:'activating',permit:reconciled.permit,deploymentId:reconciled.observation.deploymentId},reconciled.permit.mutationOwner);
       }
     }
@@ -1025,7 +1025,7 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
         nativeObservationOwner={...owner};
       }
       let observation:Promise<DeploymentObservation>|undefined;
-      try{if(await resolveBuildActivation(db,control.permit,signal=>(observation=observed(signal)),{observationTimeoutMs:30_000,
+      try{if(await resolveBuildActivation(db,control.permit,signal=>(observation=observed(signal)),{observationTimeoutMs:serving&&isAccountedPublicationFetch(observationSend)&&isCatalogD1Rest(db)?120_000:30_000,
         ...(serving?{acceptedCatalog:serving.authority}:{})})!=='resolved')
         throw new Error('publication_activation_pending');}
       finally{if(observation){
@@ -1226,8 +1226,11 @@ export async function executePublication(options:{db:CatalogD1&{providerIdentity
       'Invalid homepage edition':'publication_saved_homepage_invalid',
       'Invalid merchandising signals':'publication_saved_merchandising_invalid',
     };
-    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|run_workspace_|build_|cohort_|vector_|accepted_code_only_|accepted_catalog_|serving_publication_|serving_observation_)[a-z_]+$/.test(error.message)?error.message
+    const code=error instanceof Error&&/^(?:publication_|catalog_d1_|catalog_object_store_|catalog_operator_state_|deployment_observation_|run_workspace_|build_|cohort_|vector_|accepted_code_only_|accepted_catalog_|serving_publication_|serving_observation_)[a-z_]+$/.test(error.message)?error.message
       :error instanceof Error&&known[error.message]||'publication_pending';
-    return{state:'pending',owner,errorCode:code,phase:control?.stage??'preflight'};
+    // Unknown errors expose only a repository source location, never the raw
+    // message, stack, provider payload, SQL values or credential-bearing paths.
+    const source=code==='publication_pending'&&error instanceof Error?error.stack?.match(/\/(?:scripts|lib)\/[a-zA-Z0-9_./-]*\/([a-zA-Z0-9_-]+)\.(?:ts|mts|mjs):(\d+):\d+/):null;
+    return{state:'pending',owner,errorCode:code,phase:control?.stage??'preflight',...(source?{failureAt:`${source[1].replaceAll('-','_')}_line_${source[2]}`}:{})};
   }
 }
