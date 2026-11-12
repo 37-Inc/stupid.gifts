@@ -245,3 +245,32 @@ test('homepage prioritizes only its first three photos in server HTML', async t 
   assert.equal(images.filter(tag=>tag.includes('fetchPriority="high"')).length,3);
   assert.ok(images.slice(3).every(tag=>tag.includes('loading="lazy"')));
 });
+
+
+test('versioned photo cache avoids catalog reads, is bounded by original expiry, and ignores non-photo routes',async t=>{
+  const old=globalThis.caches,stored=new Map();let matches=0,puts=0;
+  globalThis.caches={default:{async match(request){matches++;return stored.get(request.url)?.clone();},async put(request,response){puts++;stored.set(request.url,response.clone());}}};
+  t.after(()=>{globalThis.caches=old;});
+  const f=await runtimeFixture(t),base=f.products[0],expiresAt=new Date(f.time.now+10000).toISOString();
+  const overlay={...base,imageUrl:'https://m.media-amazon.com/images/I/OFFLINE-CACHED.jpg',eligibleUntil:expiresAt,persistent:base};
+  const bytes=new TextEncoder().encode(JSON.stringify([overlay])+'\n'),sha256=await runtimeDigest(bytes);
+  f.data.overlays=[{sha256,expiresAt}];f.objects.set(`catalog-v1/public-overlays/${Date.parse(expiresAt)}/${sha256}.json`,bytes);await f.publish();
+  const html=await(await f.request('/gifts/'+base.slug)).text(),props=JSON.parse(html.match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);
+  assert.equal(matches,0);
+  await f.request(props.photoIndex);assert.equal(matches,0);
+  const shard=props.photoIndex.replace('photos.json','photos-'+props.initialPhotoIndex.products[base.id].shard+'.json');
+  const first=await f.request(shard);assert.equal(first.headers.get('X-Photo-Cache'),'MISS');assert.equal(puts,1);
+  assert.ok(Number(first.headers.get('X-Photo-Cache-Until'))<=Date.parse(expiresAt));
+  const original=f.env.DB.prepare;f.env.DB.prepare=()=>{throw Error('Cache hit must not read catalog');};
+  const hit=await f.request(shard);assert.equal(hit.status,200);assert.equal(hit.headers.get('X-Photo-Cache'),'HIT');
+  assert.deepEqual(await hit.json(),await first.json());assert.equal(puts,1);
+  f.env.DB.prepare=original;
+  f.env.RUNTIME_CATALOG_ENABLED='false';
+  assert.equal((await f.request(shard)).status,503,'Disabling the runtime cannot serve a cached photo');
+  f.env.RUNTIME_CATALOG_ENABLED='true';
+  f.time.now=Date.parse(expiresAt)+1;
+  // Deliberately keep the entry in this fake cache: the Worker must reject it too.
+  assert.notEqual((await f.request(shard)).status,200);assert.equal(puts,1);
+  const count=matches;await f.request(shard+'?ignored=1');await f.request(shard,{method:'HEAD'});
+  assert.equal(matches,count);
+});

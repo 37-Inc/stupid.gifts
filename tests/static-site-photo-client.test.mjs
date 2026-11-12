@@ -54,7 +54,7 @@ function client(serve = async (_path, body) => body, json = true, initialIndex) 
     fetch: async (path, options) => {
       calls.push(path);
       assert.match(path, /^\/catalog\/[a-f0-9]{64}\/photos(?:-[1-9][0-9]*)?\.json$/);
-      assert.equal(options.credentials, 'omit'); assert.equal(options.cache, 'no-store');
+      assert.equal(options.credentials, 'omit'); assert.equal(options.cache, path.endsWith('/photos.json') ? 'no-store' : 'default');
       assert.equal(options.referrerPolicy, 'no-referrer'); assert.ok(options.signal instanceof AbortSignal);
       return { ok: true, headers: { get: () => json ? 'application/json' : 'text/html' },
         text: async () => { const body = await serve(path, structuredClone(path.endsWith('/photos.json') ? index : shard));

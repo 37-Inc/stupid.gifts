@@ -17,7 +17,7 @@ async function read(path: string, validate: (value: unknown) => unknown): Promis
   const request = (async () => {
     const abort = new AbortController(), timer = window.setTimeout(() => abort.abort(), 10000);
     try {
-      const response = await fetch(path, { signal: abort.signal, credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer" });
+      const response = await fetch(path, { signal: abort.signal, credentials: "omit", cache: path.endsWith("/photos.json") ? "no-store" : "default", referrerPolicy: "no-referrer" });
       if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) throw new Error("Unavailable");
       const text = await response.text();
       if (new TextEncoder().encode(text).byteLength > 512 * 1024) throw new Error("Unavailable");

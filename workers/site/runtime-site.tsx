@@ -29,6 +29,15 @@ export interface RuntimeSiteOptions {
   handleRequest?:(request:Request,env:RuntimeSiteEnv,view:RuntimeCatalogView)=>Promise<Response|undefined>;
 }
 const ORIGIN='https://stupid.gifts';
+const PHOTO_CACHE_TTL=300;
+const PHOTO_PATH=/^\/catalog\/[a-f0-9]{64}\/photos-[1-9][0-9]*\.json$/;
+function photoResponse(response:Response,until:number,at:number,state:'HIT'|'MISS'){
+  const headers=new Headers(response.headers),seconds=Math.max(0,Math.floor((until-at)/1000));
+  headers.set('Cache-Control',`public, max-age=${seconds}, must-revalidate`);
+  headers.set('X-Photo-Cache-Until',String(until));headers.set('X-Photo-Cache',state);
+  headers.set('Date',new Date(at).toUTCString());headers.delete('Age');
+  return new Response(response.body,{status:response.status,headers});
+}
 const safeJson=(value:unknown)=>JSON.stringify(value).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
 const escape=(value:string)=>value.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 const json=(value:unknown,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'no-store'}});
@@ -178,6 +187,10 @@ export function createRuntimeSite(options:RuntimeSiteOptions){
   return{async fetch(request:Request,env:RuntimeSiteEnv):Promise<Response>{
     const url=new URL(request.url),path=url.pathname;
     let catalogRevision:string|undefined;
+    // Versioned public photo shards only. Keep HTML, admin, search and index reads current.
+    const photoCache=env.ENVIRONMENT==='production'&&env.RUNTIME_CATALOG_ENABLED==='true'&&url.origin===ORIGIN&&!url.search&&request.method==='GET'&&PHOTO_PATH.test(path)
+      ?(globalThis.caches as CacheStorage&{default?:Cache}|undefined)?.default:undefined;
+    const photoKey=new Request(ORIGIN+path+'?photo-app='+options.codeSha);
     const finish=(response:Response)=>{const headers=new Headers(response.headers);headers.set('X-Content-Type-Options','nosniff');headers.set('Referrer-Policy','strict-origin-when-cross-origin');
       if(catalogRevision)headers.set('X-Catalog-Revision',catalogRevision);
       if(env.ENVIRONMENT!=='production'){headers.set('X-Robots-Tag','noindex, nofollow');headers.set('Cache-Control','private, no-store');}
@@ -195,6 +208,11 @@ export function createRuntimeSite(options:RuntimeSiteOptions){
         if(!appAssets.has(path))return finish(json({error:'Not found'},404));
         return finish(await env.ASSETS.fetch(request));
       }
+      if(PHOTO_PATH.test(path)&&env.RUNTIME_CATALOG_ENABLED!=='true')return finish(json({error:'Catalog unavailable'},503));
+      if(photoCache)try{
+        const hit=await photoCache.match(photoKey),until=Number(hit?.headers.get('X-Photo-Cache-Until'));
+        if(hit?.status===200&&Number.isFinite(until)&&until>now())return finish(photoResponse(hit,until,now(),'HIT'));
+      }catch{/* A cache outage must not interrupt the normal validated read. */}
       const view=await read(env);catalogRevision=view.head.catalogRevision;
       if(options.handleRequest){const result=await options.handleRequest(request,env,view);if(result)return finish(result);}
       if(path==='/.well-known/catalog-release.json'||path==='/.well-known/runtime-catalog.json'){
@@ -227,7 +245,16 @@ export function createRuntimeSite(options:RuntimeSiteOptions){
         }).map(product=>'/gifts/'+product.slug)];
         return finish(new Response('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+paths.map(path=>'<url><loc>'+escape(ORIGIN+path)+'</loc></url>').join('')+'</urlset>',{headers:{'Content-Type':'application/xml; charset=utf-8','Cache-Control':'no-store'}}));
       }
-      const virtual=p.virtual.get(path);if(virtual)return finish(virtual.deadline>now()?json(virtual.value):json({error:'Catalog data expired'},410));
+      const virtual=p.virtual.get(path);if(virtual){
+        if(!(virtual.deadline>now()))return finish(json({error:'Catalog data expired'},410));
+        if(photoCache&&Number.isFinite(virtual.deadline)){
+          const until=Math.min(virtual.deadline,now()+PHOTO_CACHE_TTL*1000);
+          const response=finish(photoResponse(json(virtual.value),until,now(),'MISS'));
+          try{await photoCache.put(photoKey,response.clone());}catch{/* Serving does not depend on cache storage. */}
+          return until>now()?finish(photoResponse(response,until,now(),'MISS')):finish(json({error:'Catalog data expired'},410));
+        }
+        return finish(json(virtual.value));
+      }
       if(path.startsWith('/catalog/')||path.startsWith('/images/')||path.startsWith('/og/')||path.startsWith('/safe/')||path.startsWith('/data/'))return finish(json({error:'Not found'},404));
       const value=page(path,view,p,options,now),canonical=ORIGIN+path;
       value.props.analytics=options.analytics===true&&env.ENVIRONMENT==='production';
