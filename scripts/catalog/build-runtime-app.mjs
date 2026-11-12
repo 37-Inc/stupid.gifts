@@ -48,7 +48,7 @@ export async function buildRuntimeApp({root=ROOT,outdir=path.join(root,'build/ru
   const clientBytes=client.outputFiles[0].contents,clientPath='/app/client-'+hash(clientBytes).slice(0,20)+'.js';
   await fs.writeFile(path.join(assetsDirectory,clientPath),clientBytes);
   const css=await postcss([tailwind({content:[path.join(root,'static-site/components/**/*.{ts,tsx}'),path.join(root,'static-site/runtime/**/*.{ts,tsx}'),path.join(root,'components/ProductImage.tsx')],theme:{extend:{}},plugins:[]}),autoprefixer()])
-    .process(await fs.readFile(path.join(root,'static-site/app/styles.css'),'utf8'),{from:path.join(root,'static-site/app/styles.css'),map:false});
+    .process((await fs.readFile(path.join(root,'static-site/app/styles.css'),'utf8'))+'\n'+(await fs.readFile(path.join(root,'components/ProductImage.css'),'utf8')),{from:path.join(root,'static-site/app/styles.css'),map:false});
   const cssPath='/app/site-'+hash(css.css).slice(0,20)+'.css';await fs.writeFile(path.join(assetsDirectory,cssPath),css.css);
   const {renderOgPng}=await import('../../static-site/lib/og-image.ts');
   const brand=await renderOgPng({schemaVersion:1,styleVersion:1,identity:{name:'Stupid Gifts',origin:'https://stupid.gifts',tagline:'Very bad ideas. Carefully considered.'},

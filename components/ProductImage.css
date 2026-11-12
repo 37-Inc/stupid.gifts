@@ -1,0 +1,51 @@
+.product-image-frame {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+}
+
+.product-image-feedback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.product-image-spinner {
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid #e5e5e5;
+  border-top-color: #8a8a8a;
+  border-radius: 50%;
+  animation: product-image-spin 0.9s linear infinite;
+}
+
+.product-image-unavailable {
+  color: #757575;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+.product-image-frame .product-image-image {
+  transition: transform 0.4s ease;
+}
+
+.product-image-frame .product-image-loaded {
+  animation: product-image-reveal 180ms ease;
+}
+
+@keyframes product-image-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes product-image-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .product-image-spinner { animation: none; }
+  .product-image-frame .product-image-image { transition: none; animation: none; }
+}

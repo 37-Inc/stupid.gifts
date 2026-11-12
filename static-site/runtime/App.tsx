@@ -1,4 +1,5 @@
 import type {PublicCatalogProduct} from '../../lib/catalog/types.ts';
+import type {PhotoIndex} from '../lib/photo-shard.ts';
 import type {CatalogCard} from '../lib/card-shard.ts';
 import type {GiftGuideDefinition} from '../../lib/gift-guide-definitions.ts';
 import {privacyPolicySections,privacyPolicyIntro,privacyPolicyUpdated} from '../../lib/privacy-policy.ts';
@@ -22,7 +23,7 @@ export interface RuntimePageProps {
   catalogRevision:string;version:string;next:string|null;poolSize:number;
   action:string;showPreviews?:boolean;guide?:GiftGuideDefinition;guides:Array<Pick<GiftGuideDefinition,'slug'|'title'|'intro'>>;
   analytics:boolean;disclosures:Record<string,string>;
-  photoIndex:string|null;photoSlots:string[];eligibleUntil:string|null;
+  photoIndex:string|null;photoSlots:string[];initialPhotoIndex?:PhotoIndex;eligibleUntil:string|null;
 }
 function Chrome({children,analytics}:{children:React.ReactNode;analytics:boolean}){
   return <>{analytics&&<StaticAnalytics/>}<a className="skip-link" href="#main">Skip to content</a>
@@ -81,7 +82,7 @@ export function RuntimeApp(props:RuntimePageProps){
   else if(props.kind==='howie')content=<div className="page-heading"><p className="eyebrow">From the show</p><h1>Nothing to announce. Yet.</h1>
     <p>No episode selection has been published. When there is a confirmed selection, you’ll find the exact products here.</p><a className="button" href="/">Browse gifts</a></div>;
   else content=<div className="page-heading"><h1>{props.kind==='held'?'Gift currently unavailable.':'That gift wandered off.'}</h1><p>{props.kind==='held'?'This gift is not currently available in the curated catalog.':'We couldn’t find that page.'}</p><a className="button" href="/">Browse all gifts</a></div>;
-  return <Chrome analytics={props.analytics}><CatalogPhotos indexPath={props.photoIndex} photoSlots={props.photoSlots} editorialDisclosures={props.disclosures}>
+  return <Chrome analytics={props.analytics}><CatalogPhotos indexPath={props.photoIndex} photoSlots={props.photoSlots} initialIndex={props.initialPhotoIndex} editorialDisclosures={props.disclosures}>
     <Expiry until={props.eligibleUntil}><main id="main" className={`site-main${props.kind==='guide'?' guide-detail':''}`}>{content}</main></Expiry></CatalogPhotos></Chrome>;
 }
 function Expiry({until,children}:{until:string|null;children:React.ReactNode}){

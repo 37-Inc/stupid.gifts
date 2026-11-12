@@ -163,6 +163,12 @@ test('finite photos retain exact deadlines, never enter evergreen SSR, and disap
   const html=await (await f.request('/')).text();assert.doesNotMatch(html,/OFFLINE-NOT-FETCHED/);
   const props=JSON.parse(html.match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);assert.ok(props.photoIndex);
   const index=await (await f.request(props.photoIndex)).json(),entry=index.products[base.id];assert.equal(entry.eligibleUntil,expiresAt);
+  const detail=await (await f.request('/gifts/'+base.slug)).text();
+  const detailProps=JSON.parse(detail.match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);
+  assert.deepEqual(detailProps.initialPhotoIndex.products[base.id],entry);
+  assert.equal(detailProps.initialPhotoIndex.version,index.version);
+  assert.ok(Object.keys(detailProps.initialPhotoIndex.products).length<=24);
+  assert.doesNotMatch(JSON.stringify(detailProps.initialPhotoIndex),/https:|imageUrl|OFFLINE-NOT-FETCHED/);
   const shardPath=props.photoIndex.replace('photos.json','photos-'+entry.shard+'.json'),photo=await (await f.request(shardPath)).json();
   assert.equal(photo.images[base.id].imageUrl,overlay.imageUrl);assert.equal(photo.eligibleUntil,expiresAt);
   f.time.now=Date.parse(expiresAt)+1;
@@ -225,4 +231,17 @@ test('runtime failures log only bounded machine codes, never bucket errors, SQL,
     assert.deepEqual(JSON.parse(logs[1]),{state:'runtime_site_error',errorCode:'runtime_catalog_unavailable'});
     assert.doesNotMatch(logs.join(''),/PRIVATE|secret|token|SELECT/);
   }finally{console.error=previous;}
+});
+
+
+test('homepage prioritizes only its first three photos in server HTML', async t => {
+  const f=await runtimeFixture(t);
+  for(const p of f.data.snapshot.products)p.imageUrl='https://m.media-amazon.com/images/I/OFFLINE-NOT-FETCHED.jpg';
+  await f.publish();
+  const html=await(await f.request('/')).text();
+  const images=[...html.matchAll(/<img[^>]+>/g)].map(m=>m[0]);
+  assert.equal(images.length,24);
+  assert.equal(images.filter(tag=>tag.includes('loading="eager"')).length,3);
+  assert.equal(images.filter(tag=>tag.includes('fetchPriority="high"')).length,3);
+  assert.ok(images.slice(3).every(tag=>tag.includes('loading="lazy"')));
 });

@@ -3,9 +3,10 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { ProductImage } from "@/components/ProductImage";
 import { PHOTO_PLACEHOLDER, photoVersion, validatePhotoIndex, validatePhotoShard } from "../lib/photo-shard";
+import type { PhotoIndex } from "../lib/photo-shard";
 import { Icon } from "./Icon";
 
-const PhotoContext = createContext<{ indexPath: string | null; photoSlots: readonly string[];
+const PhotoContext = createContext<{ indexPath: string | null; photoSlots: readonly string[]; initialIndex?: PhotoIndex;
   editorialDisclosures: Readonly<Record<string, string>>;
 }>({ indexPath: null, photoSlots: [], editorialDisclosures: {} });
 const pending = new Map<string, Promise<unknown>>();
@@ -35,11 +36,11 @@ async function read(path: string, validate: (value: unknown) => unknown): Promis
   return request;
 }
 
-export function CatalogPhotos({ indexPath, photoSlots = [], editorialDisclosures = {}, children }: {
-  indexPath: string | null; photoSlots?: readonly string[]; editorialDisclosures?: Readonly<Record<string, string>>;
+export function CatalogPhotos({ indexPath, photoSlots = [], initialIndex, editorialDisclosures = {}, children }: {
+  indexPath: string | null; photoSlots?: readonly string[]; initialIndex?: PhotoIndex; editorialDisclosures?: Readonly<Record<string, string>>;
   children: React.ReactNode;
 }) {
-  return <PhotoContext.Provider value={{ indexPath, photoSlots, editorialDisclosures }}>{children}</PhotoContext.Provider>;
+  return <PhotoContext.Provider value={{ indexPath, photoSlots, initialIndex, editorialDisclosures }}>{children}</PhotoContext.Provider>;
 }
 
 export function CatalogDescription({ fallback, card = false }: {
@@ -68,17 +69,22 @@ export function CatalogCardArt({ href, label, illustrative = false, ...props }: 
 }
 
 export function CatalogImage({ id, ...props }: React.ComponentProps<typeof ProductImage> & { id: string }) {
-  const { indexPath } = useContext(PhotoContext);
-  return <PhotoImage key={`${id}:${indexPath}:${props.imageUrl}`} id={id} indexPath={indexPath} {...props} />;
+  const { indexPath, initialIndex } = useContext(PhotoContext);
+  return <PhotoImage key={`${id}:${indexPath}:${props.imageUrl}`} id={id} indexPath={indexPath} initialIndex={initialIndex} {...props} />;
 }
-function PhotoImage({ id, indexPath, ...props }: React.ComponentProps<typeof ProductImage> & { id: string; indexPath: string | null }) {
+function PhotoImage({ id, indexPath, initialIndex, ...props }: React.ComponentProps<typeof ProductImage> & { id: string; indexPath: string | null; initialIndex?: PhotoIndex }) {
   const [photo, setPhoto] = useState<{ imageUrl: string; eligibleUntil: string } | null>(null);
+  const [loading, setLoading] = useState(Boolean(indexPath && props.imageUrl === PHOTO_PLACEHOLDER));
   useEffect(() => {
     let cancelled = false;
     if (!indexPath || props.imageUrl !== PHOTO_PLACEHOLDER) return;
     void (async () => {
       try {
-        const version = photoVersion(indexPath), index = validatePhotoIndex(await read(indexPath, value => validatePhotoIndex(value, version)), version);
+        const version = photoVersion(indexPath);
+        // The server supplies URL-free hints for the first visible products.
+        // Later browse/search results retain the versioned index fallback.
+        const index = validatePhotoIndex(initialIndex && Object.hasOwn(initialIndex.products, id)
+          ? initialIndex : await read(indexPath, value => validatePhotoIndex(value, version)), version);
         const entry = Object.hasOwn(index.products, id) ? index.products[id] : undefined;
         if (!entry || Date.parse(entry.eligibleUntil) <= Date.now()) return;
         const shard = validatePhotoShard(await read(`/catalog/${version}/photos-${entry.shard}.json`,
@@ -87,9 +93,10 @@ function PhotoImage({ id, indexPath, ...props }: React.ComponentProps<typeof Pro
         if (!image || shard.eligibleUntil !== entry.eligibleUntil) return;
         if (!cancelled) setPhoto({ imageUrl: image.imageUrl, eligibleUntil: shard.eligibleUntil });
       } catch { /* The independently cleared listing remains usable without a photo. */ }
+      finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [id, indexPath, props.imageUrl]);
+  }, [id, indexPath, initialIndex, props.imageUrl]);
   useEffect(() => {
     if (!photo) return;
     const expire = () => { if (Date.parse(photo.eligibleUntil) <= Date.now()) setPhoto(null); };
@@ -99,5 +106,7 @@ function PhotoImage({ id, indexPath, ...props }: React.ComponentProps<typeof Pro
     return () => { window.clearTimeout(timer); window.removeEventListener("pageshow", expire); document.removeEventListener("visibilitychange", expire); };
   }, [photo]);
   const imageUrl = photo?.imageUrl ?? props.imageUrl;
-  return <ProductImage {...props} key={imageUrl} imageUrl={imageUrl} alt={imageUrl === PHOTO_PLACEHOLDER ? "" : props.alt} />;
+  return <ProductImage {...props} key={imageUrl} imageUrl={imageUrl}
+    placeholder={imageUrl === PHOTO_PLACEHOLDER ? (loading ? "loading" : "unavailable") : undefined}
+    alt={imageUrl === PHOTO_PLACEHOLDER ? "" : props.alt} />;
 }

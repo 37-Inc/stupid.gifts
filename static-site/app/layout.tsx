@@ -1,3 +1,4 @@
+import "../../components/ProductImage.css";
 import type { Metadata } from "next";
 import { previewMetadata } from "../lib/metadata";
 import { isFixtureRelease, photos } from "../lib/catalog";

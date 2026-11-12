@@ -96,8 +96,8 @@ export function CatalogFeed({
       <h2 id="browse-heading" className="sr-only">Gifts</h2>
       {state.products.length > 0 && (
         <div className="catalog-grid">
-          {state.products.map((product) => (
-            <ProductCard key={product.id} product={product} context="home_browse" />
+          {state.products.map((product, index) => (
+            <ProductCard key={product.id} product={product} eager={index < 3} context="home_browse" />
           ))}
         </div>
       )}

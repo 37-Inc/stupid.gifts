@@ -119,7 +119,7 @@ async function prepare(view:RuntimeCatalogView,options:RuntimeSiteOptions,now:()
   };
   const active=collection(view,'active-show').name;
   const activeName=typeof active==='string'&&names.has(active)?active:ACTIVE_SHOW_PRESET;
-  return{snapshot,products,ranked,cards,version,base,feedCount,virtual,photoIndex:photoShard?photoBase+'/photos.json':null,photoSlots:Object.keys(index.products),manifest,api,bySlug,byId,related,names,showIds,activeName};
+  return{snapshot,products,ranked,cards,version,base,feedCount,virtual,photoLookup:index,photoIndex:photoShard?photoBase+'/photos.json':null,photoSlots:Object.keys(index.products),manifest,api,bySlug,byId,related,names,showIds,activeName};
 }
 type Prepared=Awaited<ReturnType<typeof prepare>>;
 async function pageOg(view:RuntimeCatalogView,props:RuntimePageProps,at:number){
@@ -160,6 +160,11 @@ function page(path:string,view:RuntimeCatalogView,p:Prepared,options:RuntimeSite
     else if(p.snapshot.heldProducts.some(item=>item.path===path)||p.snapshot.products.some(item=>'/gifts/'+item.slug===path)){
       props.kind='held';title='Gift currently unavailable';description='This gift is not currently available in the curated catalog.';indexable=false;}}
   if(props.kind==='missing'){status=404;indexable=false;}
+  // Reuse the server's already-resolved, URL-free lookup for the initial grid.
+  // Bound HTML growth; later cards can still fetch the full versioned index.
+  const initialPhotos=Object.fromEntries([...props.products,...props.cards,...(props.related??[])].slice(0,24)
+    .flatMap(product=>Object.hasOwn(p.photoLookup.products,product.id)?[[product.id,p.photoLookup.products[product.id]]]:[]));
+  if(Object.keys(initialPhotos).length)props.initialPhotoIndex={...p.photoLookup,products:initialPhotos};
   props.eligibleUntil=earliestCatalogExpiry([...props.products,...props.cards,...(props.related??[])]);
   return{props,title,description,status,indexable,schema};
 }
