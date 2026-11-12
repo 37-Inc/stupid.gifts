@@ -4,7 +4,11 @@ const DISPATCH='https://api.github.com/repos/37-Inc/stupid.gifts/actions/workflo
 /** A clock only: no catalog, merchant, model, database or storage credentials. */
 export async function dispatchCatalogClock(time,env,{send=fetch,now=Date.now,log=console.log}={}){
   const slot=catalogClockSlot(time);
-  if(!slot||env.CLOCK_ENABLED!=='true')return{state:'skipped'};
+  if(!slot||env.CLOCK_ENABLED!=='true'){
+    const result={state:'skipped',reason:env.CLOCK_ENABLED!=='true'?'disabled':'outside_pacific_slot',
+      wakeAt:Number.isFinite(new Date(time).getTime())?new Date(time).toISOString():null};
+    log(JSON.stringify(result));return result;
+  }
   if(!env.GITHUB_CATALOG_DISPATCH_TOKEN)throw Error('catalog_clock_credential_missing');
   const started=now(),report={...slot,wakeAt:new Date(time).toISOString(),dispatchedAt:new Date(started).toISOString()};
   // Do not blindly retry an uncertain POST. The existing two-hour catch-up

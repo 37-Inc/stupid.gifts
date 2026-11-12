@@ -16,9 +16,18 @@ test('Pacific slots and catch-ups keep one identity across DST and delayed runne
     assert.deepEqual(catalogClockSlot(wake),{mode,scheduled_at:due});
     assert.equal(hostedInvocationDay(mode,catalogScheduledTime(mode,due)),day);
   }
-  for(const time of ['2026-11-11T15:30:00.000Z','2026-07-11T16:30:00.000Z','invalid','2026-11-11T16:30:01.000Z'])assert.equal(catalogClockSlot(time),null);
+  for(const time of ['2026-11-11T15:30:00.000Z','2026-07-11T16:30:00.000Z','invalid'])assert.equal(catalogClockSlot(time),null);
   assert.throws(()=>catalogScheduledTime('photos','2026-11-11T16:30:00.000Z'),/schedule_invalid/);
   assert.throws(()=>catalogScheduledTime('full','2026-11-11T18:30:00.000Z'),/schedule_invalid/);
+});
+test('real fractional and delayed wakes normalize to the same original due slot',()=>{
+  for(const time of ['2026-11-12T04:30:15.559Z','2026-11-12T04:37:42.123Z','2026-11-12T06:59:59.999Z'])
+    assert.deepEqual(catalogClockSlot(time),{mode:'photos',scheduled_at:'2026-11-12T04:30:00.000Z'});
+  for(const time of ['2026-07-11T15:30:16.954Z','2026-07-11T17:48:00.100Z'])
+    assert.deepEqual(catalogClockSlot(time),{mode:'full',scheduled_at:'2026-07-11T15:30:00.000Z'});
+  // Only the generated due identity goes downstream; a caller cannot supply a
+  // late/catch-up timestamp as another unique catalog run.
+  assert.throws(()=>catalogScheduledTime('photos','2026-11-12T04:30:15.559Z'),/schedule_invalid/);
 });
 test('clock dispatch is one fixed-repository request with no public trigger or provider access',async()=>{
   let calls=0;const logs=[],time=Date.parse('2026-11-11T16:30:00.000Z'),env={CLOCK_ENABLED:'true',GITHUB_CATALOG_DISPATCH_TOKEN:'test-only'};
@@ -30,9 +39,15 @@ test('clock dispatch is one fixed-repository request with no public trigger or p
   assert.equal((await dispatchCatalogClock(time,env,dependencies)).state,'dispatched');assert.equal(calls,1);
   assert.equal(logs[0].status,204);assert.ok(!JSON.stringify(logs).includes('test-only'));
   assert.equal((await dispatchCatalogClock(time,{...env,CLOCK_ENABLED:'false'},dependencies)).state,'skipped');assert.equal(calls,1);
+  assert.equal(logs.at(-1).reason,'disabled');
+  assert.equal((await dispatchCatalogClock('invalid',env,dependencies)).state,'skipped');assert.equal(calls,1);
+  assert.equal(logs.at(-1).reason,'outside_pacific_slot');assert.equal(logs.at(-1).wakeAt,null);
+  assert.equal((await dispatchCatalogClock(time+15_559,env,dependencies)).state,'dispatched');assert.equal(calls,2);
+  assert.equal(logs.at(-1).wakeAt,'2026-11-11T16:30:15.559Z');
+  assert.equal(logs.at(-1).scheduled_at,'2026-11-11T16:30:00.000Z');
   assert.equal((await worker.fetch()).status,404);
   await assert.rejects(dispatchCatalogClock(time,env,{...dependencies,send:async()=>{calls++;throw Error('secret detail');}}),/dispatch_unknown/);
-  assert.equal(calls,2);assert.ok(!JSON.stringify(logs).includes('secret detail'));
+  assert.equal(calls,3);assert.ok(!JSON.stringify(logs).includes('secret detail'));
   await assert.rejects(dispatchCatalogClock(time,env,{...dependencies,send:async()=>{calls++;return new Response('private',{status:401});}}),/dispatch_failed_401/);
-  assert.equal(calls,3);
+  assert.equal(calls,4);
 });
