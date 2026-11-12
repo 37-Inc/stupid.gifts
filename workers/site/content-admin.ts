@@ -8,6 +8,7 @@ import {validDisplayTitle,readMerchandising,usableCommissionPriority,merchandisi
 import {resolvePublicProduct} from '../../lib/catalog/display.ts';
 import {productPresentation} from '../../lib/catalog/presentation.ts';
 import {contentAdminActor} from './content-admin-auth.ts';
+import {dispatchAdmission,readAdmissionDispatch} from './content-admin-dispatch.ts';
 
 const PREFIX='/api/content-admin';
 const exact=(v:Record<string,unknown>,keys:string)=>Object.keys(v).sort().join(',')===keys.split(',').sort().join(',');
@@ -78,7 +79,9 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
       if(request.method!=='GET'&&request.headers.get('Origin')!==url.origin)return response({error:'origin_required'},403);
       if(!env.DB)return response({error:'admin_storage_unavailable'},503);
       const store=createContentRequestStore(env.DB),path=url.pathname.slice(PREFIX.length);
-      const withApplication=async(saved:ContentRequest)=>({...saved,application:await options.readApplication?.(saved.requestId)??null});
+      const withApplication=async(saved:ContentRequest)=>({...saved,application:await options.readApplication?.(saved.requestId)??null,
+        ...(env.CONTENT_ADMIN_DISPATCH_ENABLED==='true'&&saved.action==='admit'
+          ?{dispatch:await readAdmissionDispatch(env.DB!,saved.requestId)}:{})});
       if(request.method==='GET'){
         if(path==='/status'){
           const owner=(await env.DB.prepare('SELECT phase,generation,mutation_epoch,external_pending FROM catalog_mutation_scopes LIMIT 1').all()).results[0]??null;
@@ -103,7 +106,7 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
         }
         if(path==='/requests')return response({requests:await Promise.all((await store.recent()).map(withApplication)),applicationEnabled:Boolean(options.applyCollection)});
         if(/^\/requests\/[a-zA-Z0-9_-]{16,100}$/.test(path)){
-          const saved=await store.byId(path.slice(10));return response(saved?{...saved,application:await options.readApplication?.(saved.requestId)??null}:{error:'request_not_found'},saved?200:404);
+          const saved=await store.byId(path.slice(10));return response(saved?await withApplication(saved):{error:'request_not_found'},saved?200:404);
         }
         if(/^\/products\/[a-zA-Z0-9._-]{1,100}$/.test(path)){
           const product=identities.get(path.slice(10));if(!product)return response({error:'product_not_found'},404);
@@ -158,7 +161,14 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
         const application=await options.applyCollection(result.request);
         return response({...result,application,publication:'runtime_data_applied',applicationEnabled:true},200);
       }
-      return response({...result,publication:action==='admit'?'queued_for_existing_coordinator':'not_requested',applicationEnabled:false},202);
+      let dispatch;
+      if(action==='admit'&&env.CONTENT_ADMIN_DISPATCH_ENABLED==='true'){
+        try{dispatch=env.GITHUB_CATALOG_DISPATCH_TOKEN?await dispatchAdmission({db:env.DB,requestId,token:env.GITHUB_CATALOG_DISPATCH_TOKEN,
+          now:()=>new Date(now()).toISOString()}):{state:'unavailable',reason:'credential_not_configured'};}
+        catch{dispatch={state:'unavailable',reason:'dispatch_not_confirmed'};}
+      }
+      return response({...result,publication:action==='admit'?'queued_for_existing_coordinator':'not_requested',applicationEnabled:false,
+        ...(dispatch?{dispatch}:{})},202);
     }catch(error){return error instanceof ContentAdminError?response({error:error.message},error.status):response({error:'admin_temporarily_unavailable'},503);}
   };
 }

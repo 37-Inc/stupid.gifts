@@ -36,6 +36,16 @@ test('phase recovery binds the original finite config and writer; publication re
   }
 });
 
+test('saved read-only preparation resumes without inventing or taking over a writer',()=>{
+  const hash='a'.repeat(64),config={runId:'original',cadence:{admitAsins:['B000000001']}},
+    cp={phase:'phases_running',owner:null,pins:{productPreparation:{sha256:hash,reference:'original-preparation'}}};
+  assert.equal(routineRecoveryPhase(cp,config,hash,hash),'provider');
+  assert.throws(()=>routineRecoveryPhase({...cp,pins:{}},config,hash,hash),/provider_replay_forbidden/);
+  assert.throws(()=>routineRecoveryPhase(cp,config,hash,'b'.repeat(64)),/provider_replay_forbidden/);
+  assert.throws(()=>routineRecoveryPhase(cp,{...config,inputs:{savedAdmission:{}}},hash,hash),/provider_replay_forbidden/);
+  assert.throws(()=>routineRecoveryPhase({...cp,owner:{phase:'writing',ownerReference:'other'}},config,hash,hash),/provider_replay_forbidden/);
+});
+
 test('cleanup failures after acceptance are advisory, including open and close failures',async()=>{
   for(const failure of ['none','open','clean','close']){
     const calls=[],warnings=[];

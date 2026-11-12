@@ -103,6 +103,39 @@ test('exact-ASIN requests dedup ALL identities and idempotently save without sta
   assert.equal((await f.call('/admissions',{method:'POST',payload:f.edit({asin:'B000000778'}),headers:key})).status,409);
   assert.equal((await f.call('/admissions',{method:'POST',payload})).status,409,'Different key cannot queue the same ASIN twice at revision zero');
 });
+test('optional admission dispatch stays behind staff auth, CSRF, durable save and exact idempotency',async t=>{
+  const f=await fixture(t);
+  f.sql.exec('CREATE TABLE content_admin_results(request_id TEXT PRIMARY KEY);');
+  f.sql.exec(await readFile(new URL('../migrations/d1/0021_content_admin_dispatch.sql',import.meta.url),'utf8'));
+  Object.assign(f.env,{CONTENT_ADMIN_DISPATCH_ENABLED:'true',GITHUB_CATALOG_DISPATCH_TOKEN:'TEST_ONLY_DISPATCH_TOKEN'});
+  const certFetch=globalThis.fetch;let calls=0;
+  globalThis.fetch=async(url,init)=>{
+    if(String(url)===ISSUER+'/cdn-cgi/access/certs')return certFetch(url,init);
+    assert.equal(String(url),'https://api.github.com/repos/37-Inc/stupid.gifts/actions/workflows/catalog-manual.yml/dispatches');
+    assert.equal(f.sql.prepare('SELECT count(*) n FROM content_admin_requests').get().n,1,'request exists before dispatch');
+    calls++;return new Response(null,{status:204});
+  };
+  const payload=f.edit({asin:'B000000777'}),headers={'Idempotency-Key':'dispatch-admission-request'};
+  assert.equal((await f.call('/admissions',{method:'POST',payload,headers,auth:null})).status,403);
+  assert.equal((await f.call('/admissions',{method:'POST',payload,headers:{...headers,Origin:'https://evil.invalid'}})).status,403);
+  assert.equal(calls,0);
+  for(let i=0;i<2;i++){
+    const result=await f.call('/admissions',{method:'POST',payload,headers});assert.equal(result.status,202);
+    const saved=await result.json();assert.equal(saved.dispatch.state,'accepted');
+    assert.equal(saved.publication,'queued_for_existing_coordinator');assert.equal(saved.applicationEnabled,false);
+  }
+  assert.equal(calls,1);
+  const status=await(await f.call('/requests/dispatch-admission-request')).json();
+  assert.equal(status.dispatch.state,'accepted');assert.equal(status.application,null);
+  assert.ok(!JSON.stringify(status).includes('TEST_ONLY_DISPATCH_TOKEN'));
+});
+test('missing dispatch credentials never discard the durable admission or claim publication',async t=>{
+  const f=await fixture(t);f.env.CONTENT_ADMIN_DISPATCH_ENABLED='true';
+  const response=await f.call('/admissions',{method:'POST',payload:f.edit({asin:'B000000777'})});
+  assert.equal(response.status,202);const result=await response.json();
+  assert.deepEqual(result.dispatch,{state:'unavailable',reason:'credential_not_configured'});
+  assert.equal(result.request.state,'awaiting_application');assert.equal(f.sql.prepare('SELECT count(*) n FROM content_admin_requests').get().n,1);
+});
 test('canonical copy/visibility are versioned drafts, preserve identity and reject malformed/stale updates',async t=>{
   const f=await fixture(t),before=f.sql.prepare('SELECT * FROM products ORDER BY id').all();
   const edit=f.edit({title:'Complete untruncated book title',description:'One factual short description.',visibility:'unlisted'});

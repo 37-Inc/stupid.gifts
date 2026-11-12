@@ -651,7 +651,25 @@ test('body-free published bulk seal survives old body expiry; empty/one/thirty c
       f.sql.prepare('UPDATE catalog_build_requests SET version_reference=? WHERE request_id=?').run('fixture:unapproved-version',build.request_id);await assert.rejects(observe());
       f.sql.prepare('UPDATE catalog_build_requests SET version_reference=? WHERE request_id=?').run(build.version_reference,build.request_id);
       f.index.get(uuid(1)).values[0]=0;await assert.rejects(observe());f.index.get(uuid(1)).values[0]=-0;
-      assert.equal((await observe()).state,'verified');}
+      assert.equal((await observe()).state,'verified');
+      // A data-only successor has no Worker version. Its immutable runtime
+      // receipt/head must agree with the original catalog receipt and build.
+      f.sql.exec(await readFile(new URL('../migrations/d1/0019_runtime_catalog.sql',import.meta.url),'utf8'));
+      f.sql.prepare("UPDATE catalog_build_requests SET version_reference=NULL,dispatch_reference=? WHERE request_id=?").run('runtime:'+intent.manifestSha256,build.request_id);
+      f.sql.prepare("UPDATE publication_outbox SET dispatch_reference=? WHERE release_id='permanent-release'").run('runtime:'+intent.manifestSha256);
+      await assert.rejects(observe()); // A runtime-looking string is not proof.
+      f.sql.prepare(`INSERT INTO catalog_runtime_publications(release_id,catalog_revision,data_sha256,source_snapshot_sha256,public_snapshot_sha256,
+        handoff_sha256,request_id,owner_json,previous_release_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`)
+        .run(intent.releaseId,intent.catalogRevision,intent.manifestSha256,intent.catalogSnapshotSha256,intent.catalogSnapshotSha256,
+          'd'.repeat(64),build.request_id,JSON.stringify(q.owner),intent.priorReleaseId,f.now().toISOString());
+      await assert.rejects(observe()); // The accepted serving head must agree.
+      f.sql.prepare('INSERT INTO catalog_runtime_head(singleton,release_id,version,enabled) VALUES(1,?,1,1)').run(intent.releaseId);
+      assert.equal((await observe()).state,'verified');
+      f.sql.prepare('UPDATE catalog_build_requests SET dispatch_reference=? WHERE request_id=?').run('runtime:'+'0'.repeat(64),build.request_id);
+      await assert.rejects(observe());
+      f.sql.prepare('UPDATE catalog_build_requests SET dispatch_reference=? WHERE request_id=?').run('runtime:'+intent.manifestSha256,build.request_id);
+      f.sql.prepare('UPDATE catalog_runtime_head SET enabled=0').run();await assert.rejects(observe());
+      f.sql.prepare('UPDATE catalog_runtime_head SET enabled=1').run();assert.equal((await observe()).state,'verified');}
     assert.equal(f.sql.prepare('SELECT phase FROM catalog_mutation_scopes').get().phase,'freezing');
   });
 });

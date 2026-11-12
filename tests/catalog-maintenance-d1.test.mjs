@@ -414,7 +414,8 @@ test('changed optional short copy is not carried under an old exact permanent gr
 test('maintenance methods and optional freshness planner retain immutable archive/identity and private versus public separation',async () => {
   const original=rawProduct(1);const f=await setup({products:[original],presence:{[uuid(1)]:true}});
   try {
-    assert.equal(Object.keys(f.store).length,12);assert.ok(Object.isFrozen(f.store));
+    assert.equal(Object.keys(f.store).length,13);assert.ok(Object.isFrozen(f.store));
+    assert.equal(typeof f.store.getProductSourceVersions,'function');
     const archived=f.row(1).source_record_json; const p=input(1,{editorialStatus:'pending',editorialWriteup:null,price:0,rating:0,reviewCount:0,humorTags:[],embedding:null});
     const hash=editorialSourceHash(p);
     assert.deepEqual(await f.store.upsertProduct(p,hash),{inserted:false,slug:original.slug});

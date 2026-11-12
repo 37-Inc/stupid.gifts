@@ -33,10 +33,11 @@ test('bootstrap uses real advisory D1 accounting and retains unknown attempts ac
   assert.ok(![...objects.values()].map(String).join('').includes('SYNTHETIC_TOKEN'));
   assert.ok(![...objects.values()].map(String).join('').includes('SELECT'));
 });
-function fixture({lostActivation=false,lostUpload=false}={}){
+function fixture({lostActivation=false,lostUpload=false,dispatchBinding}={}){
   const objects=new Map(),writes=[],state={version:old,marker:null,uploads:0,activations:0},bindings=[{name:'DB',type:'d1',id:SCOPE.databaseId},
     {name:'ASSETS',type:'assets'},{name:'VECTORIZE',type:'vectorize',index_name:SCOPE.indexName},{name:'SEMANTIC_VECTORIZE',type:'vectorize',index_name:'actual-existing-search'},
-    {name:'OPENAI_API_KEY',type:'secret_text'},{name:'ENVIRONMENT',type:'plain_text',text:'production'},{name:'SEMANTIC_SEARCH_ENABLED',type:'plain_text',text:'true'}];
+    {name:'OPENAI_API_KEY',type:'secret_text'},{name:'ENVIRONMENT',type:'plain_text',text:'production'},{name:'SEMANTIC_SEARCH_ENABLED',type:'plain_text',text:'true'},
+    ...(dispatchBinding?[dispatchBinding]:[])];
   const runtime={hosted:true,token:async()=>'SYNTHETIC_TOKEN',durable:{async get(key){const bytes=objects.get(key);return bytes?{bytes,etag:'"test"'}:null;},async putImmutable(key,bytes){
     const prior=objects.get(key);if(prior)assert.ok(Buffer.from(prior).equals(Buffer.from(bytes)));else{objects.set(key,new Uint8Array(bytes));writes.push(key);}return{bytes,etag:'"test"'};}}};
   const ok=result=>Response.json({success:true,result});
@@ -59,6 +60,7 @@ function fixture({lostActivation=false,lostUpload=false}={}){
     assert.equal(options.env.CLOUDFLARE_API_TOKEN,'SYNTHETIC_TOKEN');assert.ok(writes.some(k=>k.endsWith('/upload-dispatched.json')));
     const configPath=args[args.indexOf('--config')+1],config=JSON.parse(await readFile(configPath,'utf8'));
     assert.equal(config.keep_vars,true);assert.equal(config.vars.SEMANTIC_SEARCH_ENABLED,'true');assert.equal(config.vectorize[1].index_name,'actual-existing-search');
+    assert.equal(Object.hasOwn(config.vars,'GITHUB_CATALOG_DISPATCH_TOKEN'),false,'secrets never become generated plain-text variables');
     for(const [name,value]of Object.entries(contentAdminSettings))assert.equal(config.vars[name],value);
     const bytes=await readFile(path.join(path.dirname(configPath),'app-manifest.json'));state.metadata=JSON.parse(bytes);
     state.manifestSha256=(await import('node:crypto')).createHash('sha256').update(bytes).digest('hex');
@@ -75,4 +77,16 @@ for(const mode of ['normal','lostActivation','lostUpload'])test('app-only deploy
   assert.equal(f.state.uploads,1);assert.equal(f.state.activations,1);
   const again=await deployRuntimeApp({...f,source});assert.equal(again.version,next);assert.equal(f.state.uploads,1);assert.equal(f.state.activations,1);
   assert.ok([...f.objects.keys()].every(k=>k.startsWith('app-releases/')),'No catalog pointer, product row or catalog mutation journal is written');
+});
+test('app deploy retains an existing dispatch secret without putting it in generated config',async()=>{
+  const f=fixture({dispatchBinding:{name:'GITHUB_CATALOG_DISPATCH_TOKEN',type:'secret_text'}});
+  assert.equal((await deployRuntimeApp({...f,source})).state,'deployed');
+  assert.deepEqual(f.state.bindings.find(b=>b.name==='GITHUB_CATALOG_DISPATCH_TOKEN'),{name:'GITHUB_CATALOG_DISPATCH_TOKEN',type:'secret_text'});
+  assert.ok(!JSON.stringify([...f.objects.values()].map(bytes=>Buffer.from(bytes).toString())).includes('TEST_ONLY_DISPATCH_TOKEN'));
+  assert.equal(contentAdminSettings.CONTENT_ADMIN_DISPATCH_ENABLED,'false','not activated before independent publication proof');
+});
+test('app deploy rejects a plaintext dispatch credential before uploading',async()=>{
+  const f=fixture({dispatchBinding:{name:'GITHUB_CATALOG_DISPATCH_TOKEN',type:'plain_text',text:'TEST_ONLY_DISPATCH_TOKEN'}});
+  await assert.rejects(deployRuntimeApp({...f,source}),/runtime_app_bindings/);
+  assert.equal(f.state.uploads,0);assert.equal(f.state.activations,0);
 });

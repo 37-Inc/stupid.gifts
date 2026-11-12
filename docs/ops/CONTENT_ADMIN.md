@@ -2,18 +2,69 @@
 
 `roadmap-lbbz1.32` provides authenticated read/status, versioned draft requests
 and immediate presentation/collection edits in the existing Worker/D1.
-There is no dashboard, new Worker/service, scheduler, GitHub API token or second
-ingestion path. Staff access uses the owner-approved path-only Access app. The existing `/admin` and
+There is no dashboard, new Worker/service, scheduler or second ingestion path.
+Staff access uses the owner-approved path-only Access app. The existing `/admin` and
 `/api/admin` routes remain retired.
 
 ## Explicit boundary
+
+### Product-preparation simplification (not instant publication yet)
+
+New exact-ASIN admissions and automatic care share the same saved preparation
+code. Amazon collection, short-copy drafting/review and embedding preparation
+run against a read-only canonical catalog view before claiming the catalog
+writer. Only the prepared mutations enter the existing publication path. Saved
+results resume without another supplier/model call. An exact source fingerprint
+prevents a delayed preparation from overwriting a subsequently changed gift;
+all catalog identities, including held products, remain part of deduplication.
+Old started admissions/recoveries keep their original path and source binding.
+
+This is the first part of `roadmap-lbbz1.32.1`, **not** a claim that the endpoint
+can publish independently yet. The hosted queue, whole-catalog publication and
+native-index acceptance still serialize admissions behind pending care. Finish
+that integration and prove an actual endpoint admission before enabling an
+immediate-dispatch credential or describing an addition as live. Do not run a
+second supplier batch or take over the existing publisher to demonstrate speed.
+
+The implementation includes a **disabled** dispatch adapter for the approved repo-only
+GitHub credential. `CONTENT_ADMIN_DISPATCH_ENABLED` remains `false`. Migration
+0021 and `GITHUB_CATALOG_DISPATCH_TOKEN` are not provisioned by app deployment.
+The owner-approved Actions-write/Metadata-read token for this repository was
+created November 12 and saved encrypted as that Cloudflare secret; it expires
+December 12, 2026. This does not activate dispatch or prove product admission.
+If later enabled, the adapter can only dispatch `catalog-manual.yml` on `main`
+in `admin` mode, after authenticated, same-origin, idempotent admission storage.
+It cannot send caller-chosen workflow/ref/ASIN inputs. A durable dispatch claim
+prevents duplicate POSTs after retries or lost acknowledgements. Its private
+status is distinct from product publication; rejected/unknown dispatch leaves
+the original admission queued for the existing coordinator. Provider responses
+and credentials are never stored in the request or dispatch record. Merely
+enabling this adapter would still use the existing serialized publication
+queue: finish that separation and its endpoint proof before changing the flag.
+The current GitHub dispatch API's numeric workflow-run ID is retained when
+acknowledged, so status can identify the real run rather than infer it from a
+timestamp. A malformed/lost response remains unknown and is not redispatched.
+
+`prepareCatalogProducts` is the shared preparation entry point. It restores
+saved provider evidence and exact prepared phases before initializing a model
+client; retrying a prepared phase does not collect or generate again. It owns
+no writer, global pending pointer, or publication. The existing routine driver
+calls it before writer acquisition, then applies its version-fenced mutations.
+When every phase is already prepared, applying the saved result no longer
+requires resolving Amazon/OpenAI credentials again; Cloudflare access remains
+necessary for the actual commit and readback.
+
+Article policy is unchanged: ordinary discovery/admission creates a product page
+with factual short copy. `--long-editorial` is an explicitly requested optional
+mode, not a ranking, commission or traffic threshold; generated articles still
+need editorial approval. An article is not required for listing or indexing.
 
 Admissions return HTTP202, `state: awaiting_application`,
 `publication: queued_for_existing_coordinator`. Saving an admission
 does **not** call Amazon/OpenAI. The existing serialized coordinator consumes
 up to ten explicit staff requests after a completed morning run, or through
-manual workflow mode `admin`. There is no new clock or HTTP-to-GitHub dispatch
-credential. Unrelated pending care finishes first. A durable claim binds the
+manual workflow mode `admin`. The optional dispatch adapter above is disabled;
+there is no new clock. Unrelated pending care finishes first. A durable claim binds the
 exact ASINs and original date across retries; late requests stay queued. Existing
 identities (including held records) settle without refetching. Accepted runs
 report `catalog_identity_recorded` or `not_admitted`, not a promise that every
