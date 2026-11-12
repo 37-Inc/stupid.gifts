@@ -1,27 +1,42 @@
-# Content admin API — private drafts and runtime collections
+# Content admin API — runtime edits and queued admissions
 
 `roadmap-lbbz1.32` provides authenticated read/status, versioned draft requests
-and immediate runtime collection application in the existing Worker/D1.
+and immediate presentation/collection edits in the existing Worker/D1.
 There is no dashboard, new Worker/service, scheduler, GitHub API token or second
-ingestion path. Nothing is enabled by default. The existing `/admin` and
+ingestion path. Staff access uses the owner-approved path-only Access app. The existing `/admin` and
 `/api/admin` routes remain retired.
 
 ## Explicit boundary
 
-Admission, copy and visibility writes return HTTP202, `state: awaiting_application`,
-`publication: not_requested` and `applicationEnabled: false`. Saving an admission
-does **not** start a job or call Amazon/OpenAI. Ordering a collection, selecting
-an active show, and restoring a version use the shared
-runtime collection service when enabled: HTTP200 and `application.state:applied`
+Admissions return HTTP202, `state: awaiting_application`,
+`publication: queued_for_existing_coordinator`. Saving an admission
+does **not** call Amazon/OpenAI. The existing serialized coordinator consumes
+up to ten explicit staff requests after a completed morning run, or through
+manual workflow mode `admin`. There is no new clock or HTTP-to-GitHub dispatch
+credential. Unrelated pending care finishes first. A durable claim binds the
+exact ASINs and original date across retries; late requests stay queued. Existing
+identities (including held records) settle without refetching. Accepted runs
+report `catalog_identity_recorded` or `not_admitted`, not a promise that every
+requested gift is publicly listed. Request GET exposes that saved result.
+
+Factual copy, editorial visibility, collection ordering, active-show selection
+and restore use the shared
+runtime revision service when enabled: HTTP200 and `application.state:applied`
 mean the actual version/head transaction committed, visible within five seconds
 without a Worker deploy. GET distinguishes `published` data from
 the latest `request`. Do not describe a saved draft as an accepted catalog or
-claim live job progress that this API has not observed.
+claim live job progress that this API has not observed. Copy/visibility edits
+are cumulative, append-only presentation revisions over the accepted catalog;
+they do not rewrite supplier observations, identities, licensed content or native
+vectors. One projection feeds cards, detail, search, guides, Random, shows and
+sitemaps. Unlisting preserves the product URL as a held page. Relisting cannot
+override underlying stock/rights holds. Contradictory old semantic vectors are
+excluded; correct keyword results remain available without a model call.
 
 The [runtime catalog](RUNTIME_CATALOG.md) publishes data independently of app
 builds. No temporary GitHub auto-dispatch bridge or direct product-table writer
-is added. `.32` remains in progress for sole-coordinator admission/copy/visibility
-consumption, private campaign actions and verified live staff authentication.
+is added.
+Live staff authentication must be independently verified before `.32` closes.
 
 ## Authentication and rollout
 
@@ -39,9 +54,13 @@ The reviewed serving package must explicitly retain these nonsecret bindings:
 - `CONTENT_ADMIN_AUD=<that application's 64-character audience>`
 - `CONTENT_ADMIN_STAFF_EMAILS=<comma-separated approved staff emails>`
 
-Missing/invalid configuration denies access. The app publisher preserves the
-explicit existing nonsecret staff settings; deployment alone cannot invent them.
-Activation is a separate reviewed rollout, not a reason to edit a saved release.
+Missing/invalid configuration denies access. The app publisher loads the reviewed
+nonsecret `scripts/catalog/content-admin-settings.mjs` and verifies every setting
+on the uploaded version. It names only the owner-approved Access audience and
+`cam@37.technology`; it does not provision credentials or change Access policies.
+The Free Access app is `6a8715bd-84b8-4ecb-87d0-3ec807731d6a`, team
+`37-technology`, six-hour sessions, HTTP-only path-scoped cookie, one email-only
+allow policy. Public routes remain outside Access.
 
 The Worker validates Access's signed RS256 JWT, fixed issuer/audience, expiry
 and allowed staff email, and audits its signed subject. It never trusts the
@@ -62,13 +81,13 @@ All paths below are relative to `/api/content-admin`.
 | --- | --- | --- |
 | GET | `/status` | Compiled live identity, bounded D1 owner/build/refresh observations and recent requests |
 | GET | `/requests` or `/requests/<id>` | Latest50 private requests or one exact request |
-| POST | `/admissions` | Save one exact-ASIN admission request, deduping all existing identities including holds |
-| GET / PUT | `/products/<publicId>` | Read published identity and draft factual title/description/listing intent |
+| POST | `/admissions` | Queue one exact-ASIN request on the existing coordinator, deduping all identities |
+| GET / PUT | `/products/<publicId>` | Read/apply factual title/description/editorial visibility |
 | GET / PUT | `/collections/homepage` | Read/apply the existing6-anchor/18-rotation homepage schema |
 | GET / PUT | `/collections/<name>` | Read/apply an ordered ID-only show collection, at most24 public products |
 | POST | `/collections/<name>/restore` | Append an earlier saved payload as a new revision; retain all versions |
 | GET / PUT | `/active-show` | Read/apply a named saved show choice |
-| GET | `/campaigns` | Current compiled commission preference only; private manual actions remain explicitly unknown |
+| GET | `/campaigns` | Hash-verified saved website campaign observations, freshness and manual join/content actions |
 
 Every write uses this envelope (example: PUT `/products/<publicId>`):
 
@@ -95,7 +114,7 @@ Other payloads:
 - Product: any nonempty combination of `title`, `description`, and
   `visibility: "listed" | "unlisted"`. A reason is required. No price, stock,
   licensed-image expiry, identity/slug, affiliate tag or vector edits. A listed
-  intent cannot override retailer stock/rights during later application.
+  intent cannot override retailer stock/rights. Original fields/history stay intact.
 - Show collection: `{"ids":["<publicId>","<publicId>"]}`.
 - Homepage: `{"edition":{"schemaVersion":1,"day":"YYYY-MM-DD","anchors":[6 IDs],"rotation":[18 IDs]}}`.
 - Active show: `{"name":"billy-ray"}`. Must be a saved or compiled collection.
@@ -115,10 +134,13 @@ acknowledgement is settled by exact readback, not by starting another job.
 `live_awaiting_bookkeeping` means this actual serving Worker's identity matches
 the pending D1 release/intent; it is not another deployment request. Otherwise
 pending work is `pending_not_confirmed_live`. `lastRefresh` is a completed D1
-run observation, **not** proof of hosted successor acceptance. R2 successor is
-`not_observed` until the original coordinator observer is connected. Failed
-build codes and missing/private campaign actions are never replaced with zero
-or guessed success. The API cannot start a publisher.
+run observation, **not** proof of hosted successor acceptance. Staff status reads
+the exact saved R2 pending intent and hash-bound successor control; it labels
+these observations separately from D1 and public serving state. A failed read
+is `unknown`. Campaign reports read only the two named saved website feed/review
+files, never the unrelated research account or an enrollment API. Stale facts
+remain visible as stale, with no invented commission preference or join action.
+Missing data returns `manualActions:null`, not zero. The API cannot start a publisher.
 
 Local tests use signed synthetic Access JWTs, SQLite, and mocked public signing
 keys. They cover forged/expired/wrong-audience/unauthorized tokens, CSRF,

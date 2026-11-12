@@ -3,6 +3,7 @@ import {readRuntimeCatalogData,runtimeDigest,RUNTIME_CATALOG_PREFIX,runtimeOverl
 import type {RuntimeCatalogData,RuntimeCatalogHead} from '../../lib/catalog/runtime-catalog.ts';
 import {validatePublicCatalogProduct} from '../../lib/catalog/snapshot.ts';
 import {resolvePublicProduct} from '../../lib/catalog/display.ts';
+import {runtimePresentation} from '../../lib/catalog/runtime-presentation.ts';
 
 /** Read-only structural R2 binding. No object key comes from an HTTP caller. */
 export interface RuntimeCatalogBucket {
@@ -15,7 +16,8 @@ export function createRuntimeCatalogReader(now=Date.now){
   let binding:RuntimeCatalogEnv|undefined,overlayDeadline=Infinity,overlayIncomplete=false;
   const currentView=(view:RuntimeCatalogView):RuntimeCatalogView=>{
     const products=view.data.snapshot.products.flatMap(p=>resolvePublicProduct(p,now())??[]),ids=new Set(products.map(p=>p.publicId));
-    return{...view,data:{...view.data,snapshot:{...view.data.snapshot,products,heldProducts:(base??view.data).snapshot.heldProducts.filter(p=>!ids.has(p.publicId))}}};
+    const held=new Map([...(base??view.data).snapshot.heldProducts,...view.data.snapshot.heldProducts].map(p=>[p.publicId,p]));
+    return{...view,data:{...view.data,snapshot:{...view.data.snapshot,products,heldProducts:[...held.values()].filter(p=>!ids.has(p.publicId))}}};
   };
   async function read(env:RuntimeCatalogEnv):Promise<RuntimeCatalogView>{
     if(env.RUNTIME_CATALOG_ENABLED!=='true'||!env.DB||!env.CATALOG_DATA)throw Error('runtime_catalog_unavailable');
@@ -58,7 +60,8 @@ export function createRuntimeCatalogReader(now=Date.now){
     const versions=(await env.DB.prepare(`SELECT c.name,c.revision,c.payload_json FROM catalog_runtime_collections c
       WHERE c.revision=(SELECT max(v.revision) FROM catalog_runtime_collections v WHERE v.name=c.name)`).all<{name:string;revision:number;payload_json:string}>()).results;
     const collections=Object.fromEntries(versions.map(v=>[v.name,{revision:v.revision,payload:JSON.parse(v.payload_json)}]));
-    cached={data:{...data,snapshot},head:{releaseId:row.release_id,catalogRevision:row.catalog_revision,dataSha256:row.data_sha256,snapshotSha256:row.source_snapshot_sha256,version:row.version},collections};
+    const presentation=runtimePresentation(snapshot,collections);
+    cached={data:{...data,snapshot:presentation.snapshot,repairedSemanticIds:[...new Set([...(data.repairedSemanticIds??[]),...presentation.repaired])]},head:{releaseId:row.release_id,catalogRevision:row.catalog_revision,dataSha256:row.data_sha256,snapshotSha256:row.source_snapshot_sha256,version:row.version},collections};
     nextCheck=Math.min(now()+5000,overlayDeadline);return cached;
   }
   return async(env:RuntimeCatalogEnv)=>{

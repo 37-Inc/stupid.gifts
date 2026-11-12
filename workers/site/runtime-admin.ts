@@ -5,6 +5,7 @@ import type {RuntimeCatalogView} from './runtime-data.ts';
 import type {SiteReleaseIdentity} from './index.ts';
 import type {SiteAssetManifest} from '../../lib/catalog/types.ts';
 import {SHOW_PRESETS,ACTIVE_SHOW_PRESET,selectShowPicks} from '../../static-site/lib/show-rehearsal.ts';
+import {adminCampaigns,adminHostedStatus} from './admin-state.ts';
 
 export async function runtimeAdminRequest(request:Request,env:RuntimeSiteEnv,view:RuntimeCatalogView,identity:SiteReleaseIdentity){
   if(!new URL(request.url).pathname.startsWith('/api/content-admin'))return;
@@ -21,6 +22,8 @@ export async function runtimeAdminRequest(request:Request,env:RuntimeSiteEnv,vie
     homepage:(view.collections['/collections/homepage']?.payload as {edition?:SiteAssetManifest['homepage']})?.edition??data.homepage,
     merchandising:data.merchandising} as SiteAssetManifest;
   return createContentAdminHandler({snapshot:data.snapshot,manifest,releaseIdentity:identity,showCollections,activeShow:active,now:Date.now,
+    campaigns:()=>adminCampaigns(env.CATALOG_DATA,data.snapshot.products,Date.now()),
+    hostedStatus:()=>adminHostedStatus(env.CATALOG_DATA),
     applyCollection:saved=>applyRuntimeCollection(env.DB,saved),readApplication:async id=>{
       const row=(await env.DB.prepare('SELECT state,result_json FROM content_admin_results WHERE request_id=?').bind(id).all<{state:string;result_json:string}>()).results[0];
       return row?{state:row.state,result:JSON.parse(row.result_json)}:null;

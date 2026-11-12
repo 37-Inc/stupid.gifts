@@ -103,6 +103,9 @@ export function validateHomepageDecision(value,brief){
   const edition=readHomepageEdition({schemaVersion:1,day:brief.day,anchors:value.anchors,rotation:value.rotation});
   const allowed=new Set(brief.candidates.map(p=>p.id));
   if(!edition||[...edition.anchors,...edition.rotation].some(id=>!allowed.has(id)))throw Error('editorial_homepage_invalid');
+  const selected=new Set([...edition.anchors,...edition.rotation]);
+  const groups=brief.candidates.filter(p=>selected.has(p.id)).flatMap(p=>p.merchandising?.variantGroup?[p.merchandising.variantGroup]:[]);
+  if(new Set(groups).size!==groups.length)throw Error('editorial_homepage_repeated_design');
   const prior=brief.previous,priorAnchors=new Set(prior.anchors);
   if(new Set(value.anchorReplacements.map(p=>p.id)).size!==value.anchorReplacements.length
     ||value.anchorReplacements.some(item=>!priorAnchors.has(item.id)||edition.anchors.includes(item.id)))

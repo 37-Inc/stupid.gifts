@@ -13,7 +13,7 @@ import {repairTitleQueue,INITIAL_TITLE_PRIORITY} from './title-repairs.mjs';
  * care. No catalog mutations, ownership takeovers, or extra publishing service.
  * An uncertain model dispatch retains its record and uses the last good edition.
  */
-export async function curateAutomationHomepage({runtime,db,seal,prior,day,merchandising={},repository,source,complete}){
+export async function curateAutomationHomepage({runtime,db,seal,prior,day,merchandising={},edits={},repository,source,complete}){
   const file=path.join(runtime.care,'homepage',day+'.json');
   let existingEdition;
   try{const edition=readHomepageEdition(JSON.parse(await runtime.state.bytes(file)));
@@ -54,7 +54,7 @@ export async function curateAutomationHomepage({runtime,db,seal,prior,day,mercha
       complete=request=>client.chat.completions.create(request);}
     const editor=createCatalogEditorial({complete,stages});
     const result=existingEdition?{state:'already_curated',edition:existingEdition}:await automatedHomepage({
-      db,revision:seal.projectionReceipt.catalog_revision,prior,day,merchandising,editor,save:edition=>runtime.state.put(file,edition)});
+      db,revision:seal.projectionReceipt.catalog_revision,prior,day,merchandising,edits,editor,save:edition=>runtime.state.put(file,edition)});
     try{
       const titles=await repairTitleQueue({runtime,db,revision:seal.projectionReceipt.catalog_revision,day,editor,
         exposedIds:[...result.edition.anchors,...result.edition.rotation],priorityIds:INITIAL_TITLE_PRIORITY});

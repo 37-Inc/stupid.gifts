@@ -6,9 +6,14 @@ import {canonicalJson} from './canonical-json.ts';
 /** Shared by staff writes and the existing homepage editor. A saved request is
  * not a publish: the conditional transaction records its actual application. */
 export async function applyRuntimeCollection(db:CatalogD1,request:ContentRequest){
-  if(!['collection','restore','active-show'].includes(request.action))throw new ContentAdminError(409,'coordinator_application_required');
+  if(!['collection','restore','active-show','product'].includes(request.action))throw new ContentAdminError(409,'coordinator_application_required');
   const read=async()=>(await db.prepare('SELECT state,result_json FROM content_admin_results WHERE request_id=?').bind(request.requestId).all<{state:string;result_json:string}>()).results[0];
   const prior=await read();if(prior){if(prior.state!=='applied')throw new ContentAdminError(409,'application_in_progress');return JSON.parse(prior.result_json);}
+  // Presentation edits share the existing append-only runtime revision service.
+  // Never write supplier facts, product identities, stock or native vectors.
+  const previous=request.action==='product'?(await db.prepare('SELECT payload_json FROM catalog_runtime_collections WHERE name=? ORDER BY revision DESC LIMIT 1')
+    .bind(request.resource).all<{payload_json:string}>()).results[0]:undefined;
+  const payload=request.action==='product'?{...(previous?JSON.parse(previous.payload_json):{}),...request.payload as object}:request.payload;
   const result={state:'applied',resource:request.resource,revision:request.revision,catalogRevision:request.baseCatalogRevision};
   try{await db.batch([
     db.prepare(`SELECT json(CASE WHEN EXISTS(SELECT 1 FROM catalog_runtime_head h JOIN catalog_runtime_publications p ON p.release_id=h.release_id WHERE h.singleton=1 AND h.enabled=1 AND p.catalog_revision=?)
@@ -17,7 +22,7 @@ export async function applyRuntimeCollection(db:CatalogD1,request:ContentRequest
       THEN 'true' ELSE 'runtime_collection_conflict' END)`)
       .bind(request.baseCatalogRevision,request.requestId,request.resource,request.revision,canonicalJson(request.payload),request.resource,request.revision),
     db.prepare('INSERT INTO catalog_runtime_collections(name,revision,request_id,payload_json) VALUES(?,?,?,?)')
-      .bind(request.resource,request.revision,request.requestId,canonicalJson(request.payload)),
+      .bind(request.resource,request.revision,request.requestId,canonicalJson(payload)),
     db.prepare("INSERT INTO content_admin_results(request_id,state,result_json,created_at) VALUES(?,'applied',?,?)")
       .bind(request.requestId,canonicalJson(result),request.createdAt),
     db.prepare('UPDATE catalog_runtime_head SET version=version+1 WHERE singleton=1'),

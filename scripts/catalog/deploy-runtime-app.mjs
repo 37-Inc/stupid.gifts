@@ -8,6 +8,7 @@ import {createHash} from 'node:crypto';
 import {automationRuntime,CATALOG_SCOPE as SCOPE} from './automation-runtime.mjs';
 import {buildRuntimeApp} from './build-runtime-app.mjs';
 import {canonicalJson} from '../../lib/catalog/canonical-json.ts';
+import {contentAdminSettings} from './content-admin-settings.mjs';
 
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url))),hash=b=>createHash('sha256').update(b).digest('hex');
 const UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -48,7 +49,7 @@ export async function deployRuntimeApp({runtime,source,root=ROOT,send=fetch,comm
     const current=await api('/versions/'+(await active()).version),bindings=current.resources?.bindings;
     if(!Array.isArray(bindings)||bindings.some(b=>!['DB','ASSETS','VECTORIZE','SEMANTIC_VECTORIZE','OPENAI_API_KEY','ENVIRONMENT','SEMANTIC_SEARCH_ENABLED','RUNTIME_CATALOG_ENABLED',
       'CONTENT_ADMIN_ENABLED','CONTENT_ADMIN_TEAM_DOMAIN','CONTENT_ADMIN_AUD','CONTENT_ADMIN_STAFF_EMAILS','CATALOG_DATA'].includes(b.name)))fail('bindings_need_review');
-    const variables={...Object.fromEntries(bindings.filter(b=>b.type==='plain_text').map(b=>[b.name,b.text])),ENVIRONMENT:'production',RUNTIME_CATALOG_ENABLED:'true'};
+    const variables={...Object.fromEntries(bindings.filter(b=>b.type==='plain_text').map(b=>[b.name,b.text])),...contentAdminSettings,ENVIRONMENT:'production',RUNTIME_CATALOG_ENABLED:'true'};
     const settingsSha256=hash(canonicalJson({variables,derived:bindings.find(b=>b.name==='SEMANTIC_VECTORIZE')?.index_name}));
     const key='app-releases/'+source+'/'+output.manifestSha256+'/'+settingsSha256+'/',save=(name,v)=>runtime.durable.putImmutable(key+name+'.json',Buffer.from(JSON.stringify(v)+'\n')),
       read=async name=>{const value=await runtime.durable.get(key+name+'.json');return value?json(value.bytes):null;};
@@ -87,6 +88,7 @@ export async function deployRuntimeApp({runtime,source,root=ROOT,send=fetch,comm
     if(uploaded.annotations?.['workers/tag']!==marker||uploaded.annotations?.['workers/message']!=='runtime-app:'+output.manifestSha256+'/'+workerSha256||!Array.isArray(actualBindings)
       ||actualBindings.find(b=>b.name==='DB')?.id!==SCOPE.databaseId||actualBindings.find(b=>b.name==='CATALOG_DATA')?.bucket_name!=='stupid-gifts-catalog-private'
       ||actualBindings.find(b=>b.name==='RUNTIME_CATALOG_ENABLED')?.text!=='true'
+      ||Object.entries(contentAdminSettings).some(([name,text])=>actualBindings.find(b=>b.name===name)?.text!==text)
       ||!actualBindings.some(b=>b.name==='OPENAI_API_KEY'&&b.type==='secret_text'))fail('uploaded_binding_changed');
     await save('uploaded',{schemaVersion:1,source,version,manifestSha256:output.manifestSha256,workerSha256,settingsSha256});
     let deployed=await active();

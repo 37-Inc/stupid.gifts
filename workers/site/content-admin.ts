@@ -28,7 +28,8 @@ async function body(request:Request):Promise<Record<string,unknown>>{
 }
 export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;manifest:SiteAssetManifest;releaseIdentity?:SiteReleaseIdentity;
   showCollections:Record<string,string[]>;activeShow:string;now:()=>number;
-  applyCollection?:(request:ContentRequest)=>Promise<unknown>;readApplication?:(id:string)=>Promise<unknown>}){
+  applyCollection?:(request:ContentRequest)=>Promise<unknown>;readApplication?:(id:string)=>Promise<unknown>;
+  campaigns?:()=>Promise<unknown>;hostedStatus?:()=>Promise<unknown>}){
   const {snapshot,manifest,now}=options;
   const metadata=readMerchandising(manifest.merchandising)??{};
   const identities=new Map([...snapshot.products,...snapshot.heldProducts].map(p=>[p.publicId,p]));
@@ -53,8 +54,10 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
     }else{if(!exact(p,'ids'))invalid();ids=p.ids;}
     if(!Array.isArray(ids)||!ids.length||ids.length>24||new Set(ids).size!==ids.length)invalid();
     if(ids.some(id=>typeof id!=='string'||! /^[a-zA-Z0-9._-]{1,100}$/.test(id)))invalid();
-    if(checkCurrent&&ids.some(id=>!snapshot.products.some(product=>product.publicId===id&&resolvePublicProduct(product,now()))))
+    const products=ids.map(id=>snapshot.products.find(product=>(product.publicId===id||resource==='/collections/homepage'&&product.id===id)&&resolvePublicProduct(product,now())));
+    if(checkCurrent&&products.some(p=>!p))
       throw new ContentAdminError(409,'collection_product_not_public');
+    if(checkCurrent&&new Set(products.map(p=>p!.publicId)).size!==products.length)invalid();
     return p;
   }
   return async(request:Request,env:SiteEnv)=>{
@@ -84,10 +87,11 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
             ||pending.matched_live_release===options.releaseIdentity.release_id));
           return response({serving:options.releaseIdentity??null,catalogRevision:snapshot.catalogRevision,owner,pending,lastRefresh,lastBuildFailure,
             publicationState:livePending?'live_awaiting_bookkeeping':pending?'pending_not_confirmed_live':'no_pending_build',
-            hostedSuccessor:'not_observed',canStartAnotherPublisher:false,requests:await Promise.all((await store.recent()).map(withApplication)),
-            applicationEnabled:Boolean(options.applyCollection),applications:{collections:options.applyCollection?'runtime_data':'draft_only',products:'draft_only',admissions:'draft_only'}});
+            hostedSuccessor:await options.hostedStatus?.()??'not_observed',canStartAnotherPublisher:false,requests:await Promise.all((await store.recent()).map(withApplication)),
+            applicationEnabled:Boolean(options.applyCollection),applications:{collections:options.applyCollection?'runtime_data':'draft_only',products:options.applyCollection?'runtime_data':'draft_only',admissions:'existing_coordinator_queue'}});
         }
         if(path==='/campaigns'){
+          if(options.campaigns)return response(await options.campaigns());
           return response({scope:'compiled_ranking_only',manualActions:null,privateFeed:'not_connected',
             verifiedPreferences:snapshot.products.filter(p=>usableCommissionPriority(merchandisingForProduct(p,metadata),now())>0)
               .map(p=>({publicId:p.publicId,asin:p.id,until:metadata[p.id].commissionUntil}))});
@@ -145,11 +149,11 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
       }
       const result=await store.save({requestId,resource,action,actor,reason:input.reason,baseCatalogRevision:input.catalogRevision,
         expectedRevision:Number(input.expectedRevision),payload},new Date(now()).toISOString());
-      if(options.applyCollection&&['collection','restore','active-show'].includes(action)){
+      if(options.applyCollection&&['collection','restore','active-show','product'].includes(action)){
         const application=await options.applyCollection(result.request);
         return response({...result,application,publication:'runtime_data_applied',applicationEnabled:true},200);
       }
-      return response({...result,publication:'not_requested',applicationEnabled:false},202);
+      return response({...result,publication:action==='admit'?'queued_for_existing_coordinator':'not_requested',applicationEnabled:false},202);
     }catch(error){return error instanceof ContentAdminError?response({error:error.message},error.status):response({error:'admin_temporarily_unavailable'},503);}
   };
 }

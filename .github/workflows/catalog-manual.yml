@@ -10,7 +10,7 @@ on:
         description: Code-only release, shadow, care/canary, editorial preview, or post-canary activation
         type: choice
         default: shadow
-        options: [shadow, code, full, photos, canary, editorial, activate, admit]
+        options: [shadow, code, full, photos, canary, editorial, activate, admit, admin]
       canary_asin:
         description: Exact existing public ASIN; required for canary or explicit activation after its acceptance
         type: string
@@ -85,7 +85,7 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' && needs.catalog.result == 'success' &&
       (inputs.mode == 'code' || inputs.mode == 'full' ||
-       inputs.mode == 'photos' || inputs.mode == 'canary' || inputs.mode == 'admit')
+       inputs.mode == 'photos' || inputs.mode == 'canary' || inputs.mode == 'admit' || inputs.mode == 'admin')
     runs-on: ubuntu-24.04
     environment: Production
     timeout-minutes: 360

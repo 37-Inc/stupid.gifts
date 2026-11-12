@@ -274,11 +274,15 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,a
       runtimeCatalog={schemaVersion:1,previousReleaseId:head.release_id,previousDataSha256:head.data_sha256,homepageRevision:latest};}}
   let homepageEdition=await routineHomepageEdition(calendar.day,prior.control.path,canaryId?file=>
     file===path.dirname(prior.control.path)+'/homepage-edition.json'?optional(file):null:optional);
+  if(runtimeCatalog){const {currentHomepageEdition}=await import('./homepage-editor.mjs');
+    homepageEdition=await currentHomepageEdition(db,homepageEdition);}
   const semanticSearch=routineSearchPolicy(await optional(CARE+'/semantic-search.json'));
   const merchandising=bundled?await loadAutomationMerchandising({runtime:RUNTIME,db,seal}):await routineMerchandising();
   if(automation?.homepage&&!photosOnly){try{
     const {curateAutomationHomepage}=await import('./automated-homepage.mjs');
-    const result=await curateAutomationHomepage({runtime:RUNTIME,db,seal,prior:homepageEdition,day:calendar.day,merchandising,repository:ROOT,source:SOURCE});
+    const rows=runtimeCatalog?(await db.prepare("SELECT c.name,c.revision,c.payload_json FROM catalog_runtime_collections c WHERE c.name LIKE '/products/%' AND c.revision=(SELECT max(v.revision) FROM catalog_runtime_collections v WHERE v.name=c.name)").all()).results:[];
+    const edits=Object.fromEntries(rows.map(row=>[row.name,{revision:row.revision,payload:JSON.parse(row.payload_json)}]));
+    const result=await curateAutomationHomepage({runtime:RUNTIME,db,seal,prior:homepageEdition,day:calendar.day,merchandising,edits,repository:ROOT,source:SOURCE});
     if(readHomepageEdition(result.edition))homepageEdition=result.edition;
     for(const [id,review] of Object.entries(result.titleReviews??{})){
       const old=merchandising[id];
