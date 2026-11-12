@@ -64,6 +64,9 @@ hard-coded cards, direct merchant-only links or special daily-job exceptions.
 
 The old filming-only endpoint and its separate client cards are retired. The
 owner-requested conversions are B01DVUSR1Y and B0DK82DBDG, tracked in `.34`.
+The preview observations expired November 11 at 20:20 UTC, and the live endpoint
+was verified empty November 12. Removing that expired code is independent of
+the still-queued canonical admissions; it does not claim those products are live.
 Only after genuine admission may their canonical public IDs lead Matan's runtime
 collection. Do not copy the expired preview photo/title records or renew their
 old deadlines. Normal catalog cards, pages, availability and photo refresh apply.
