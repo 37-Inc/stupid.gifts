@@ -2,8 +2,8 @@
 
 `roadmap-lbbz1.32` provides authenticated read/status, versioned draft requests
 and immediate presentation/collection edits in the existing Worker/D1.
-There is no dashboard, new Worker/service, scheduler, GitHub API token or second
-ingestion path. Staff access uses the owner-approved path-only Access app. The existing `/admin` and
+There is no dashboard, new Worker/service, scheduler or second ingestion path.
+Staff access uses the owner-approved path-only Access app. The existing `/admin` and
 `/api/admin` routes remain retired.
 
 ## Explicit boundary
@@ -26,9 +26,12 @@ that integration and prove an actual endpoint admission before enabling an
 immediate-dispatch credential or describing an addition as live. Do not run a
 second supplier batch or take over the existing publisher to demonstrate speed.
 
-The draft includes a **disabled** dispatch adapter for the approved repo-only
+The implementation includes a **disabled** dispatch adapter for the approved repo-only
 GitHub credential. `CONTENT_ADMIN_DISPATCH_ENABLED` remains `false`. Migration
 0021 and `GITHUB_CATALOG_DISPATCH_TOKEN` are not provisioned by app deployment.
+The owner-approved Actions-write/Metadata-read token for this repository was
+created November 12 and saved encrypted as that Cloudflare secret; it expires
+December 12, 2026. This does not activate dispatch or prove product admission.
 If later enabled, the adapter can only dispatch `catalog-manual.yml` on `main`
 in `admin` mode, after authenticated, same-origin, idempotent admission storage.
 It cannot send caller-chosen workflow/ref/ASIN inputs. A durable dispatch claim
@@ -60,8 +63,8 @@ Admissions return HTTP202, `state: awaiting_application`,
 `publication: queued_for_existing_coordinator`. Saving an admission
 does **not** call Amazon/OpenAI. The existing serialized coordinator consumes
 up to ten explicit staff requests after a completed morning run, or through
-manual workflow mode `admin`. There is no new clock or HTTP-to-GitHub dispatch
-credential. Unrelated pending care finishes first. A durable claim binds the
+manual workflow mode `admin`. The optional dispatch adapter above is disabled;
+there is no new clock. Unrelated pending care finishes first. A durable claim binds the
 exact ASINs and original date across retries; late requests stay queued. Existing
 identities (including held records) settle without refetching. Accepted runs
 report `catalog_identity_recorded` or `not_admitted`, not a promise that every

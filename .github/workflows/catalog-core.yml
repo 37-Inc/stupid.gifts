@@ -15,6 +15,7 @@ on:
       - '.github/workflows/app-deploy.yml'
       - 'migrations/d1/001[89]*.sql'
       - 'migrations/d1/0020*.sql'
+      - 'migrations/d1/0021*.sql'
       - 'workers/catalog-clock.mjs'
       - 'wrangler.catalog-clock.jsonc'
       - 'tests/runtime-*.test.mjs'
