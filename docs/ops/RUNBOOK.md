@@ -49,6 +49,11 @@ for shadow, canary, explicit activation and single-writer recovery, and
   the original `scheduled_at` to the same coordinator. Never run two clocks.
 - Log intended slot, actual start/delay, inventory `complete` versus `reused`,
   and native batch size/duration. A dispatch ACK is not a catalog acceptance.
+- Cloudflare wake timestamps need not land exactly on `:30:00.000`. Route by
+  the intended Pacific slot hour, normalize to that hour's `:30` due identity,
+  and let durable run identity handle duplicate wakes. A late wake is not a
+  new batch. Disabled/non-Pacific-slot wakes emit a bounded skip reason instead
+  of silently looking like successful dispatches.
 - Catalog config uses the existing 8 MiB metadata-sized reader, not the obsolete
   32 KiB control limit. The November 11 delayed morning intent saved 34,159 bytes
   of valid config (including canonical title/editorial reviews) and failed before
