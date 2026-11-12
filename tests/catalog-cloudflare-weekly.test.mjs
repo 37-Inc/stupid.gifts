@@ -1275,6 +1275,11 @@ test('exact staff admission shares unlocked preparation, saved retries and the e
   const first=await f.run('start');assert.equal(first.state,'attention',JSON.stringify(first));
   assert.equal(stopped,true);assert.equal(f.calls.getItems,1);assert.equal(f.calls.search,0);
   const counts={getItems:f.calls.getItems,chat:f.calls.chat,embedding:f.calls.embedding};
+  const resolve=f.dependencies.resolveToken,providerServices=[f.config.credentials.amazonId.service,f.config.credentials.amazonSecret.service,f.config.credentials.openai.service];
+  f.dependencies.resolveToken=async ref=>{
+    assert.ok(!providerServices.includes(ref.service),'Fully prepared additions must not require supplier/model credentials again');
+    return resolve(ref);
+  };
   const resumed=await f.run('resume');assert.equal(resumed.reason,'awaiting_reviewed_approval',JSON.stringify(resumed));
   const row=f.sql.prepare('SELECT * FROM products WHERE id=?').get('B000005000');
   assert.ok(row,JSON.stringify(f.sql.prepare('SELECT source_record_json FROM catalog_run_items WHERE run_id=?').all(f.config.runId)));

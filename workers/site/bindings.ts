@@ -32,6 +32,9 @@ export interface SearchStorage {
 export interface SemanticBudgetScope { environment: 'staging' | 'production'; index: string }
 
 export interface SiteEnv extends ContentAdminAuthEnv {
+  /** Exact owner-approved workflow dispatch only; no merchant/model credentials. */
+  CONTENT_ADMIN_DISPATCH_ENABLED?:string;
+  GITHUB_CATALOG_DISPATCH_TOKEN?:string;
   ASSETS: AssetBinding;
   /** Optional first-party search observations; absent DB never prevents search. */
   DB?: CatalogD1;

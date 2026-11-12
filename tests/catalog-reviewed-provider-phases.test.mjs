@@ -15,6 +15,7 @@ import { canonicalJson, sha256 } from '../scripts/catalog/migration.ts';
 import { editorialSourceHash } from '../scripts/ops/catalog-editorial-core.mjs';
 import { decodePgvectorSendBase64 } from '../scripts/catalog/pgvector-binary.ts';
 import { executeCatalog,parseArgs } from '../scripts/ops/prefetch-catalog.mjs';
+import {prepareCatalogProducts} from '../scripts/catalog/prepare-products.mjs';
 
 const NOW = '2026-11-06T20:00:00.000Z', LATER = '2026-11-06T21:00:00.000Z';
 const id = n => `B${String(n).padStart(9, '0')}`;
@@ -45,6 +46,24 @@ function memory() {
   const journal = () => createReviewedPhaseJournal({ initial: head, read, put, save: async next => { head = structuredClone(next); if (failure) { failure = false; throw Error('test_only_runner_terminated'); } } });
   return { objects, journal, put, read, failOnce() { failure = true; }, get head() { return structuredClone(head); } };
 }
+
+test('shared preparation restores evidence before use and saved exact additions never repeat providers or models', async () => {
+  const saved=memory(),phases=[exactProductAdmissionPhase([id(1)])],events=[];
+  let executions=0,modelCalls=0;
+  const run=journal=>prepareCatalogProducts({phases,runId:'staff-exact',journal,
+    evidence:{async restoreReceipt(){events.push('restore');},intent(){return {};},async amazon(){throw Error('test_only_unexpected_supplier');}},
+    store:{async getActiveCatalogIdentities(){return [];},async getProductSourceVersions(){return {}; }},
+    execute:async(options,_seed,_telemetry,store)=>{executions++;assert.equal(options.discoveryEditor,undefined);
+      assert.equal(options.longEditorial,false);assert.equal(events.at(-1),'restore');
+      await store.upsertProduct({...product},editorialSourceHash(product));return {inserted:1};},
+    complete:async()=>{modelCalls++;throw Error('test_only_unexpected_admission_model');},now:()=>NOW,
+    progress:value=>{assert.equal(value.totalPhases,1);assert.ok(Number.isSafeInteger(value.elapsedMs));}});
+  const journal=saved.journal();await journal.receipt(await saved.put({fixture:'original-observation'}));
+  const first=await run(journal),second=await run(saved.journal());
+  assert.deepEqual(second,first);assert.equal(executions,1);assert.equal(modelCalls,0);
+  assert.deepEqual(events,['restore','restore']);
+  assert.deepEqual(first[0].mutations[0].intent.expectedSourceById,{[id(1)]:null});
+});
 async function sqliteFixture(t) {
   const sqlite = new DatabaseSync(':memory:'); t.after(() => sqlite.close());
   for (const name of (await readdir(new URL('../migrations/d1/', import.meta.url))).filter(n => /^\d{4}.*\.sql$/.test(n)).sort())

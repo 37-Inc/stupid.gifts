@@ -26,6 +26,31 @@ that integration and prove an actual endpoint admission before enabling an
 immediate-dispatch credential or describing an addition as live. Do not run a
 second supplier batch or take over the existing publisher to demonstrate speed.
 
+The draft includes a **disabled** dispatch adapter for the approved repo-only
+GitHub credential. `CONTENT_ADMIN_DISPATCH_ENABLED` remains `false`. Migration
+0021 and `GITHUB_CATALOG_DISPATCH_TOKEN` are not provisioned by app deployment.
+If later enabled, the adapter can only dispatch `catalog-manual.yml` on `main`
+in `admin` mode, after authenticated, same-origin, idempotent admission storage.
+It cannot send caller-chosen workflow/ref/ASIN inputs. A durable dispatch claim
+prevents duplicate POSTs after retries or lost acknowledgements. Its private
+status is distinct from product publication; rejected/unknown dispatch leaves
+the original admission queued for the existing coordinator. Provider responses
+and credentials are never stored in the request or dispatch record. Merely
+enabling this adapter would still use the existing serialized publication
+queue: finish that separation and its endpoint proof before changing the flag.
+The current GitHub dispatch API's numeric workflow-run ID is retained when
+acknowledged, so status can identify the real run rather than infer it from a
+timestamp. A malformed/lost response remains unknown and is not redispatched.
+
+`prepareCatalogProducts` is the shared preparation entry point. It restores
+saved provider evidence and exact prepared phases before initializing a model
+client; retrying a prepared phase does not collect or generate again. It owns
+no writer, global pending pointer, or publication. The existing routine driver
+calls it before writer acquisition, then applies its version-fenced mutations.
+When every phase is already prepared, applying the saved result no longer
+requires resolving Amazon/OpenAI credentials again; Cloudflare access remains
+necessary for the actual commit and readback.
+
 Article policy is unchanged: ordinary discovery/admission creates a product page
 with factual short copy. `--long-editorial` is an explicitly requested optional
 mode, not a ranking, commission or traffic threshold; generated articles still

@@ -48,7 +48,8 @@ export async function deployRuntimeApp({runtime,source,root=ROOT,send=fetch,comm
       publicAnalytics:{enabled:true,posthogHost:'https://us.i.posthog.com',posthogKey:'phc_ATVKSPwDYTRfX9qDtDVLzZuXQcNdV9d55SjC8bHtuU8w'}});
     const current=await api('/versions/'+(await active()).version),bindings=current.resources?.bindings;
     if(!Array.isArray(bindings)||bindings.some(b=>!['DB','ASSETS','VECTORIZE','SEMANTIC_VECTORIZE','OPENAI_API_KEY','ENVIRONMENT','SEMANTIC_SEARCH_ENABLED','RUNTIME_CATALOG_ENABLED',
-      'CONTENT_ADMIN_ENABLED','CONTENT_ADMIN_TEAM_DOMAIN','CONTENT_ADMIN_AUD','CONTENT_ADMIN_STAFF_EMAILS','CATALOG_DATA'].includes(b.name)))fail('bindings_need_review');
+      'CONTENT_ADMIN_ENABLED','CONTENT_ADMIN_TEAM_DOMAIN','CONTENT_ADMIN_AUD','CONTENT_ADMIN_STAFF_EMAILS','CONTENT_ADMIN_DISPATCH_ENABLED',
+      'GITHUB_CATALOG_DISPATCH_TOKEN','CATALOG_DATA'].includes(b.name)))fail('bindings_need_review');
     const variables={...Object.fromEntries(bindings.filter(b=>b.type==='plain_text').map(b=>[b.name,b.text])),...contentAdminSettings,ENVIRONMENT:'production',RUNTIME_CATALOG_ENABLED:'true'};
     const settingsSha256=hash(canonicalJson({variables,derived:bindings.find(b=>b.name==='SEMANTIC_VECTORIZE')?.index_name}));
     const key='app-releases/'+source+'/'+output.manifestSha256+'/'+settingsSha256+'/',save=(name,v)=>runtime.durable.putImmutable(key+name+'.json',Buffer.from(JSON.stringify(v)+'\n')),
@@ -59,7 +60,8 @@ export async function deployRuntimeApp({runtime,source,root=ROOT,send=fetch,comm
     const derived=bindings.find(b=>b.name==='SEMANTIC_VECTORIZE');if(!derived||derived.type!=='vectorize')fail('semantic_binding_missing');
     config.vectorize[1].index_name=derived.index_name;
     if(bindings.find(b=>b.name==='DB')?.id!==SCOPE.databaseId||bindings.find(b=>b.name==='VECTORIZE')?.index_name!==SCOPE.indexName
-      ||!bindings.some(b=>b.name==='OPENAI_API_KEY'&&b.type==='secret_text'))fail('bindings_need_review');
+      ||!bindings.some(b=>b.name==='OPENAI_API_KEY'&&b.type==='secret_text')
+      ||bindings.some(b=>b.name==='GITHUB_CATALOG_DISPATCH_TOKEN'&&b.type!=='secret_text'))fail('bindings_need_review');
     await fs.writeFile(configPath,JSON.stringify(config));
     const marker='runtime-app-'+source.slice(0,12)+'-'+output.manifestSha256.slice(0,12)+'-'+settingsSha256.slice(0,12),deploymentMarker=marker+'-activate';
     const original=await read('prepared');if(original&&(original.manifestSha256!==output.manifestSha256||original.workerSha256!==workerSha256||original.settingsSha256!==settingsSha256))fail('package_changed');
@@ -89,7 +91,8 @@ export async function deployRuntimeApp({runtime,source,root=ROOT,send=fetch,comm
       ||actualBindings.find(b=>b.name==='DB')?.id!==SCOPE.databaseId||actualBindings.find(b=>b.name==='CATALOG_DATA')?.bucket_name!=='stupid-gifts-catalog-private'
       ||actualBindings.find(b=>b.name==='RUNTIME_CATALOG_ENABLED')?.text!=='true'
       ||Object.entries(contentAdminSettings).some(([name,text])=>actualBindings.find(b=>b.name===name)?.text!==text)
-      ||!actualBindings.some(b=>b.name==='OPENAI_API_KEY'&&b.type==='secret_text'))fail('uploaded_binding_changed');
+      ||!actualBindings.some(b=>b.name==='OPENAI_API_KEY'&&b.type==='secret_text')
+      ||bindings.some(b=>b.name==='GITHUB_CATALOG_DISPATCH_TOKEN')&&!actualBindings.some(b=>b.name==='GITHUB_CATALOG_DISPATCH_TOKEN'&&b.type==='secret_text'))fail('uploaded_binding_changed');
     await save('uploaded',{schemaVersion:1,source,version,manifestSha256:output.manifestSha256,workerSha256,settingsSha256});
     let deployed=await active();
     if(deployed.version!==version){

@@ -41,14 +41,14 @@ import { canonicalTime } from '../../lib/catalog/snapshot.ts';
 import {repairApprovedNewSlugs} from './new-product-slug-repair.ts';
 import {syncApprovedSearchDelta} from './sync-semantic-delta.ts';
 import {maintenanceDigest} from './maintenance-state.ts';
-import {createEditorialStages,createCatalogEditorial} from './catalog-editorial.mjs';
-import {createReviewedPhaseJournal,prepareReviewedPhase,applyReviewedPhase,reconcileReviewedPhaseOwner} from './reviewed-provider-phases.mjs';
+import {prepareCatalogProducts} from './prepare-products.mjs';
+import {createReviewedPhaseJournal,applyReviewedPhase,reconcileReviewedPhaseOwner} from './reviewed-provider-phases.mjs';
 import {routineUploadRetry} from './routine-upload-retry.ts';
 import {automationRuntime} from './automation-runtime.mjs';
 import {loadSavedAdmission,savedAdmissionEvidence} from './saved-admission.mjs';
 import {repairSavedAdmission as repairSavedAdmissionFromOutputs,retainedFailedAdmission} from './saved-admission-repair.mjs';
 import amazonCreators from '../../lib/amazon-creators.js';
-import { automatedCatalogPhases,automatedCatalogExecutor,exactProductAdmissionPhase,validateCatalogAutomation,dailyCatalogPhases, pacificCatalogCalendar, runDailyCatalogWithBackend, withCatalogCadence, validCatalogRunKey } from '../ops/catalog-daily.mjs';
+import { automatedCatalogPhases,exactProductAdmissionPhase,validateCatalogAutomation,dailyCatalogPhases, pacificCatalogCalendar, runDailyCatalogWithBackend, withCatalogCadence, validCatalogRunKey } from '../ops/catalog-daily.mjs';
 import {validateExecutionAdoption,validateExecutionAdoptionConfigs} from './execution-adoption.ts';
 import type {ExecutionAdoption} from './execution-adoption.ts';
 import {encodeReviewedUploadActivationApproval,readReviewedUploadActivation} from '../../lib/catalog/build-requests.ts';
@@ -571,7 +571,8 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       if(cp.phase==='created'||cp.phase==='phases_running'){
         const phases=config.cadence!.automation?automatedCatalogPhases(config.cadence!.automation,{runId:config.runId,photosOnly:config.cadence!.photosOnly})
           :[exactProductAdmissionPhase(config.cadence!.admitAsins)];
-        const needsProvider=!(await journal.read('provider-phases-complete'));
+        const needsApplication=!(await journal.read('provider-phases-complete'));
+        const needsProvider=needsApplication&&(await Promise.all(phases.map((_,index)=>journal.read(`phase-${index}-prepared`)))).some(value=>!value);
         const needsModel=needsProvider&&Boolean(config.cadence!.automation?.discovery||config.cadence!.admitAsins);
         const preparationIdentity={schemaVersion:1,kind:'product-preparation',runId:config.runId,configSha256:options.configSha256};
         if(cp.pins.productPreparation&&canonicalJson(await ws.readArtifact(cp.pins.productPreparation))!==canonicalJson(preparationIdentity))
@@ -591,39 +592,20 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
             const ref=await ws.putArtifact({schemaVersion:1,kind:'reviewed-short-copy',...input},{kind:'phase',observedAt:reviewedAt});
             await journal.put(key,ref);return ref;
           }});
-        // Hydrate in original journal order BEFORE serving ANY cached collection,
-        // draft or embedding. Re-running evidence.amazon here would renew rights.
-        await journal.restore(evidence);
-        const savedStages=createEditorialStages({read:(key:string)=>journal.read(key),put:(key:string,value:unknown)=>journal.put(key,value),now});
-        const stages={async run(stage:string,input:unknown,action:()=>Promise<unknown>){
-          const result=await savedStages.run(stage,input,action);
-          return stage==='embedding'&&result.reused?{...result,value:await journal.embeddingResponse(input,result.value)}:result;
-        }};
         const preparationStore=createD1CatalogPreparationStore({db,runId:config.runId,catalogRevision:config.catalogRevision,preservePermanentListings:true});
         // Preparation saves the exact calls and original evidence without a
         // catalog writer. An interrupted preparation resumes its saved stages.
         // Old runs which already own a writer retain it; never release or adopt
         // someone else's in-flight mutation merely to use this new path.
-        const preparedPhases:Array<Awaited<ReturnType<typeof prepareReviewedPhase>>>=[];
-        if(needsProvider){
+        let preparedPhases:Awaited<ReturnType<typeof prepareCatalogProducts>>=[];
+        if(needsApplication){
           const prepare=async()=>{
-            let editor;
-            if(needsModel){const {default:OpenAI}=await import('openai');const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0});
-              editor=createCatalogEditorial({stages,complete:(request:unknown)=>client.chat.completions.create(request as never)});}
             const {executeCatalog}=await import('../ops/prefetch-catalog.mjs');
-            const execute=automatedCatalogExecutor(executeCatalog);
-            for(let index=0;index<phases.length;index++){
-              const key=`phase-${index}`,started=Date.now();let supplierCall=0;
-              const progress=(stage:'start'|'complete')=>console.log(JSON.stringify({state:'catalog_phase_progress',phase:index+1,
-                totalPhases:phases.length,stage,elapsedMs:Date.now()-started}));
-              progress('start');
-              const providerEvidence={...evidence,amazon:async(...args:Parameters<typeof evidence.amazon>)=>args[0]==='getItems'
-                ?(await stages.run('refresh-collect',{run:config.runId,phase:index,call:supplierCall++,ids:args[3]},()=>evidence.amazon(...args))).value
-                :evidence.amazon(...args)};
-              preparedPhases.push(await prepareReviewedPhase({key,journal,execute,options:{...phases[index],editorialStages:stages,
-                ...(phases[index].discoveryNewOnly&&!config.cadence!.admitAsins?{discoveryEditor:editor}:{})},store:preparationStore,evidence:providerEvidence,runId:config.runId}));
-              progress('complete');
-            }
+            let client:import('openai').default|undefined;
+            preparedPhases=await prepareCatalogProducts({phases,runId:config.runId,journal,evidence,store:preparationStore,now,execute:executeCatalog,
+              complete:needsModel?async(request:unknown)=>{if(!client){const {default:OpenAI}=await import('openai');client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0});}
+                return client.chat.completions.create(request as never);}:undefined,
+              progress:(value:unknown)=>console.log(JSON.stringify({state:'catalog_phase_progress',...value as object}))});
           };
           try{if(environment)await scopedProviders(environment,prepare);else await prepare();}
           catch(error){return{state:'attention',phase:cp.phase,errorCode:safeCode(error),
@@ -666,7 +648,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           await journal.put('provider-phases-complete',{schemaVersion:1,summary,merchandising,changedIds:[...changed],admittedIds:[...admitted]});
         };
         try{
-          if(needsProvider)await run();
+          if(needsApplication)await run();
           const complete=await journal.read('provider-phases-complete') as {summary:Record<string,unknown>};
           const phaseComplete=await ws.putArtifact(finalization(complete.summary),{kind:'publication',observedAt:now()});
           await write({phase:'phases_complete',owner:cursor.current,phaseComplete,pins:{...cp.pins,automationJournal:state().automationJournal as ArtifactRef}});
