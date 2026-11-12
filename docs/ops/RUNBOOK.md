@@ -165,17 +165,23 @@ a listing or renew its deadline.
 Owner-picked admissions use `prepare --run <label> --admit-asins ASIN1,ASIN2`,
 then the same saved run. No unrelated fetch/search or automatic campaign joining;
 this does not change scheduled cadence.
-For hosted admission, dispatch manual `admit` with `admit_asins` in the existing
-GitHub workflow, after unrelated pending publication has accepted. This is the
-same publisher and exact-ASIN operator, not permission to run a local fallback.
+For staff requests, POST the exact ASINs through the [content admin API](CONTENT_ADMIN.md),
+then use the existing workflow's `admin` mode or next completed morning run.
+Direct operator `admit` with `admit_asins` uses that same exact-ASIN admission
+pipeline. Both wait for unrelated pending publication to accept. Neither runs
+discovery, refreshes unrelated gifts, rebuilds the application, or permits a
+local fallback publisher. A queued request is not proof of public admission.
 
 ## Publication, recovery and acceptance
 
 The [runtime catalog](RUNTIME_CATALOG.md) separates app deployment from routine
-catalog publication. The private [content admin API](CONTENT_ADMIN.md) stays
-default-off until staff Access is verified. Runtime collection writes use the
-same versioned service as the daily homepage editor; admissions/copy/visibility
-remain explicit HTTP202 drafts, not new provider jobs or accepted products.
+catalog publication. The private [content admin API](CONTENT_ADMIN.md) is enabled
+behind the verified path-only staff Access policy. Factual copy, visibility,
+collection ordering, active-show selection and restore use the shared runtime
+revision service: HTTP200 with `application.state:applied` is a committed edit,
+visible within five seconds without a deploy. Admissions alone return HTTP202
+and wait for the existing coordinator; that response does not mean a product
+has been admitted or any supplier/model call has run.
 
 After runtime cutover, code/UI changes use the manual `Application deploy`
 workflow (`app-deploy.yml`, mode `deploy`), independent of catalog care. It has

@@ -96,21 +96,29 @@ test('runtime pages retain saved/custom shows, submit-only search, product links
   assert.equal((await f.request('/',{method:'HEAD'})).body,null);
 });
 
-test('runtime preview mounting follows the resolved show, never archived lineups',async t=>{
+test('new exact products and show order publish through data alone, preserving an archived lineup',async t=>{
   const f=await runtimeFixture(t),props=async path=>JSON.parse((await(await f.request(path)).text()).match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);
-  assert.equal((await props('/h')).showPreviews,false);
-  assert.equal((await props('/h/billy-ray')).showPreviews,false);
-  assert.equal((await props('/h/matan')).showPreviews,true);
-  f.collections[1].payload_json=JSON.stringify({name:'matan'});f.collections[1].revision++;f.head.version++;f.time.now+=6000;
-  assert.equal((await props('/h')).showPreviews,true);
-  assert.equal((await props('/h/billy-ray')).showPreviews,false);
-  f.collections[1].payload_json=JSON.stringify({name:'billy-ray'});f.collections[1].revision++;f.head.version++;f.time.now+=6000;
-  assert.equal((await props('/h')).showPreviews,false);
-  // The hydrated preview component returns cards directly, so its mount must
-  // be a child of the same grid before the ordinary saved ProductCards.
-  const app=await fs.readFile(new URL('../static-site/runtime/App.tsx',import.meta.url),'utf8');
-  assert.match(app,/<Grid products=\{props.products\} show>\{props.showPreviews&&<ShowPreviews\/>\}<\/Grid>/);
-  assert.match(app,/className="catalog-grid" aria-label="Gifts">\{children\}\{products.map/);
+  f.collections.push({name:'/collections/billy-ray',revision:1,payload_json:JSON.stringify({ids:[f.products[1].publicId,f.products[0].publicId]})});
+  f.head.version++;f.time.now+=6000;
+  const archived=await props('/h/billy-ray'),before=await(await f.request('/.well-known/catalog-release.json')).json();
+  const additions=['B01DVUSR1Y','B0DK82DBDG'].map((id,i)=>({...f.products[0],id,publicId:uuid(100+i),slug:'new-exact-gift-'+i,
+    title:'New exact gift '+i,description:'A current supplier-backed description '+i+'.',affiliateUrl:`https://www.amazon.com/dp/${id}?tag=goose-gifts-37-20`}));
+  f.data.snapshot.products.push(...additions);f.data.productOrder.push(...additions.map(p=>p.publicId));
+  f.data.snapshot.catalogRevision='two-product-admission';f.data.releaseId='accepted-two-products';await f.publish();
+  f.collections.push({name:'/collections/matan',revision:1,payload_json:JSON.stringify({ids:[...additions.map(p=>p.publicId),f.products[2].publicId]})});
+  f.collections[1].revision++;f.collections[1].payload_json=JSON.stringify({name:'matan'});f.head.version++;f.time.now+=6000;
+  for(const route of ['/h','/h/matan']){
+    const page=await props(route);assert.deepEqual(page.products.map(p=>p.id),[...additions.map(p=>p.id),f.products[2].id]);
+    assert.equal(Object.hasOwn(page,'showPreviews'),false);
+  }
+  assert.deepEqual((await props('/h/billy-ray')).products,archived.products);
+  for(const p of additions){const detail=await f.request('/gifts/'+p.slug),html=await detail.text();
+    assert.equal(detail.status,200);assert.ok(html.includes(p.title));assert.ok(html.includes(p.description));assert.ok(html.includes(p.affiliateUrl));}
+  const cards=await(await f.request('/api/catalog-gifts?ids='+additions.map(p=>p.publicId).join(',')+'&view=cards')).json();
+  assert.deepEqual(cards.products.map(p=>p.id),additions.map(p=>p.id));
+  const after=await(await f.request('/.well-known/catalog-release.json')).json();
+  assert.equal(after.code_sha,before.code_sha);assert.equal(after.release_id,before.release_id);assert.equal(after.catalog_revision,'two-product-admission');
+  assert.equal((await f.request('/api/show-preview')).status,404);
 });
 test('one runtime correction reaches cards, detail, real keyword search and shows; unlisting hides shopping without deleting URLs',async t=>{
   const f=await runtimeFixture(t),p=f.products[0];

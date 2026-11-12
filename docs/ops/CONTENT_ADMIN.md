@@ -35,8 +35,29 @@ excluded; correct keyword results remain available without a model call.
 
 The [runtime catalog](RUNTIME_CATALOG.md) publishes data independently of app
 builds. No temporary GitHub auto-dispatch bridge or direct product-table writer
-is added.
-Live staff authentication must be independently verified before `.32` closes.
+is added. Path-only staff authentication and immediate runtime edits were
+live-verified for `.32`; the first real queued-admission proof is tracked in `.34`.
+
+## Add an exact product without a full refresh
+
+1. POST `/admissions` once per owner-selected ASIN. Retain the request ID.
+2. Run the existing hosted workflow in `admin` mode, or let the next completed
+   morning run consume the queue. If another catalog run is pending, finish that
+   original run first; do not create a replacement batch or a local publisher.
+3. The same normal admission pipeline fetches only the claimed ASINs, deduplicates
+   against all identities, reviews factual short copy and saves embeddings once.
+   It does not run discovery, refresh the rest of the catalog, or build/deploy the
+   application. Ordinary admission quality/availability checks still apply.
+4. Read the request result and independently verify the accepted catalog receipt,
+   public product and hosted successor. Queued is not published, and an identity
+   recorded as held is not a publicly purchasable gift.
+5. PUT its public ID into a show collection. The usual runtime collection service
+   supplies the same product page, photo, copy and affiliate link everywhere.
+
+This is the standard route for one-offs, not a special filming hook in daily
+care. There is no preview-only product endpoint or parallel product database.
+Accepted products enter ordinary stock/photo refresh and native/serving index
+delivery. Do not reuse expired preview imagery or extend its old observation.
 
 ## Authentication and rollout
 

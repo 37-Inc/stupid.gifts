@@ -4,7 +4,6 @@ import type { ShowPreset } from "../lib/show-rehearsal";
 import { ProductCard } from "./ProductCard";
 import { Search } from "./Search";
 import { ShowLineup } from "./ShowLineup";
-import { ShowPreviews } from "./ShowPreviews";
 import { SHOW_LINEUP_BOOTSTRAP } from "../lib/show-lineup";
 
 export function ShowShortlist({ preset, action = "/h" }: {
@@ -19,7 +18,6 @@ export function ShowShortlist({ preset, action = "/h" }: {
     <Search action={action} autoSearch={false}>
       <ShowLineup catalogRevision={catalog.catalogRevision} action={action}>
       {picks.length ? <div className="catalog-grid" aria-label="Gifts">
-        {(!preset || preset === "matan") && <ShowPreviews />}
         {picks.map((product, index) => <ProductCard key={product.id} product={product}
           lead={index === 0} eager context="show-curated" />)}
       </div> : <p>These picks are being refreshed. <a href="/">Browse all gifts.</a></p>}
