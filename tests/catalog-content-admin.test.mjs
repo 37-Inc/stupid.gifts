@@ -78,6 +78,15 @@ test('private status distinguishes already serving from bookkeeping pending and 
   assert.equal(state.hostedSuccessor,'not_observed');assert.equal(state.canStartAnotherPublisher,false);assert.equal(state.applicationEnabled,false);
   assert.equal(f.counts().writes,0);
 });
+test('signed-in Access return navigation can read status; cross-site fetches and writes stay denied',async t=>{
+  const f=await fixture(t),navigation={'Sec-Fetch-Site':'cross-site','Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'};
+  const response=await f.call('/status',{headers:navigation});assert.equal(response.status,200);
+  assert.equal(response.headers.get('Access-Control-Allow-Origin'),null);assert.equal(f.counts().writes,0);
+  assert.equal((await f.call('/status',{auth:null,headers:navigation})).status,403);
+  assert.equal((await f.call('/status',{headers:{...navigation,'Sec-Fetch-Mode':'cors','Sec-Fetch-Dest':'empty'}})).status,403);
+  assert.equal((await f.call('/products/public-1',{method:'PUT',payload:f.edit({title:'New title'}),headers:navigation})).status,403);
+  assert.equal(f.counts().writes,0);
+});
 test('admin published preview uses the same permanent fallback, not expired supplier copy',async t=>{
   const f=await fixture(t),product=f.snapshot.products[0],base=structuredClone(product);
   product.persistent=base;product.title='EXPIRED SUPPLIER TITLE';product.description='EXPIRED SUPPLIER COPY';
