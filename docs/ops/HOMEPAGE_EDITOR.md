@@ -7,6 +7,11 @@ recommendation service, per-visitor AI or category whitelist. Failure reuses the
 last good edition and does not stop catalog care. The local Codex writer stays
 paused. See [HOSTED_CATALOG.md](HOSTED_CATALOG.md) for activation and recovery.
 
+Runtime preparation uses the latest applied staff homepage edition, not an old
+local seed. Candidate review uses the same cumulative factual-copy/visibility
+projection as public pages. Explicitly reviewed duplicate-design groups may
+appear only once in an edition; there are no inferred keyword/category gates.
+
 ## Candidate pool and editorial judgment
 
 The hosted editor uses the selection rules below automatically. The local

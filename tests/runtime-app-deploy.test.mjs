@@ -7,6 +7,7 @@ import {deployRuntimeApp} from '../scripts/catalog/deploy-runtime-app.mjs';
 import {CATALOG_SCOPE as SCOPE} from '../scripts/catalog/automation-runtime.mjs';
 import {bootstrapAttention,bootstrapAccounting} from '../scripts/catalog/bootstrap-runtime-catalog.mjs';
 import {createCatalogD1Rest} from '../scripts/catalog/d1-write-rest.ts';
+import {contentAdminSettings} from '../scripts/catalog/content-admin-settings.mjs';
 after(stop);
 test('bootstrap preserves the exact safe coordinator error instead of hiding it, without logging raw provider output',()=>{
   assert.deepEqual(bootstrapAttention({errorCode:'publication_activation_pending',phase:'publishing',failureAt:'retention_line_16',stderr:'SECRET'}),
@@ -58,6 +59,7 @@ function fixture({lostActivation=false,lostUpload=false}={}){
     assert.equal(options.env.CLOUDFLARE_API_TOKEN,'SYNTHETIC_TOKEN');assert.ok(writes.some(k=>k.endsWith('/upload-dispatched.json')));
     const configPath=args[args.indexOf('--config')+1],config=JSON.parse(await readFile(configPath,'utf8'));
     assert.equal(config.keep_vars,true);assert.equal(config.vars.SEMANTIC_SEARCH_ENABLED,'true');assert.equal(config.vectorize[1].index_name,'actual-existing-search');
+    for(const [name,value]of Object.entries(contentAdminSettings))assert.equal(config.vars[name],value);
     const bytes=await readFile(path.join(path.dirname(configPath),'app-manifest.json'));state.metadata=JSON.parse(bytes);
     state.manifestSha256=(await import('node:crypto')).createHash('sha256').update(bytes).digest('hex');
     state.tag=args[args.indexOf('--tag')+1];state.message=args[args.indexOf('--message')+1];state.uploads++;state.uploaded=true;

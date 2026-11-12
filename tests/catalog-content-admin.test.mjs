@@ -6,6 +6,7 @@ import {generateKeyPair,exportJWK,SignJWT,createLocalJWKSet} from 'jose';
 import {createContentRequestStore} from '../lib/catalog/content-admin.ts';
 import {contentAdminActor} from '../workers/site/content-admin-auth.ts';
 import {createSiteWorker} from '../workers/site/index.ts';
+import {createContentAdminHandler} from '../workers/site/content-admin.ts';
 
 const NOW=Date.parse('2026-11-11T09:00:00Z'),ISSUER='https://test-content-admin.cloudflareaccess.com',AUD='a'.repeat(64);
 const pair=await generateKeyPair('RS256'),jwk={...await exportJWK(pair.publicKey),kid:'admin-fixture',alg:'RS256',use:'sig'},
@@ -89,7 +90,7 @@ test('exact-ASIN requests dedup ALL identities and idempotently save without sta
   for(const asin of ['B000000001','B000000099'])assert.equal((await f.call('/admissions',{method:'POST',payload:f.edit({asin})})).status,409);
   const a=await f.call('/admissions',{method:'POST',payload,headers:key}),b=await f.call('/admissions',{method:'POST',payload,headers:key});
   assert.equal(a.status,202);assert.equal(b.status,202);const saved=await b.json();assert.equal(saved.replayed,true);
-  assert.equal(saved.request.state,'awaiting_application');assert.equal(saved.publication,'not_requested');assert.equal(f.counts().writes,1);
+  assert.equal(saved.request.state,'awaiting_application');assert.equal(saved.publication,'queued_for_existing_coordinator');assert.equal(f.counts().writes,1);
   assert.equal((await f.call('/admissions',{method:'POST',payload:f.edit({asin:'B000000778'}),headers:key})).status,409);
   assert.equal((await f.call('/admissions',{method:'POST',payload})).status,409,'Different key cannot queue the same ASIN twice at revision zero');
 });
@@ -104,6 +105,17 @@ test('canonical copy/visibility are versioned drafts, preserve identity and reje
     assert.equal((await f.call('/products/public-1',{method:'PUT',payload:f.edit(payload,{expectedRevision:1})})).status,400);
   assert.equal((await f.call('/products/public-1',{method:'PUT',payload:f.edit({title:'Valid title'},{catalogRevision:'old'})})).status,409);
   assert.deepEqual(f.sql.prepare('SELECT * FROM products ORDER BY id').all(),before);assert.equal(f.counts().writes,2,'Stale CAS attempts are harmless conditional INSERTs');
+});
+test('enabled runtime adapter applies authenticated factual edits and reports the real application',async t=>{
+  const f=await fixture(t),applied=[];
+  const handler=createContentAdminHandler({snapshot:f.snapshot,manifest:{merchandising:{}},showCollections:{},activeShow:'matan',now:()=>NOW,
+    applyCollection:async request=>{applied.push(request);return{state:'applied',revision:request.revision};}});
+  const response=await handler(new Request('https://stupid.gifts/api/content-admin/products/public-1',{method:'PUT',headers:{
+    'Cf-Access-Jwt-Assertion':await token(),Origin:'https://stupid.gifts','Content-Type':'application/json','Idempotency-Key':'live-adapter-fixture'},
+    body:JSON.stringify(f.edit({title:'Reviewed factual handset',description:'A wired handset.'}))}),f.env);
+  assert.equal(response.status,200);assert.equal((await response.json()).application.state,'applied');
+  assert.equal(applied[0].actor,'staff-fixture');assert.equal(applied[0].action,'product');
+  assert.equal(f.sql.prepare('SELECT public_id FROM products WHERE id=?').get('B000000001').public_id,'public-1');
 });
 test('home and show collections save/order/activate/restore without changing live cards or invoking ingestion',async t=>{
   const f=await fixture(t),ids=['public-2','public-1'];
@@ -122,6 +134,12 @@ test('lost INSERT acknowledgement settles by exact readback; history is append-o
   f.loseAck();const saved=await f.store.save(input,new Date(NOW).toISOString());assert.equal(saved.request.revision,1);
   assert.equal((await f.store.save(input,new Date(NOW+1000).toISOString())).replayed,true);assert.equal(f.counts().writes,1);
   assert.throws(()=>f.sql.exec('DELETE FROM content_admin_requests'),/retained/);assert.throws(()=>f.sql.exec("UPDATE content_admin_requests SET reason='changed'"),/append-only/);
+});
+test('homepage accepts existing merchant IDs but cannot duplicate a product through aliases',async t=>{
+  const f=await fixture(t),edition={...f.edition,anchors:f.snapshot.products.slice(0,6).map(p=>p.id)};
+  assert.equal((await f.call('/collections/homepage',{method:'PUT',payload:f.edit({edition})})).status,202);
+  edition.rotation=[f.snapshot.products[0].publicId,...edition.rotation.slice(1)];
+  assert.equal((await f.call('/collections/homepage',{method:'PUT',payload:f.edit({edition},{expectedRevision:1})})).status,400);
 });
 test('concurrent revisions have one winner and exact concurrent retries create one retained record',async t=>{
   const f=await fixture(t),base={resource:'/products/public-1',expectedRevision:0,actor:'staff-fixture',reason:'Correction',

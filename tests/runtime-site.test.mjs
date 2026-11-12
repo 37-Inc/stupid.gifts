@@ -112,6 +112,20 @@ test('runtime preview mounting follows the resolved show, never archived lineups
   assert.match(app,/<Grid products=\{props.products\} show>\{props.showPreviews&&<ShowPreviews\/>\}<\/Grid>/);
   assert.match(app,/className="catalog-grid" aria-label="Gifts">\{children\}\{products.map/);
 });
+test('one runtime correction reaches cards, detail, real keyword search and shows; unlisting hides shopping without deleting URLs',async t=>{
+  const f=await runtimeFixture(t),p=f.products[0];
+  f.collections.push({name:'/products/'+p.publicId,revision:1,payload_json:JSON.stringify({title:'Corrected pineapple handset',description:'A wired retro handset.'})});
+  const detail=await(await f.request('/gifts/'+p.slug)).text();assert.match(detail,/Corrected pineapple handset/);assert.match(detail,/A wired retro handset/);
+  assert.doesNotMatch(detail,/A cleared offline desk toy description 1\./);
+  const cards=await(await f.request('/api/catalog-gifts?ids='+p.publicId+'&view=cards')).json();assert.equal(cards.products[0].title,'Corrected pineapple handset');
+  const search=await(await f.request('/api/search-products?q=pineapple')).json();assert.ok(JSON.stringify(search).includes('Corrected pineapple handset'));
+  assert.match(await(await f.request('/h')).text(),/Corrected pineapple handset/);
+  f.collections.at(-1).revision=2;f.collections.at(-1).payload_json=JSON.stringify({visibility:'unlisted'});f.head.version++;f.time.now+=6000;
+  const held=await f.request('/gifts/'+p.slug);assert.equal(held.status,200);assert.doesNotMatch(await held.text(),/Check price on/);
+  assert.doesNotMatch(await(await f.request('/sitemap.xml')).text(),new RegExp('/gifts/'+p.slug+'<'));
+  assert.doesNotMatch(await(await f.request('/h')).text(),/Corrected pineapple handset/);
+  assert.equal(f.data.snapshot.products.length,60,'Source catalog is not modified');
+});
 
 test('runtime assets only read accepted digest-bound public keys and fail closed on expiry/corruption',async t=>{
   const f=await runtimeFixture(t),bytes=new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>'),sha256=await runtimeDigest(bytes),asset={sha256,eligibleUntil:null,contentType:'image/svg+xml'};

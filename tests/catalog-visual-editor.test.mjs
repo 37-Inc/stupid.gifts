@@ -142,3 +142,12 @@ test('optional automated homepage failure preserves the prior edition without wr
     day:brief.day,editor:{selectHomepage(){throw Error('not reached');}},save:async()=>{saves++;}});
   assert.deepEqual(result.edition,brief.previous);assert.equal(result.state,'last_good');assert.equal(saves,0);
 });
+test('homepage rejects only explicitly reviewed repeated designs, not categories or keywords',()=>{
+  const brief=homepage(),choice={anchors:brief.previous.anchors,rotation:brief.previous.rotation,anchorReplacements:[]};
+  brief.candidates[0].merchandising.variantGroup='reviewed-lobster-claw-mitts';
+  brief.candidates[6].merchandising.variantGroup='reviewed-lobster-claw-mitts';
+  assert.throws(()=>validateHomepageDecision(choice,brief),/repeated_design/);
+  delete brief.candidates[6].merchandising.variantGroup;
+  brief.candidates[6].title=brief.candidates[0].title;
+  assert.deepEqual(validateHomepageDecision(choice,brief).anchors,choice.anchors);
+});

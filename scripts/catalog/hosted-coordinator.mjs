@@ -450,10 +450,26 @@ async function main(){
     const repository=await defaults(runtime,process.env).checkout(source);
     console.log(JSON.stringify(await previewHostedHomepage(runtime,{repository,source,day:capturedDay})));return;
   }
+  if(mode==='admin'){
+    if(canaryId||admissionList||savedRun)fail('invocation');
+    const {runAdminAdmissions}=await import('./admin-admissions.mjs');
+    const result=await runAdminAdmissions(runtime,{source,day:capturedDay,coordinate:coordinateHostedCatalog});
+    console.log(JSON.stringify(result));if(['attention','pending'].includes(result.state))process.exitCode=1;return;
+  }
   const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),...(admitAsins?{admitAsins}:{}),...(admitSavedRun?{admitSavedRun}:{}),source,day:capturedDay,runtime});
   console.log(JSON.stringify(result));if(result.state==='attention'){console.error('::warning::Catalog run remains pending; resume its existing identity.');process.exitCode=1;}
+  // Explicit staff admissions only, after normal care releases its owner. Empty
+  // queues make no supplier/model calls. Never replace an unfinished daily run.
+  if(mode==='full'&&['accepted','skipped'].includes(result.state)){
+    const {runAdminAdmissions}=await import('./admin-admissions.mjs');
+    const admissions=await runAdminAdmissions(runtime,{source,day:capturedDay,coordinate:coordinateHostedCatalog});
+    console.log(JSON.stringify({adminAdmissions:admissions}));
+    if(['attention','pending'].includes(admissions.state)){
+      console.error('::warning::Staff admission remains pending; resume its saved cohort.');process.exitCode=1;
+    }
+  }
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)main().catch(error=>{
-  const code=/^(?:catalog_(?:hosted|operator_state|object_store)|run_workspace|routine|weekly|publication)_[a-z0-9_]{1,100}$/.test(error.message)?error.message:'catalog_hosted_coordinator_failed';
+  const code=/^(?:catalog_(?:hosted|admin|operator_state|object_store)|run_workspace|routine|weekly|publication)_[a-z0-9_]{1,100}$/.test(error.message)?error.message:'catalog_hosted_coordinator_failed';
   console.error(JSON.stringify({state:'attention',errorCode:code,pendingPreserved:true}));process.exitCode=1;
 });

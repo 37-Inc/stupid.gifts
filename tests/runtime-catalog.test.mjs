@@ -77,3 +77,21 @@ test('shared collections apply atomically, retain audit/history, recover a lost 
   const read=await createRuntimeCatalogReader(()=>f.time.now)(f.env);assert.deepEqual(read.collections['/collections/matan'].payload.ids,[uuid(2)]);
   assert.throws(()=>f.sql.prepare("UPDATE catalog_runtime_collections SET payload_json='{}'").run(),/immutable/);
 });
+test('product corrections and visibility use the same atomic revision service without changing source or license deadlines',async t=>{
+  const f=await fixture(t);f.snapshot.products[0]={...product(1),eligibleUntil:new Date(f.time.now+20000).toISOString(),persistent:product(1)};
+  await f.publish(f.snapshot);const before=JSON.stringify(f.snapshot),store=createContentRequestStore(f.db);
+  const edit=async(payload,revision)=>{const saved=await store.save({requestId:'product-edit-fixture-'+revision,resource:'/products/'+uuid(1),action:'product',
+    actor:'staff-fixture',reason:'Reviewed factual edit',baseCatalogRevision:f.snapshot.catalogRevision,expectedRevision:revision,payload},new Date(f.time.now).toISOString());
+    f.loseAck();await applyRuntimeCollection(f.db,saved.request);await applyRuntimeCollection(f.db,saved.request);};
+  await edit({title:'A corrected goose name',description:'A corrected factual sentence.'},0);
+  const read=createRuntimeCatalogReader(()=>f.time.now);let view=await read(f.env),p=view.data.snapshot.products[0];
+  assert.equal(p.title,'A corrected goose name');assert.equal(p.persistent.description,'A corrected factual sentence.');
+  assert.equal(p.eligibleUntil,f.snapshot.products[0].eligibleUntil);assert.deepEqual(view.data.repairedSemanticIds,[uuid(1)]);
+  await edit({visibility:'unlisted'},1);f.time.now+=6000;view=await read(f.env);
+  assert.equal(view.data.snapshot.products.length,1);assert.equal(view.data.snapshot.heldProducts[0].publicId,uuid(1));
+  const prepare=f.db.prepare;f.db.prepare=()=>{throw Error('offline');};f.time.now+=6000;
+  assert.equal((await read(f.env)).data.snapshot.heldProducts[0].publicId,uuid(1),'An outage cannot erase an editorial hold');f.db.prepare=prepare;
+  await edit({visibility:'listed'},2);f.time.now+=20000;view=await read(f.env);
+  assert.equal(view.data.snapshot.products[0].description,'A corrected factual sentence.');assert.equal(view.data.snapshot.products[0].eligibleUntil,null);
+  assert.equal(JSON.stringify(f.snapshot),before);assert.equal(f.sql.prepare('SELECT count(*) n FROM catalog_runtime_collections').get().n,3);
+});

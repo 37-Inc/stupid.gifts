@@ -13,11 +13,25 @@ import {routineHomepageEdition} from './daily-operator.mjs';
 import { productPresentation } from '../../lib/catalog/presentation.ts';
 import {routineMerchandising} from './campaign-operator.mjs';
 import {merchandisingForProduct} from '../../lib/catalog/merchandising.ts';
+import {runtimePresentation} from '../../lib/catalog/runtime-presentation.ts';
 
 const CARE=path.join(homedir(),'.codex/private/goose-gifts-migration/daily-catalog-care');
 const scope={accountId:'7f05a1dcb6e16f9c239564a0293bbe74',databaseId:'77b30f85-c57c-4acb-a0df-53368806c2a6',databaseName:'stupid-gifts-production'};
 const limits={requests:10,statements:12,reportedRowsRead:50000,reportedRowsWritten:1};
 const read=async file=>JSON.parse(await fs.readFile(file,'utf8'));
+
+/** Live manual ordering is the editor's starting point, not an older package.
+ * Both public IDs (admin) and merchant IDs (historical editions) resolve once
+ * to the catalog IDs used by refresh, candidate selection and model review. */
+export async function currentHomepageEdition(db,fallback){
+  const row=(await db.prepare("SELECT payload_json FROM catalog_runtime_collections WHERE name='/collections/homepage' ORDER BY revision DESC LIMIT 1").all()).results[0];
+  const edition=row&&readHomepageEdition(JSON.parse(row.payload_json).edition);
+  if(!edition)return fallback;
+  const rows=(await db.prepare('SELECT id,public_id FROM products WHERE id IN (SELECT value FROM json_each(?)) OR public_id IN (SELECT value FROM json_each(?))')
+    .bind(JSON.stringify([...edition.anchors,...edition.rotation]),JSON.stringify([...edition.anchors,...edition.rotation])).all()).results;
+  const ids=new Map(rows.flatMap(p=>[[p.id,p.id],[p.public_id,p.id]]));
+  return readHomepageEdition({...edition,anchors:edition.anchors.map(id=>ids.get(id)??id),rotation:edition.rotation.map(id=>ids.get(id)??id)})??fallback;
+}
 
 /** A stable shuffled sweep reaches every catalog identity, not just a contiguous
  * block of books or similar marketplace IDs. No keywords or quality heuristics. */
@@ -30,7 +44,7 @@ export function candidateSweep(ids,day,limit=72){
 
 /** Read accepted public presentation only. Newest, prior favorites and a
  * calendar-driven sweep cover the WHOLE catalog, without category keywords. */
-export async function homepageBrief(db,revision,prior,day,now=Date.now(),merchandising={}){
+export async function homepageBrief(db,revision,prior,day,now=Date.now(),merchandising={},edits={}){
   const ids=(await db.prepare('SELECT product_id FROM catalog_public_products WHERE catalog_revision=?').bind(revision).all()).results.map(p=>p.product_id);
   const sample=candidateSweep(ids,day),count=ids.length;
   const query='SELECT v.public_display_json FROM catalog_public_products v';
@@ -43,7 +57,8 @@ export async function homepageBrief(db,revision,prior,day,now=Date.now(),merchan
   ]);
   const candidates=new Map();
   for(let lane=0;lane<batches.length;lane++)for(const row of batches[lane].results){
-    const raw=resolvePublicProduct(JSON.parse(row.public_display_json),now),p=raw&&productPresentation(raw);
+    const raw=resolvePublicProduct(JSON.parse(row.public_display_json),now);
+    const p=raw&&runtimePresentation({products:[productPresentation(raw)],heldProducts:[]},edits).snapshot.products[0];
     if(!p||!p.description?.trim()||p.imageUrl.includes('gift-placeholder'))continue;
     const item=candidates.get(p.id)||{id:p.id,title:p.title,
       description:p.description,
@@ -59,11 +74,12 @@ export function previewHtml(brief){
   return'<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>Stupid Gifts — Editorial candidates</title><style>body{font:15px system-ui;margin:24px;background:white}main{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px}article{border:1px solid #ddd;padding:10px}img{width:100%;height:170px;object-fit:contain}h2{font-size:14px}code{font-size:11px}p{font-size:12px}</style><h1>Editorial candidates — '+escape(brief.day)+'</h1><p>Choose actual funny, attractive gifts, not categories. Existing public catalog only. No product mutations.</p><main>'+brief.candidates.map(p=>'<article><img loading="lazy" src="'+escape(p.imageUrl)+'"><h2>'+escape(p.title)+'</h2><code>'+escape(p.id)+'</code><p>'+escape(p.description)+'</p><small>'+escape(p.lanes.join(', '))+'</small></article>').join('')+'</main>';
 }
 
-export async function validateSelection(db,revision,edition){
+export async function validateSelection(db,revision,edition,edits={}){
   const ids=[...edition.anchors,...edition.rotation];
   const rows=(await db.prepare('SELECT public_display_json FROM catalog_public_products WHERE catalog_revision=? AND product_id IN (SELECT value FROM json_each(?))')
     .bind(revision,JSON.stringify(ids)).all()).results;
-  const available=new Set(rows.flatMap(row=>{const p=resolvePublicProduct(JSON.parse(row.public_display_json),Date.now());
+  const available=new Set(rows.flatMap(row=>{const raw=resolvePublicProduct(JSON.parse(row.public_display_json),Date.now());
+    const p=raw&&runtimePresentation({products:[raw],heldProducts:[]},edits).snapshot.products[0];
     return p&&p.description?.trim()&&!p.imageUrl.includes('gift-placeholder')?[p.id]:[];}));
   if(ids.some(id=>!available.has(id)))throw Error('homepage_selection_not_public_or_missing_photo');
 }
@@ -71,12 +87,12 @@ export async function validateSelection(db,revision,edition){
 /** Hosted/editor API seam. The owning coordinator supplies the scoped saved
  * editor and atomic ID-only saver. Failure never changes the current edition.
  */
-export async function automatedHomepage({db,revision,prior,day,merchandising={},editor,save,now=Date.now()}){
+export async function automatedHomepage({db,revision,prior,day,merchandising={},edits={},editor,save,now=Date.now()}){
   if(typeof editor?.selectHomepage!=='function'||typeof save!=='function')throw Error('homepage_editor_capability');
   try{
-    const brief=await homepageBrief(db,revision,prior,day,now,merchandising);
+    const brief=await homepageBrief(db,revision,prior,day,now,merchandising,edits);
     const edition=await editor.selectHomepage(brief);
-    await validateSelection(db,revision,edition);
+    await validateSelection(db,revision,edition,edits);
     await save(edition);
     return{state:'curated',edition};
   }catch{

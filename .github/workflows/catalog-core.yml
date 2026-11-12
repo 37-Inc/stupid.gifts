@@ -10,6 +10,7 @@ on:
       - 'lib/search-demand.ts'
       - 'workers/site/content-admin*.ts'
       - 'workers/site/runtime-*.ts*'
+      - 'workers/site/admin-state.ts'
       - 'static-site/runtime/**'
       - '.github/workflows/app-deploy.yml'
       - 'migrations/d1/001[89]*.sql'
@@ -46,6 +47,7 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run test:catalog-automation
       - run: node --experimental-strip-types --test tests/catalog-content-admin.test.mjs
+      - run: node --import tsx --test tests/catalog-admin-admissions.test.mjs tests/catalog-admin-state.test.mjs
       - run: node --import tsx --test tests/runtime-*.test.mjs
       - run: node --import tsx --test tests/catalog-title-repairs.test.mjs tests/catalog-short-copy.test.mjs tests/catalog-provider-evidence.test.mjs
       - run: node --import tsx --test tests/catalog-semantic-delta.test.mjs tests/catalog-photo-vector-reuse.test.mjs tests/catalog-publication-read-fetch.test.mjs

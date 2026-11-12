@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {currentHomepageEdition} from '../scripts/catalog/homepage-editor.mjs';
 import fs from 'node:fs';
 import test from 'node:test';
 import {DatabaseSync} from 'node:sqlite';
@@ -47,6 +48,12 @@ test('preview escapes listing content and contains no executable product markup'
   const html=previewHtml({day:'2026-11-03',candidates:[{id:'p1',title:'<script>alert(1)</script>',description:'"hello"',imageUrl:'https://example.com/x?y="',lanes:['previous']}]});
   assert.ok(!html.includes('<script>'));assert.ok(html.includes('&lt;script&gt;'));
   assert.ok(html.includes('noindex'));
+});
+test('editor starts with latest applied manual edition and normalizes public IDs once',async()=>{
+  const manual={...edition,day:'2026-11-11',anchors:edition.anchors.map(id=>'public-'+id)};
+  const db={prepare(sql){return{bind(){return this;},async all(){return{results:sql.includes('catalog_runtime_collections')
+    ?[{payload_json:JSON.stringify({edition:manual})}]:edition.anchors.map(id=>({id,public_id:'public-'+id}))};}};}};
+  assert.deepEqual(await currentHomepageEdition(db,edition),{...manual,anchors:edition.anchors});
 });
 test('missing or corrupt daily editorial input reuses last good edition; all missing uses reviewed seed',async()=>{
   const old={...edition,day:'2026-11-02'},prior='/protected/old/catalog-control.json';
