@@ -151,13 +151,24 @@ export async function readCatalogPredecessor(options:{db:CatalogD1;owner:Mutatio
   if(receipts.length!==1||builds.length!==1||outbox.length!==1||sha256(canonicalJson(receipts[0]))!==seal.publication.receiptSha256
     ||builds[0].request_json!==encodeBuildRequest(prior.request)||builds[0].request_id!==sha256(encodeBuildRequest(prior.request))
     ||builds[0].environment!==owner.environment||builds[0].source_revision!==envelope.catalogRevision
-    ||!builds[0].lease_token||!builds[0].run_reference||!builds[0].version_reference||!outbox[0].completed_token
-    ||outbox[0].dispatch_reference!==`version:${builds[0].version_reference}`)fail();
+    ||!builds[0].lease_token||!builds[0].run_reference||!outbox[0].completed_token)fail();
   const intent=JSON.parse(String(receipts[0].manifest_json));
   if(encodePublicationIntent(intent)!==receipts[0].manifest_json||outbox[0].intent_json!==receipts[0].manifest_json
     ||intent.releaseId!==seal.publication.releaseId||intent.catalogRevision!==envelope.catalogRevision||intent.codeSha!==prior.request.codeSha
     ||receipts[0].catalog_revision!==intent.catalogRevision||receipts[0].code_sha!==intent.codeSha
     ||intent.catalogSnapshotSha256!==seal.snapshotSha256)fail();
+  // Data-only publication has a genuine receipt and resolved build, but no
+  // Worker version. Validate its actual runtime record instead of inventing one.
+  let runtime:Row|undefined;
+  if(builds[0].version_reference===null){
+    const rows=(await db.prepare('SELECT * FROM catalog_runtime_publications WHERE release_id=?').bind(seal.publication.releaseId).all<Row>()).results;
+    runtime=rows[0];
+    if(rows.length!==1||runtime.request_id!==builds[0].request_id||runtime.catalog_revision!==envelope.catalogRevision
+      ||runtime.data_sha256!==intent.manifestSha256||!HASH.test(String(runtime.data_sha256))
+      ||runtime.source_snapshot_sha256!==seal.snapshotSha256||runtime.previous_release_id!==intent.priorReleaseId
+      ||builds[0].dispatch_reference!==`runtime:${runtime.data_sha256}`
+      ||outbox[0].dispatch_reference!==builds[0].dispatch_reference)fail();
+  }else if(!builds[0].version_reference||outbox[0].dispatch_reference!==`version:${builds[0].version_reference}`)fail();
   if(seal.kind==='approved-catalog-seal'){
     const p=seal.persistent!,native=seal.currentNative!;
     const saved=(await db.prepare('SELECT * FROM catalog_vector_deliveries WHERE delivery_id=?').bind(native.source.deliveryId).all<Row>()).results;
@@ -171,6 +182,9 @@ export async function readCatalogPredecessor(options:{db:CatalogD1;owner:Mutatio
   }
   const check=async()=>{await db.batch([mutationAssertion(db,owner,[phase as 'freezing'|'activating']),exact('publication_receipts',receipts[0]),
     exact('catalog_build_requests',builds[0]),exact('publication_outbox',outbox[0]),exact('catalog_projection_receipts',seal.projectionReceipt),
+    ...(runtime?[exact('catalog_runtime_publications',runtime),db.prepare(`SELECT json(CASE WHEN EXISTS(
+      SELECT 1 FROM catalog_runtime_head WHERE singleton=1 AND release_id=? AND enabled=1)
+      THEN 'true' ELSE 'permanent_seal_changed' END)`).bind(seal.publication.releaseId)]:[]),
     db.prepare("SELECT json(CASE WHEN NOT EXISTS(SELECT 1 FROM vector_sync_outbox WHERE status!='complete') THEN 'true' ELSE 'permanent_seal_changed' END)"),
     db.prepare(`SELECT json(CASE WHEN EXISTS(SELECT 1 FROM catalog_revisions WHERE revision=? AND status='published' AND source_export_sha256=?)
       AND (SELECT release_id FROM publication_receipts ORDER BY rowid DESC LIMIT 1)=? THEN 'true' ELSE 'permanent_seal_changed' END)`)
