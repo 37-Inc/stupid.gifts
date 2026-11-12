@@ -117,8 +117,7 @@ export async function dailyCatalogPhases(cadence, featuredIds = [], photosOnly =
   if (admitAsins !== undefined) {
     if (photosOnly || !Array.isArray(admitAsins) || !admitAsins.length || admitAsins.length > 10
       || new Set(admitAsins).size !== admitAsins.length || admitAsins.some(id => !ASIN.test(id))) throw new Error('admission_asins_invalid');
-    return plan.daily ? [{ ...parseArgs(['--max-new', String(admitAsins.length), '--backfill-limit', '0']),
-      admitAsins, discoveryNewOnly: true, enrichSelectedExisting: false }] : [];
+    return plan.daily ? [exactProductAdmissionPhase(admitAsins)] : [];
   }
   if (plan.daily) phases.push({ ...parseArgs(['--revalidate', '--revalidate-limit', '10', '--backfill-limit', '0', '--skip-enrichment']),
     dailyRefresh: true, ...(photosOnly ? { photosOnly: true } : {}), enrichSelectedExisting: !photosOnly && cadence.calendar.monday,
@@ -126,6 +125,15 @@ export async function dailyCatalogPhases(cadence, featuredIds = [], photosOnly =
   if (plan.discovery && !photosOnly) phases.push({ ...parseArgs(['--theme-limit', '6', '--per-theme', '10', '--max-new', '20', '--min-quality-score', '0.65', '--backfill-limit', '0']),
     discoveryNewOnly: true, enrichSelectedExisting: false, discoveryRunKey: cadence.runKey });
   return phases;
+}
+
+/** Staff additions and daily discovery use the same short-copy preparation.
+ * A durable run/request identity owns retry protection, not a daily allowance. */
+export function exactProductAdmissionPhase(asins) {
+  if (!Array.isArray(asins) || !asins.length || asins.length > 10 || new Set(asins).size !== asins.length
+    || asins.some(id => !ASIN.test(id))) throw Error('admission_asins_invalid');
+  return { ...parseArgs(['--max-new', String(asins.length), '--backfill-limit', '0']),
+    admitAsins: [...asins], discoveryNewOnly: true, enrichSelectedExisting: false, deactivateMissing: false };
 }
 
 /** Explicit successor policy only. The immutable run pins its finite work set;
@@ -185,7 +193,8 @@ export function automatedCatalogExecutor(execute = executeCatalog) {
       },
       async upsertProduct(product, hash) {
         if (daily) allowed([product.id]);
-        else if (!ASIN.test(product.id) || existing.has(product.id)) throw new Error('discovery_existing_mutation_forbidden');
+        else if (!ASIN.test(product.id) || existing.has(product.id)
+          || options.admitAsins && !options.admitAsins.includes(product.id)) throw new Error('discovery_existing_mutation_forbidden');
         const result = await store.upsertProduct(product, hash);
         if (!daily) { if (!result.inserted) throw new Error('discovery_insert_not_new'); existing.add(product.id); }
         return result;

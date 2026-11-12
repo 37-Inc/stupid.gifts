@@ -17,6 +17,8 @@ import { planProductFreshness } from './freshness-selection.ts';
 import type { FreshnessSelection } from './freshness-selection.ts';
 
 export interface MaintenanceIntent {
+  /** Preparation is read-only; reject a stale product at its atomic commit. */
+  expectedSourceById?: Record<string, string | null>;
   rightsById?: Record<string, ProductRights>;
   /** Real observation, not a synthetic migration time or rights grant. */
   verificationById?: Record<string, { reference: string; observedAt: string; sourceFactsHash: string | null }>;
@@ -78,10 +80,29 @@ function sameOwner(a: MutationOwner | null, b: MutationOwner): boolean {
  * Read the current owner via readMutationOwner before a separate handoff. This
  * store does not enable/claim/release scope ownership or choose another backend.
  */
+type PreparationOptions = Pick<MaintenanceD1Options, 'db' | 'runId' | 'catalogRevision' | 'historical' | 'preservePermanentListings'>;
+const READ_METHODS = ['getActiveCatalogIdentities', 'getExistingEditorialWriteups', 'getProductsForRevalidation',
+  'getProductsNeedingEnrichment', 'planProductFreshness', 'getProductSourceVersions'] as const;
+
+/** Provider preparation has no write capability and needs no catalog owner.
+ * It uses the same canonical readers as maintenance, not a second product model. */
+export function createD1CatalogPreparationStore(options: PreparationOptions) {
+  const store = createCatalogStore(options);
+  return Object.freeze(Object.fromEntries(READ_METHODS.map(name => [name, store[name]]))) as Pick<typeof store, typeof READ_METHODS[number]>;
+}
+
 export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
+  if (!options.owner) throw new Error('maintenance_configuration');
+  return createCatalogStore(options);
+}
+
+function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
+  // Absence of an owner is allowed only through the read-capability factory.
+  // Every mutation checks it before receipt lookup or SQL construction.
+  const options = input as MaintenanceD1Options;
   const { db, runId, catalogRevision } = options;
-  let owner = Object.freeze({ ...options.owner }); let tail: Promise<unknown> = Promise.resolve();
-  if (!KEY.test(runId) || !KEY.test(catalogRevision) || catalogRevision.length > 64 || owner.phase !== 'writing'
+  let owner = options.owner && Object.freeze({ ...options.owner }); let tail: Promise<unknown> = Promise.resolve();
+  if (!KEY.test(runId) || !KEY.test(catalogRevision) || catalogRevision.length > 64 || owner && owner.phase !== 'writing'
     || options.historical && !HASH.test(options.historical.archiveSha256)
     || options.preservePermanentListings!==undefined&&typeof options.preservePermanentListings!=='boolean') throw new Error('maintenance_configuration');
   const prepare = (sql: string, params: unknown[] = []) => {
@@ -90,6 +111,7 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
   };
   const all = async <T = Row>(sql: string, params: unknown[] = []) => (await prepare(sql, params).all<T>()).results;
   const checkOwner = async () => {
+    if (!owner) return; // The preparation capability exposes reads only.
     const current = await readMutationOwner(db, owner);
     if (!sameOwner(current, owner) || current!.epoch !== owner.epoch) throw new Error('maintenance_fenced');
     try { await mutationAssertion(db,owner).all(); } catch { throw new Error('maintenance_fenced'); }
@@ -109,8 +131,13 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
   const SELECT = `SELECT p.*,s.version maintenance_version,s.semantic_json maintenance_semantic,
     s.embedding_present maintenance_present,s.embedding_native_base64 maintenance_native,
     s.embedding_provenance_json maintenance_provenance FROM products p LEFT JOIN catalog_maintenance_products s ON s.product_id=p.id`;
+  const captured = new Map<string, Loaded | null>();
   const load = async (id: string): Promise<Loaded | null> => {
-    const rows = await all(`${SELECT} WHERE p.id=?`, [id]); return rows[0] ? decode(rows[0]) : null;
+    if (!owner && captured.has(id)) return captured.get(id)!;
+    const rows = await all(`${owner ? SELECT : CATALOG_SELECT} WHERE p.id=?`, [id]);
+    const value = rows[0] ? decode(rows[0]) : null;
+    if (!owner) captured.set(id, value);
+    return value;
   };
   // Catalog views use semantic/presence evidence, never native vector bytes or
   // their provenance. Exact point-load/write/CAS continues to use SELECT above.
@@ -207,6 +234,7 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
   };
   async function write<T>(method: string, rawArgs: unknown[], build: (args: unknown[], intent: MaintenanceIntent, now: string,
     statements: D1Statement[], operationId: string, changes: Row[]) => Promise<T>): Promise<T> {
+    if (!owner) throw new Error('maintenance_read_only');
     const args = copy(rawArgs); const intent = copy(await options.intent?.(method, copy(args)) || {});
     const inputHash = maintenanceDigest({ method, args, intent, runId, catalogRevision, environment: owner.environment, indexName: owner.indexName,
       ...(options.preservePermanentListings?{listingPolicy:'permanent-base-v1'}:{}) });
@@ -261,6 +289,9 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
   }
   async function persist(old: Loaded | null, product: SemanticProduct, intent: MaintenanceIntent, now: string,
     statements: D1Statement[], operationId: string, changes: Row[], replacedEmbedding = false) {
+    if (intent.expectedSourceById && Object.hasOwn(intent.expectedSourceById, product.id)
+      && intent.expectedSourceById[product.id] !== (old ? maintenanceDigest({row:old.row,version:old.version}) : null))
+      throw new Error('maintenance_prepared_source_changed');
     cas(old,product.id,statements);
     const supplied = replacedEmbedding ? product.embedding as number[] : null;
     const proof = intent.embeddingById?.[product.id];
@@ -405,6 +436,11 @@ export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {
     });
   }
   const store = {
+    getProductSourceVersions: (ids: string[]): Promise<Record<string, string | null>> => serialize(async () => {
+      const result: Record<string, string | null> = {};
+      for (const id of idsInput(ids)) { const value = await load(id); result[id] = value ? maintenanceDigest({row:value.row,version:value.version}) : null; }
+      return result;
+    }),
     upsertProduct: async (incoming: object, sourceFactsHash: string | null): Promise<{inserted:boolean;slug:string}> => {
       // Ignore fields the PG statement never binds (e.g. revalidatedProduct's
       // transient availabilityCheckedAt Date), so retrying identical SQL intent

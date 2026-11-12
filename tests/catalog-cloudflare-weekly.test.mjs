@@ -1241,6 +1241,10 @@ test('automation driver resumes an exact saved preparation without another suppl
   };
   const interrupted=await f.run('start');assert.equal(interrupted.state,'attention',JSON.stringify(interrupted));
   assert.equal(interrupted.phase,'phases_running');assert.equal(f.calls.getItems,1,JSON.stringify(interrupted));assert.equal(f.calls.chat+f.calls.embedding+f.calls.search,0);
+  const preparedWorkspace=await openRunWorkspace(f.workspaceOptions);try{
+    assert.equal((await preparedWorkspace.readCheckpoint()).checkpoint.owner,null,
+      'Supplier preparation must not hold the catalog writer');
+  }finally{await preparedWorkspace.close();}
   const providerCalls=f.calls.getItems;
   const resumed=await f.run('resume');assert.equal(resumed.reason,'awaiting_reviewed_approval',JSON.stringify(resumed));
   assert.equal(f.calls.getItems,providerCalls);assert.equal(f.calls.chat+f.calls.embedding+f.calls.search,0);assert.ok(mirrors>5);
@@ -1251,6 +1255,34 @@ test('automation driver resumes an exact saved preparation without another suppl
   }finally{await ws.close();}
   const result=await f.run('resume',await f.approve());
   assert.equal(result.state,'finalized',JSON.stringify(result));assert.equal(f.calls.getItems,providerCalls);
+});
+
+test('exact staff admission shares unlocked preparation, saved retries and the existing catalog publisher',async t=>{
+  const f=await setup(t,{permanent:22,held:2,discovered:1,authenticPrior:true,realTransport:true,
+    reviewedDiscoveryRights:false,at:'2026-10-21T18:00:00.000Z'});
+  f.config.backfillLimit=0;
+  f.config.cadence={day:'2026-10-21',featuredIds:[],runKey:f.config.runId,admitAsins:['B000005000']};
+  await f.configure();let stopped=false;
+  f.dependencies.checkpointSaved=async({workspace,checkpoint})=>{
+    if(stopped||!checkpoint.checkpoint.state.automationJournal)return;
+    const journal=await readOrdered(workspace,checkpoint.checkpoint.state.automationJournal);
+    if(journal.entries['phase-0-prepared']){
+      assert.equal(checkpoint.checkpoint.owner,null);
+      assert.equal(f.sql.prepare('SELECT count(*) n FROM products WHERE id=?').get('B000005000').n,0);
+      stopped=true;throw Error('test_only_stop_before_commit');
+    }
+  };
+  const first=await f.run('start');assert.equal(first.state,'attention',JSON.stringify(first));
+  assert.equal(stopped,true);assert.equal(f.calls.getItems,1);assert.equal(f.calls.search,0);
+  const counts={getItems:f.calls.getItems,chat:f.calls.chat,embedding:f.calls.embedding};
+  const resumed=await f.run('resume');assert.equal(resumed.reason,'awaiting_reviewed_approval',JSON.stringify(resumed));
+  const row=f.sql.prepare('SELECT * FROM products WHERE id=?').get('B000005000');
+  assert.ok(row,JSON.stringify(f.sql.prepare('SELECT source_record_json FROM catalog_run_items WHERE run_id=?').all(f.config.runId)));
+  assert.equal(row.editorial_status,'short_ready');
+  assert.equal(JSON.parse(row.public_display_json).editorialWriteup,undefined);
+  const final=await f.run('resume',await f.approve());assert.equal(final.state,'finalized',JSON.stringify(final));
+  for(const [key,value]of Object.entries(counts))assert.equal(f.calls[key],value,'Saved '+key+' must not repeat');
+  assert.equal(f.calls.search,0);assert.equal(f.sql.prepare('SELECT count(*) n FROM products').get().n,25);
 });
 
 test('exact automation cohort publishes one hundred refreshes without embedding calls or dropping identities',async t=>{

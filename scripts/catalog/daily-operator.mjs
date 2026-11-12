@@ -405,12 +405,14 @@ export function operatorInvocation(argv,calendar){
  * config digest. Saved provider/model stages are reused, never re-collected.
  * Post-provider recovery still requires the original approval pin. */
 export function routineRecoveryPhase(cp,config,configSha256,digest){
-  const originalWriter=(config.cadence?.automation||config.inputs?.savedAdmission)&&HASH.test(configSha256??'')
+  const preparedProducts=Boolean(cp?.pins?.productPreparation&&(config.cadence?.automation||config.cadence?.admitAsins&&!config.inputs?.savedAdmission));
+  if(preparedProducts&&cp.phase==='phases_running'&&cp.owner===null&&HASH.test(configSha256??'')&&digest===configSha256)return 'provider';
+  const originalWriter=(config.cadence?.automation||config.inputs?.savedAdmission||preparedProducts)&&HASH.test(configSha256??'')
     &&cp?.owner?.phase==='writing'&&cp.owner.ownerReference===config.runId
     &&cp.owner.operationKey===sha256(`weekly:${configSha256}`);
   if(originalWriter&&digest===configSha256){
     if(cp.phase==='phase_failed'&&config.inputs?.savedAdmission)return 'admission-repair';
-    if(cp.phase==='phases_running'&&config.cadence?.automation)return 'provider';
+    if(cp.phase==='phases_running'&&(config.cadence?.automation||preparedProducts))return 'provider';
     if(cp.phase==='phases_complete')return 'review';
   }
   if(originalWriter&&cp.phase==='phases_complete'&&HASH.test(digest??''))return 'publication';

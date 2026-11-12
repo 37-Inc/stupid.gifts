@@ -8,6 +8,29 @@ ingestion path. Staff access uses the owner-approved path-only Access app. The e
 
 ## Explicit boundary
 
+### Product-preparation simplification (not instant publication yet)
+
+New exact-ASIN admissions and automatic care share the same saved preparation
+code. Amazon collection, short-copy drafting/review and embedding preparation
+run against a read-only canonical catalog view before claiming the catalog
+writer. Only the prepared mutations enter the existing publication path. Saved
+results resume without another supplier/model call. An exact source fingerprint
+prevents a delayed preparation from overwriting a subsequently changed gift;
+all catalog identities, including held products, remain part of deduplication.
+Old started admissions/recoveries keep their original path and source binding.
+
+This is the first part of `roadmap-lbbz1.32.1`, **not** a claim that the endpoint
+can publish independently yet. The hosted queue, whole-catalog publication and
+native-index acceptance still serialize admissions behind pending care. Finish
+that integration and prove an actual endpoint admission before enabling an
+immediate-dispatch credential or describing an addition as live. Do not run a
+second supplier batch or take over the existing publisher to demonstrate speed.
+
+Article policy is unchanged: ordinary discovery/admission creates a product page
+with factual short copy. `--long-editorial` is an explicitly requested optional
+mode, not a ranking, commission or traffic threshold; generated articles still
+need editorial approval. An article is not required for listing or indexing.
+
 Admissions return HTTP202, `state: awaiting_application`,
 `publication: queued_for_existing_coordinator`. Saving an admission
 does **not** call Amazon/OpenAI. The existing serialized coordinator consumes

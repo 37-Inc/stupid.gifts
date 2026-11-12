@@ -125,12 +125,22 @@ export async function reconcileReviewedPhaseOwner({ db, owner, actual, journal, 
 export async function prepareReviewedPhase({ key, journal, execute, options, store, evidence, runId }) {
   const saved = await journal.read(`${key}-prepared`);
   if (saved) return saved;
+  const started = Date.now();
   const mutations = [], items = [], warnings = [], timingsMs = {}, usage = createUsageLedger();
+  const sources = store.getProductSourceVersions && options.dailyRefresh
+    ? await store.getProductSourceVersions(options.selectedIds) : null;
   let identities;
   const catalog = async () => identities ??= await store.getActiveCatalogIdentities({ includeInactive: true });
   const existing = new Set(options.dailyRefresh ? options.selectedIds : (await catalog()).map(p => p.id));
   const record = async (method, args) => {
     const intent = await evidence.intent(method, args);
+    if (store.getProductSourceVersions && ['upsertProduct', 'markConfirmedMissingUnavailable'].includes(method)) {
+      const ids = method === 'upsertProduct' ? [args[0].id] : args[0];
+      // New admission remains new at commit, including held catalog identities.
+      // Refreshes bind the exact source read before supplier/model preparation.
+      intent.expectedSourceById = Object.fromEntries(ids.map(id => [id, sources ? sources[id] : null]));
+      if (sources && ids.some(id => !Object.hasOwn(sources, id))) throw Error('reviewed_source_unpinned');
+    }
     const nativeBase64 = method === 'upsertProduct' && Array.isArray(args[0].embedding) ? encodePgvectorSendBase64(args[0].embedding.map(Math.fround)) : null;
     mutations.push({ method, args: copy(args), intent: copy(intent), ...(nativeBase64 ? { nativeBase64 } : {}) });
   };
@@ -177,6 +187,7 @@ export async function prepareReviewedPhase({ key, journal, execute, options, sto
     const view = productPresentation(product);
     merchandising[product.id] = { sourceTitle: view.title, sourceDescription: view.description, appeal: appeal.get(product.id) };
   }
+  timingsMs.productPreparation = Math.max(0, Date.now() - started);
   const prepared = { schemaVersion: 1, result, mutations, items, warnings, timingsMs, merchandising };
   await journal.put(`${key}-prepared`, prepared);
   return prepared;

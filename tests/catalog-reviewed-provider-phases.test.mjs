@@ -3,10 +3,10 @@ import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile, readdir } from 'node:fs/promises';
 import { createReviewedPhaseJournal, prepareReviewedPhase, applyReviewedPhase, reconcileReviewedPhaseOwner } from '../scripts/catalog/reviewed-provider-phases.mjs';
-import { automatedCatalogPhases, automatedCatalogExecutor, validateCatalogAutomation } from '../scripts/ops/catalog-daily.mjs';
+import { automatedCatalogPhases, automatedCatalogExecutor, exactProductAdmissionPhase, validateCatalogAutomation } from '../scripts/ops/catalog-daily.mjs';
 import { createEditorialStages } from '../scripts/catalog/catalog-editorial.mjs';
 import { createCatalogProviderEvidence } from '../scripts/catalog/provider-evidence.ts';
-import { createD1CatalogMaintenanceStore } from '../scripts/catalog/maintenance-d1.ts';
+import { createD1CatalogMaintenanceStore, createD1CatalogPreparationStore } from '../scripts/catalog/maintenance-d1.ts';
 import { createD1CatalogTelemetryStore } from '../scripts/catalog/telemetry-d1.ts';
 import { claimMutationOwnership, readMutationOwner } from '../lib/catalog/mutation-fence.ts';
 import { maintenanceDigest } from '../scripts/catalog/maintenance-state.ts';
@@ -23,6 +23,21 @@ const product = { id: id(1), title: 'TEST ONLY brass lobster bell', source: 'ama
   wittyDescription: 'A small brass lobster bell for a desktop.', imageUrl: 'https://example.invalid/bell.jpg',
   affiliateUrl: `https://www.amazon.com/dp/${id(1)}?tag=fixture-20`, availabilityStatus: 'IN_STOCK', isActive: true,
   editorialStatus: 'short_ready', editorialQualityScore: .95, remotelyVerified: true, qualityScore: .8 };
+
+test('one-off admission is one shared short-copy phase, never unrelated discovery or refresh', async () => {
+  const options = exactProductAdmissionPhase([id(1), id(2)]);
+  assert.equal(options.longEditorial, false);
+  assert.equal(options.backfillLimit, 0);
+  assert.deepEqual(options.admitAsins, [id(1), id(2)]);
+  const calls = [];
+  await automatedCatalogExecutor(async (_o, _s, _t, store) => {
+    await store.upsertProduct({ id: id(1) });
+    await assert.rejects(store.upsertProduct({ id: id(3) }), /existing_mutation_forbidden/);
+    await assert.rejects(store.upsertProduct({ id: id(2) }), /existing_mutation_forbidden/);
+  })(options, null, {}, { async getActiveCatalogIdentities() { return [{ id: id(2), isActive: false }]; },
+    async upsertProduct(p) { calls.push(p.id); return { inserted: true }; } });
+  assert.deepEqual(calls, [id(1)]);
+});
 function memory() {
   const objects = new Map(); let head, failure;
   const put = async value => { const ref = { sha256: sha256(canonicalJson(value)), reference: `fixture/${sha256(canonicalJson(value))}` }; objects.set(ref.reference, structuredClone(value)); return ref; };
@@ -165,6 +180,59 @@ test('preparation persists exact calls/native bytes/final-copy appeal before any
   const epoch = cursor.current.epoch; await apply(); assert.equal(cursor.current.epoch, epoch);
   assert.equal(f.sqlite.prepare('SELECT count(*) n FROM products').get().n, 1);
   assert.equal((await telemetry.loadCatalogRun(runId)).items.length, 1);
+});
+
+test('the shared preparation reader needs no writer and cannot mutate the catalog', async t => {
+  const f = await sqliteFixture(t), before = await readMutationOwner(f.db, f.scope);
+  const queries=[];
+  const db={...f.db,prepare(sql){queries.push(sql);return f.db.prepare(sql);}};
+  const reader = createD1CatalogPreparationStore({ db, runId: 'read-only', catalogRevision: 'read-only', preservePermanentListings: true });
+  assert.deepEqual(await reader.getActiveCatalogIdentities({ includeInactive: true }), []);
+  assert.deepEqual(await reader.getProductSourceVersions([product.id]), { [product.id]: null });
+  assert.deepEqual(await reader.getProductSourceVersions([product.id]), { [product.id]: null });
+  assert.equal(queries.filter(sql=>sql.includes('WHERE p.id=?')).length,1,'One captured read, not repeated/native-vector downloads');
+  assert.equal(queries.filter(sql=>sql.includes('catalog_mutation_scopes')).length,0);
+  for (const method of ['upsertProduct', 'recordEditorialEvent', 'deactivateConfirmedMissing', 'markConfirmedMissingUnavailable'])
+    assert.equal(reader[method], undefined);
+  assert.deepEqual(await readMutationOwner(f.db, f.scope), before);
+  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM catalog_maintenance_operations').get().n, 0);
+  assert.throws(() => createD1CatalogMaintenanceStore({ db: f.db, runId: 'invalid', catalogRevision: 'invalid' }), /configuration/);
+});
+
+test('a prepared admission cannot overwrite an identity admitted while providers were working', async t => {
+  const f = await sqliteFixture(t), saved = memory(), journal = saved.journal(), cursor = { current: f.owner };
+  const reader = createD1CatalogPreparationStore({ db: f.db, runId: 'prepare', catalogRevision: 'prepare', preservePermanentListings: true });
+  const prepared = await prepareReviewedPhase({ key: 'phase-0', journal, options: { discoveryNewOnly: true },
+    store: reader, evidence: { intent: () => ({}) }, runId: 'prepare', execute: async (_o, _s, _t, recording) => {
+      await recording.upsertProduct(product, editorialSourceHash(product)); return { inserted: 1 };
+    } });
+  assert.deepEqual(prepared.mutations[0].intent.expectedSourceById, { [product.id]: null });
+  // Another independently reviewed operation wins. Never overwrite its identity
+  // or restart provider work just because the prepared result is now stale.
+  const other = createD1CatalogMaintenanceStore({ db: f.db, owner: f.owner, ownerCursor: cursor, runId: 'other', catalogRevision: 'other' });
+  await other.upsertProduct({ ...product, title: 'Another reviewed title' }, editorialSourceHash(product));
+  const writer = createD1CatalogMaintenanceStore({ db: f.db, owner: cursor.current, ownerCursor: cursor, runId: 'prepare', catalogRevision: 'prepare',
+    intent: () => prepared.mutations[0].intent });
+  await assert.rejects(writer.upsertProduct(...prepared.mutations[0].args), /maintenance_prepared_source_changed/);
+  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM products').get().n, 1);
+  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM catalog_maintenance_operations WHERE run_id=?').get('prepare').n, 0);
+});
+
+test('a prepared refresh cannot overwrite a newer private product version', async t => {
+  const f=await sqliteFixture(t),cursor={current:f.owner},writer=createD1CatalogMaintenanceStore({db:f.db,owner:f.owner,
+    ownerCursor:cursor,runId:'other',catalogRevision:'other'});
+  await writer.upsertProduct(product,editorialSourceHash(product));
+  const reader=createD1CatalogPreparationStore({db:f.db,runId:'prepare',catalogRevision:'prepare'}),journal=memory().journal();
+  const prepared=await prepareReviewedPhase({key:'phase-0',journal,options:{dailyRefresh:true,selectedIds:[product.id]},
+    store:reader,evidence:{intent:()=>({})},runId:'prepare',execute:async(_o,_s,_t,recording)=>{
+      await recording.upsertProduct(product,editorialSourceHash(product));return{refreshed:1};
+    }});
+  await writer.upsertProduct({...product,wittyDescription:'Newer independently reviewed short copy.'},editorialSourceHash(product));
+  const commit=createD1CatalogMaintenanceStore({db:f.db,owner:cursor.current,ownerCursor:cursor,runId:'prepare',catalogRevision:'prepare',
+    intent:()=>prepared.mutations[0].intent});
+  await assert.rejects(commit.upsertProduct(...prepared.mutations[0].args),/maintenance_prepared_source_changed/);
+  assert.equal(JSON.parse(f.sqlite.prepare('SELECT semantic_json FROM catalog_maintenance_products WHERE product_id=?').get(product.id).semantic_json)
+    .wittyDescription,'Newer independently reviewed short copy.');
 });
 
 test('lost committed telemetry ACK reconciles only the exact journalled receipt, never an unexplained current epoch', async t => {

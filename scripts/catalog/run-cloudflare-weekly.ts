@@ -10,7 +10,7 @@ import { checkCloudflareRunner, resolveReadToken, resolveCatalogCredential, reso
 import type { CloudflareCredentialReference } from './check-cloudflare-runner.ts';
 import {isCatalogCredentialReference} from './credential-reference.ts';
 import type {CatalogCredentialReference} from './credential-reference.ts';
-import { createD1CatalogMaintenanceStore, loadMaintenanceVectorPayload } from './maintenance-d1.ts';
+import { createD1CatalogMaintenanceStore, createD1CatalogPreparationStore, loadMaintenanceVectorPayload } from './maintenance-d1.ts';
 import { createD1CatalogTelemetryStore } from './telemetry-d1.ts';
 import { createCatalogProviderEvidence } from './provider-evidence.ts';
 import { createVectorizeRestAdapters } from './vectorize-rest.ts';
@@ -48,7 +48,7 @@ import {automationRuntime} from './automation-runtime.mjs';
 import {loadSavedAdmission,savedAdmissionEvidence} from './saved-admission.mjs';
 import {repairSavedAdmission as repairSavedAdmissionFromOutputs,retainedFailedAdmission} from './saved-admission-repair.mjs';
 import amazonCreators from '../../lib/amazon-creators.js';
-import { automatedCatalogPhases,automatedCatalogExecutor,validateCatalogAutomation,dailyCatalogPhases, pacificCatalogCalendar, runDailyCatalogWithBackend, withCatalogCadence, validCatalogRunKey } from '../ops/catalog-daily.mjs';
+import { automatedCatalogPhases,automatedCatalogExecutor,exactProductAdmissionPhase,validateCatalogAutomation,dailyCatalogPhases, pacificCatalogCalendar, runDailyCatalogWithBackend, withCatalogCadence, validCatalogRunKey } from '../ops/catalog-daily.mjs';
 import {validateExecutionAdoption,validateExecutionAdoptionConfigs} from './execution-adoption.ts';
 import type {ExecutionAdoption} from './execution-adoption.ts';
 import {encodeReviewedUploadActivationApproval,readReviewedUploadActivation} from '../../lib/catalog/build-requests.ts';
@@ -458,7 +458,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     }
     if(!permanentFinalization&&saved&&['phases_running','phase_failed','attention','finalized'].includes(saved.checkpoint.phase)
       &&!(dependencies.repairSavedAdmission&&config.inputs.savedAdmission&&saved.checkpoint.phase==='phase_failed')
-      &&!(config.cadence?.automation&&saved.checkpoint.phase==='phases_running')
+      &&!((config.cadence?.automation||config.cadence?.admitAsins&&saved.checkpoint.pins.productPreparation)&&saved.checkpoint.phase==='phases_running')
       &&!(saved.checkpoint.phase==='attention'&&(resolving(saved.checkpoint)||reviewedUploadResume(saved,reviewedUploadRetry))))
       return{state:saved.checkpoint.phase==='finalized'?'finalized':'attention',phase:saved.checkpoint.phase,
         ...(saved.checkpoint.phase==='finalized'?{catalogSeal:await ws.catalogSuccessor()??undefined}:{}),budget:await ws.budget()};
@@ -559,7 +559,9 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       }
       await write({pins});
     }
-    if(config.cadence?.automation){
+    const reviewedPreparation=Boolean(config.cadence?.automation||config.cadence?.admitAsins&&!config.inputs.savedAdmission
+      &&(cp.phase==='created'||cp.pins.productPreparation));
+    if(reviewedPreparation){
       const journalRef=cp.pins.automationJournal??state().automationJournal as ArtifactRef|undefined;
       const initial=journalRef?await readOrdered(ws,journalRef):undefined;
       const journal=createReviewedPhaseJournal({initial,read:(ref:ArtifactRef)=>readOrdered(ws,ref),readReceipt:(ref:ArtifactRef)=>ws.readReceipt(ref),
@@ -567,18 +569,18 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         save:async(value:unknown)=>{const pin=await putOrdered(ws,value,now(),'phase');
           await write({state:{...state(),automationJournal:{sha256:pin.sha256,reference:pin.reference}}});}});
       if(cp.phase==='created'||cp.phase==='phases_running'){
-        const phases=automatedCatalogPhases(config.cadence.automation,{runId:config.runId,photosOnly:config.cadence.photosOnly});
+        const phases=config.cadence!.automation?automatedCatalogPhases(config.cadence!.automation,{runId:config.runId,photosOnly:config.cadence!.photosOnly})
+          :[exactProductAdmissionPhase(config.cadence!.admitAsins)];
         const needsProvider=!(await journal.read('provider-phases-complete'));
-        const needsModel=needsProvider&&config.cadence.automation.discovery;
+        const needsModel=needsProvider&&Boolean(config.cadence!.automation?.discovery||config.cadence!.admitAsins);
+        const preparationIdentity={schemaVersion:1,kind:'product-preparation',runId:config.runId,configSha256:options.configSha256};
+        if(cp.pins.productPreparation&&canonicalJson(await ws.readArtifact(cp.pins.productPreparation))!==canonicalJson(preparationIdentity))
+          throw Error('reviewed_preparation_identity');
         const environment=needsProvider?await providerEnvironment(config,resolveToken,needsModel):null;
         if(cp.phase==='created'){
-          const owner=await claimMutationOwnership(db,scope,{phase:'writing',ownerReference:config.runId,operationKey:sha256(`weekly:${options.configSha256}`)});
-          if(!owner)throw new Error('weekly_owner_busy');await write({phase:'phases_running',owner});
+          const pin=await ws.putArtifact(preparationIdentity,{kind:'phase',observedAt:now()});
+          await write({phase:'phases_running',owner:null,pins:{...cp.pins,productPreparation:pin}});
         }
-        if(!cp.owner)throw new Error('reviewed_owner_unconfirmed');
-        const actual=await readMutationOwner(db,scope);
-        const owner=await reconcileReviewedPhaseOwner({db,owner:cp.owner,actual,journal,runId:config.runId,catalogRevision:config.catalogRevision});
-        const cursor={current:owner};await write({owner});
         const intent=await ws.readArtifact(cp.pins.rights) as unknown as {rightsById:Record<string,never>;reviewedDeleteReference?:string};
         const evidence=createCatalogProviderEvidence({reviewedRightsById:intent.rightsById,reviewedDeleteReference:intent.reviewedDeleteReference,
           associateTag:config.catalog.associateTag,now,readReceipt:ref=>ws.readReceipt(ref) as never,
@@ -597,6 +599,41 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           const result=await savedStages.run(stage,input,action);
           return stage==='embedding'&&result.reused?{...result,value:await journal.embeddingResponse(input,result.value)}:result;
         }};
+        const preparationStore=createD1CatalogPreparationStore({db,runId:config.runId,catalogRevision:config.catalogRevision,preservePermanentListings:true});
+        // Preparation saves the exact calls and original evidence without a
+        // catalog writer. An interrupted preparation resumes its saved stages.
+        // Old runs which already own a writer retain it; never release or adopt
+        // someone else's in-flight mutation merely to use this new path.
+        const preparedPhases:Array<Awaited<ReturnType<typeof prepareReviewedPhase>>>=[];
+        if(needsProvider){
+          const prepare=async()=>{
+            let editor;
+            if(needsModel){const {default:OpenAI}=await import('openai');const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0});
+              editor=createCatalogEditorial({stages,complete:(request:unknown)=>client.chat.completions.create(request as never)});}
+            const {executeCatalog}=await import('../ops/prefetch-catalog.mjs');
+            const execute=automatedCatalogExecutor(executeCatalog);
+            for(let index=0;index<phases.length;index++){
+              const key=`phase-${index}`,started=Date.now();let supplierCall=0;
+              const progress=(stage:'start'|'complete')=>console.log(JSON.stringify({state:'catalog_phase_progress',phase:index+1,
+                totalPhases:phases.length,stage,elapsedMs:Date.now()-started}));
+              progress('start');
+              const providerEvidence={...evidence,amazon:async(...args:Parameters<typeof evidence.amazon>)=>args[0]==='getItems'
+                ?(await stages.run('refresh-collect',{run:config.runId,phase:index,call:supplierCall++,ids:args[3]},()=>evidence.amazon(...args))).value
+                :evidence.amazon(...args)};
+              preparedPhases.push(await prepareReviewedPhase({key,journal,execute,options:{...phases[index],editorialStages:stages,
+                ...(phases[index].discoveryNewOnly&&!config.cadence!.admitAsins?{discoveryEditor:editor}:{})},store:preparationStore,evidence:providerEvidence,runId:config.runId}));
+              progress('complete');
+            }
+          };
+          try{if(environment)await scopedProviders(environment,prepare);else await prepare();}
+          catch(error){return{state:'attention',phase:cp.phase,errorCode:safeCode(error),
+            ...(catalogD1FailureDetail(error)?{diagnostic:catalogD1FailureDetail(error)}:{}),budget:await ws.budget()};}
+        }
+        let owner=cp.owner;
+        if(owner)owner=await reconcileReviewedPhaseOwner({db,owner,actual:await readMutationOwner(db,scope),journal,runId:config.runId,catalogRevision:config.catalogRevision});
+        else owner=await claimMutationOwnership(db,scope,{phase:'writing',ownerReference:config.runId,operationKey:sha256(`weekly:${options.configSha256}`)});
+        if(!owner)return{state:'pending',phase:cp.phase,errorCode:'weekly_owner_busy',budget:await ws.budget()};
+        const cursor={current:owner};await write({owner});
         let capturedIntent:unknown=null;
         const maintenance=createD1CatalogMaintenanceStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision,preservePermanentListings:true,
           intent:async(method,args)=>{
@@ -610,25 +647,13 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           beforeMutation:input=>journal.beforeMutation(input)});
         const checkpoint=()=>write({owner:cursor.current});
         const run=async()=>{
+          const applicationStarted=Date.now();
           await telemetry.startCatalogRun({id:config.runId,mode:'daily',trigger:'scheduled',gitSha:config.codeSha,config:{backfillLimit:0}});await checkpoint();
-          let editor;
-          if(needsModel){const {default:OpenAI}=await import('openai');const client=new OpenAI({apiKey:process.env.OPENAI_API_KEY,maxRetries:0});
-            editor=createCatalogEditorial({stages,complete:(request:unknown)=>client.chat.completions.create(request as never)});}
-          const {executeCatalog}=await import('../ops/prefetch-catalog.mjs');
-          const execute=automatedCatalogExecutor(executeCatalog),results=[],warnings=[],timingsMs:Record<string,number>={},merchandising:Record<string,unknown>={},changed=new Set<string>(),admitted=new Set<string>();
+          const results=[],warnings=[],timingsMs:Record<string,number>={},merchandising:Record<string,unknown>={},changed=new Set<string>(),admitted=new Set<string>();
           for(let index=0;index<phases.length;index++){
-            const key=`phase-${index}`,started=Date.now();let supplierCall=0;
-            const progress=(stage:'start'|'complete')=>console.log(JSON.stringify({state:'catalog_phase_progress',phase:index+1,
-              totalPhases:phases.length,stage,elapsedMs:Date.now()-started}));
-            progress('start');
-            const providerEvidence={...evidence,amazon:async(...args:Parameters<typeof evidence.amazon>)=>args[0]==='getItems'
-              ?(await stages.run('refresh-collect',{run:config.runId,phase:index,call:supplierCall++,ids:args[3]},()=>evidence.amazon(...args))).value
-              :evidence.amazon(...args)};
-            const prepared=await prepareReviewedPhase({key,journal,execute,options:{...phases[index],editorialStages:stages,
-              ...(phases[index].discoveryNewOnly?{discoveryEditor:editor}:{})},store:maintenance,evidence:providerEvidence,runId:config.runId});
+            const key=`phase-${index}`,prepared=preparedPhases[index];
             await applyReviewedPhase({key,journal,prepared,store:maintenance,telemetryStore:telemetry,runId:config.runId,checkpoint,
               withIntent:async(value:unknown,action:()=>Promise<unknown>)=>{capturedIntent=value;try{return await action();}finally{capturedIntent=null;}}});
-            progress('complete');
             results.push(numbers(prepared.result));warnings.push(...prepared.warnings);Object.assign(merchandising,prepared.merchandising);
             for(const[key,value]of Object.entries(prepared.timingsMs))timingsMs[key]=(timingsMs[key]||0)+Number(value);
             for(const mutation of prepared.mutations){
@@ -636,11 +661,12 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
               if(mutation.method==='markConfirmedMissingUnavailable')for(const id of mutation.args[0])changed.add(id);
             }
           }
+          timingsMs.productApplication=Math.max(0,Date.now()-applicationStarted);
           const summary={counts:{phases:results},warnings,timingsMs,usage:await journal.usage()};
           await journal.put('provider-phases-complete',{schemaVersion:1,summary,merchandising,changedIds:[...changed],admittedIds:[...admitted]});
         };
         try{
-          if(needsProvider){if(environment)await scopedProviders(environment,run);else await run();}
+          if(needsProvider)await run();
           const complete=await journal.read('provider-phases-complete') as {summary:Record<string,unknown>};
           const phaseComplete=await ws.putArtifact(finalization(complete.summary),{kind:'publication',observedAt:now()});
           await write({phase:'phases_complete',owner:cursor.current,phaseComplete,pins:{...cp.pins,automationJournal:state().automationJournal as ArtifactRef}});
@@ -650,7 +676,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       const complete=await journal.read('provider-phases-complete') as {merchandising:PublicationConfig['merchandising'];changedIds:string[];admittedIds:string[]}|undefined;
       if(complete){
         config={...config,publication:{...config.publication,merchandising:{...config.publication.merchandising,...complete.merchandising}}};
-        if(!cp.pins.automationAuthority){
+        if(config.cadence!.automation&&!cp.pins.automationAuthority){
           if(cp.phase!=='phases_complete'||!cp.owner||cp.owner.phase!=='writing')throw Error('automation_cohort_invalid');
           const products:Array<{id:string;publicId:string}>=[];
           for(let offset=0;offset<complete.changedIds.length;offset+=30){
