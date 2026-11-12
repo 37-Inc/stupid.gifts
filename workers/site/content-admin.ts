@@ -66,8 +66,13 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
     if(url.origin!=='https://stupid.gifts'||url.search) return response({error:'not_found'},404);
     try{
       const actor=await contentAdminActor(request,env,now());if(!actor)return response({error:'staff_authentication_required'},403);
+      // Access returns the signed-in browser from another origin. A top-level
+      // read-only navigation is safe; cross-origin fetches and all writes keep
+      // the existing CSRF/origin checks and no CORS response.
+      const loginNavigation=request.method==='GET'&&request.headers.get('Sec-Fetch-Mode')==='navigate'
+        &&request.headers.get('Sec-Fetch-Dest')==='document';
       if(request.headers.has('Origin')&&request.headers.get('Origin')!==url.origin
-        ||request.headers.get('Sec-Fetch-Site')&& !['same-origin','none'].includes(request.headers.get('Sec-Fetch-Site')!))
+        ||request.headers.get('Sec-Fetch-Site')&& !['same-origin','none'].includes(request.headers.get('Sec-Fetch-Site')!)&&!loginNavigation)
         return response({error:'cross_origin_denied'},403);
       if(!['GET','POST','PUT'].includes(request.method))return response({error:'method_not_allowed'},405);
       if(request.method!=='GET'&&request.headers.get('Origin')!==url.origin)return response({error:'origin_required'},403);
