@@ -10,12 +10,13 @@ for(const fullPlan of [false,true])test(`runtime native history accepts genuine 
   const history=[{source:f.published.source,revisionSha256:sha256(canonicalJson(f.revision)),
     planSha256:sha256(canonicalJson(plan)),ids:prunedVectorIds(plan)}];
   const read=(db=f.db)=>readNativeHistory({db,owner:f.owner,history,adapters:f.adapters});
-  f.sql.prepare('UPDATE publication_outbox SET dispatch_reference=? WHERE release_id=?')
-    .run('version:'+f.original.permit.versionReference,intent.releaseId);
-  assert.deepEqual(await read(),history[0].ids);
   let reads=0;
   const accepted=()=>readNativeHistory({db:f.db,owner:f.owner,history,acceptedOnly:true,
     adapters:{...f.adapters,async readback(){reads++;throw Error('unchanged history must not refetch vectors');}}});
+  if(!fullPlan)assert.deepEqual(await accepted(),history[0].ids,'preserve original legacy dispatch-reference semantics');
+  f.sql.prepare('UPDATE publication_outbox SET dispatch_reference=? WHERE release_id=?')
+    .run('version:'+f.original.permit.versionReference,intent.releaseId);
+  assert.deepEqual(await read(),history[0].ids);
   assert.deepEqual(await accepted(),history[0].ids);assert.equal(reads,0);
   const build=f.sql.prepare('SELECT * FROM catalog_build_requests WHERE release_id=?').get(intent.releaseId);
   f.sql.prepare('UPDATE catalog_build_requests SET version_reference=NULL,dispatch_reference=? WHERE request_id=?')

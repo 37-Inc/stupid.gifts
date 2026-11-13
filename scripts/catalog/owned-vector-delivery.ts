@@ -1527,7 +1527,7 @@ export async function readNativeHistory(options:{db:CatalogD1;owner:MutationOwne
       ||buildRequest.sourceRevision!==plan.catalogRevision||buildRequest.sourceDigest!==plan.snapshotSha256||buildRequest.codeSha!==intent.codeSha
       ||buildRequest.priorReleaseId!==intent.priorReleaseId||String(saved.completed_at)>String(receipt.completed_at))throw new Error('vector_history_changed');
     const runtime=await readResolvedPublicationTransport(db,build,publication,intent,'vector_history_changed',signal);
-    if(!runtime&&publication.dispatch_reference!==`version:${build.version_reference}`)throw new Error('vector_history_changed');
+    if(!runtime&&request.kind===PLAN_KIND&&publication.dispatch_reference!==`version:${build.version_reference}`)throw new Error('vector_history_changed');
     const rows=options.acceptedOnly?[]:await planJournals(db,base,plan.catalogRevision,signal);
     const historical={...base,epoch:Math.max(base.epoch+1,...rows.map(row=>Number(row.prior_epoch)+2))};
     if(request.kind===REUSE_KIND)validateReuse(saved,historical,plan,adapters.providerIdentity);
