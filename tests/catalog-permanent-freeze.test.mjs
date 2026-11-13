@@ -296,8 +296,16 @@ test(`authentic permanent successor preserves mixed native history across expire
     if(day===2)for(const id of [uuid(1),uuid(11),...(newCount?[uuid(5000)]:[])])assert.ok(plan.history.some(g=>g.ids.includes(id)));
     assert.equal(await hydrateApprovedRevision(f.db,prepared.owner,approvedRevisionControl(revision)).then(r=>canonicalJson(r)),canonicalJson(revision));
     await readOwnedApprovedCohortVectors(f.db,prepared.owner,revision,f.adapters);
-    f.index.get(uuid(3)).values[0]=0;await assert.rejects(readOwnedApprovedCohortVectors(f.db,prepared.owner,revision,f.adapters));f.index.get(uuid(3)).values[0]=-0;
-    if(day===2){f.index.get(uuid(11)).values[0]=0;await assert.rejects(readOwnedApprovedCohortVectors(f.db,prepared.owner,revision,f.adapters));f.index.get(uuid(11)).values[0]=-0;}
+    // Small publications reuse accepted history; an explicit audit still catches
+    // provider drift in old vectors. Changed vectors always get exact readback.
+    const auditHistory=()=>readNativeHistory({db:f.db,owner:prepared.owner,history:plan.history,adapters:f.adapters});
+    for(const id of [uuid(3),...(day===2?[uuid(11)]:[])]){
+      f.index.get(id).values[0]=0;
+      await readOwnedApprovedCohortVectors(f.db,prepared.owner,revision,f.adapters);
+      await assert.rejects(auditHistory());f.index.get(id).values[0]=-0;
+    }
+    const changed=uuid(targets[0]);f.index.get(changed).values[0]=0;
+    await assert.rejects(readOwnedApprovedCohortVectors(f.db,prepared.owner,revision,f.adapters));f.index.get(changed).values[0]=-0;
     const queued=await settleOwnedApprovedCohortVectorProof({db:f.db,owner:prepared.owner,revision,adapters:f.adapters});
     prior=await publish(revision,queued,prior.intent);
     assert.equal(f.dispatches(),before,'Publication never rewrites unchanged historical vectors');
