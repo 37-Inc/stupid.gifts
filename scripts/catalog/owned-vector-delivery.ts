@@ -1055,9 +1055,10 @@ async function reuseReadback(adapters:Pick<OwnedVectorAdapters,'readback'|'readb
   const cancel=()=>abort();signal?.addEventListener('abort',cancel,{once:true});
   const timer=hasAccountedVectorReadback(adapters)?undefined:setTimeout(cancel,timeout);
   const pending=(async()=>{const entries=[...vectors];
-    for(let offset=0;offset<entries.length;offset+=10){controller.signal.throwIfAborted();
+    const size=adapters.readbacks?8:1,windowSize=adapters.readbacks?40:10;
+    for(let offset=0;offset<entries.length;offset+=windowSize){controller.signal.throwIfAborted();
       const groups:Array<Array<[string,SyncVector|null]>>=[];
-      const window=entries.slice(offset,offset+10),size=adapters.readbacks?2:1;
+      const window=entries.slice(offset,offset+windowSize);
       for(let i=0;i<window.length;i+=size)groups.push(window.slice(i,i+size));
       const results=await Promise.allSettled(groups.map(async group=>{
         try{controller.signal.throwIfAborted();const actual=adapters.readbacks?await adapters.readbacks(group.map(([id])=>id),controller.signal)

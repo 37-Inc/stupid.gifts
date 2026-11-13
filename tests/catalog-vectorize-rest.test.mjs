@@ -42,12 +42,22 @@ test('two-ID native pages keep exact order/absence/signed zero and never accept 
   const api=createVectorizeRestAdapters({...config,fetch:async(_url,init)=>{calls++;assert.deepEqual(JSON.parse(init.body),{ids:[second,publicId]});return new Response(body);}});
   const found=await api.readbacks([second,publicId],signal());
   assert.equal(found[0],null);assert.ok(Object.is(found[1].values[0],-0));assert.equal(calls,1);
-  for(const ids of [[],[publicId,publicId],[publicId,second,mutationId]])await assert.rejects(api.readbacks(ids,signal()),/invalid_id/);
+  for(const ids of [[],[publicId,publicId],Array.from({length:9},(_,i)=>`00000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`)])await assert.rejects(api.readbacks(ids,signal()),/invalid_id/);
   assert.equal(calls,1);
   for(const result of [[vector,vector],[{...vector,id:mutationId}]]){
     const invalid=createVectorizeRestAdapters({...config,fetch:async()=>ok(result)});
     await assert.rejects(invalid.readbacks([publicId,second],signal()),/provider_failed/);
   }
+});
+test('eight-ID readback pages preserve every native value within a finite response bound',async()=>{
+  const rows=Array.from({length:8},(_,i)=>({...vector,id:`00000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`,
+    values:values.map((v,j)=>j<2?v:Math.fround((j%2?-1:1)*1.23456789e-20))}));
+  const body=JSON.stringify({success:true,result:rows}).replaceAll('"values":[0,','"values":[-0,');
+  assert.ok(Buffer.byteLength(body)>128*1024);assert.ok(Buffer.byteLength(body)<512*1024);
+  let calls=0;const api=createVectorizeRestAdapters({...config,fetch:async(_url,init)=>{
+    calls++;assert.deepEqual(JSON.parse(init.body).ids,rows.map(v=>v.id));return new Response(body);}});
+  const result=await api.readbacks(rows.map(v=>v.id),signal());
+  assert.deepEqual(result,rows);assert.equal(calls,1);
 });
 test('explicit REST bridge binds account/index, preserves negative zero and native bytes, and uses exact-ID readback',async()=>{
   const calls=[];let stored;
