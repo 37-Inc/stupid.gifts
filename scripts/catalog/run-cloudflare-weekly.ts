@@ -554,8 +554,10 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         if(!owner||canonicalJson({...owner,epoch:old.owner!.epoch})!==canonicalJson(old.owner)
           ||owner.epoch<old.owner!.epoch||owner.epoch>old.owner!.epoch+1)throw Error('weekly_recovery_owner');
         const prior=await reviewed(original.inputs.previous.path,original.inputs.previous.sha256,repo,8*1024*1024) as ApprovedCatalogSeal;
-        const context=await reviewed(original.inputs.context.path,original.inputs.context.sha256,repo) as ApprovedCohortRequest['context'];
-        const approval=await reviewed(options.approval.path,options.approval.sha256,repo);
+        // These two inputs originally passed through canonical artifact storage,
+        // unlike the order-preserving predecessor. Reproduce those same bytes.
+        const context=JSON.parse(canonicalJson(await reviewed(original.inputs.context.path,original.inputs.context.sha256,repo))) as ApprovedCohortRequest['context'];
+        const approval=JSON.parse(canonicalJson(await reviewed(options.approval.path,options.approval.sha256,repo)));
         if(prior.kind!=='approved-catalog-seal'||!old.pins.approval||sha256(canonicalJson(approval))!==old.pins.approval.sha256)
           throw Error('weekly_recovery_approval');
         const previous=await readApprovedPrior(db,owner,prior,context);

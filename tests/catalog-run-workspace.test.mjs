@@ -40,6 +40,10 @@ test('ordered recovery address matches original small and chunked artifacts with
   for(const value of [{kind:'control',value:'a'}, {kind:'large-control',value:'a'.repeat(600000)}]){
     assert.deepEqual(orderedArtifactRef(value),await putOrdered(w,value,NOW));
   }
+  const input={z:'first',a:{z:1,a:2}},pin=await w.putArtifact(input,{kind:'phase',observedAt:NOW});
+  const original=await putOrdered(w,{context:await w.readArtifact(pin)},NOW);
+  assert.deepEqual(orderedArtifactRef({context:JSON.parse(canonicalJson(input))}),original);
+  assert.notDeepEqual(orderedArtifactRef({context:input}),original,'raw file key order differs from the original canonical artifact');
 });
 async function tamper(path,value){await writeFile(path,`${canonicalJson(value)}\n`,{mode:0o600});}
 
