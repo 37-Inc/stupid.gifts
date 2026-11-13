@@ -8,22 +8,23 @@ export function validAdmissionAsins(ids){return Array.isArray(ids)&&ids.length>0
   &&ids.every(id=>typeof id==='string'&&ASIN.test(id))&&new Set(ids).size===ids.length
   &&canonicalJson(ids)===canonicalJson([...ids].sort());}
 export function validSavedAdmissionRun(value){return typeof value==='string'&&/^admit-\d{4}-\d{2}-\d{2}-[a-f0-9]{12}$/.test(value);}
-export function hostedRunKey(kind,day,source,canaryId,admitAsins,admitSavedRun){
-  return kind==='code'?'serving-'+source.slice(0,12):kind==='full'?'scheduled-'+day:kind==='photos'?'photos-'+day
+export function hostedRunKey(kind,day,source,canaryId,admitAsins,admitSavedRun,photoAsins){
+  return kind==='code'?'serving-'+source.slice(0,12):kind==='full'?'scheduled-'+day:kind==='photos'?'photos-'+day+(photoAsins?'-'+hash(canonicalJson(photoAsins)).slice(0,12):'')
     :kind==='admit'?'admit-'+day+'-'+hash(canonicalJson(admitSavedRun?{asins:admitAsins,from:admitSavedRun,source}:admitAsins)).slice(0,12):'canary-'+day+'-'+canaryId;
 }
 /** One immutable intent contract shared by the coordinator AND real operator. */
 export function hostedRunRecord(value){
-  if(!exact(value,'schemaVersion,runKey,source,day,kind,inputsRef'+(value?.kind==='canary'?',canaryId':value?.kind==='admit'?',admitAsins'+(Object.hasOwn(value,'admitSavedRun')?',admitSavedRun':''):''))||value.schemaVersion!==1
+  if(!exact(value,'schemaVersion,runKey,source,day,kind,inputsRef'+(value?.kind==='canary'?',canaryId':value?.kind==='admit'?',admitAsins'+(Object.hasOwn(value,'admitSavedRun')?',admitSavedRun':''):value?.kind==='photos'&&Object.hasOwn(value,'photoAsins')?',photoAsins':''))||value.schemaVersion!==1
     ||!SOURCE.test(value.source)||!['full','photos','canary','code','admit'].includes(value.kind))fail();
   const date=new Date(value.day+'T00:00:00Z');
   if(typeof value.day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value.day)||!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==value.day)fail('day');
   const ref=value.inputsRef;if(!exact(ref,'schemaVersion,key,sha256')||ref.schemaVersion!==1||!HASH.test(ref.sha256)||ref.key!==`inputs/${ref.sha256}.json`)fail('inputs_reference');
   if(value.kind==='admit'&&!validAdmissionAsins(value.admitAsins))fail('admission_asins');
+  if(Object.hasOwn(value,'photoAsins')&&!validAdmissionAsins(value.photoAsins))fail('photo_asins');
   if(Object.hasOwn(value,'admitSavedRun')&&!validSavedAdmissionRun(value.admitSavedRun))fail('admission_source');
   if(value.kind==='canary'&&!ASIN.test(value.canaryId))fail();
   const legacySaved=value.admitSavedRun&&'admit-'+value.day+'-'+hash(canonicalJson({asins:value.admitAsins,from:value.admitSavedRun})).slice(0,12);
-  if(value.runKey!==hostedRunKey(value.kind,value.day,value.source,value.canaryId,value.admitAsins,value.admitSavedRun)
+  if(value.runKey!==hostedRunKey(value.kind,value.day,value.source,value.canaryId,value.admitAsins,value.admitSavedRun,value.photoAsins)
     &&value.runKey!==legacySaved||value.runKey===value.admitSavedRun)fail();
   return value;
 }

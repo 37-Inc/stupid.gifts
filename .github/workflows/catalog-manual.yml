@@ -23,6 +23,10 @@ on:
         description: Optional accepted admission run key to reuse ORIGINAL saved observations; no supplier fetch
         type: string
         default: ''
+      photo_asins:
+        description: Optional exact existing ASINs for owner-requested photos mode; no copy or model generation
+        type: string
+        default: ''
       scheduled_at:
         description: Original Pacific due slot as UTC ISO timestamp; Cloudflare clock only
         type: string
@@ -67,6 +71,7 @@ jobs:
           CATALOG_CANARY_ASIN: ${{ inputs.canary_asin }}
           CATALOG_ADMIT_ASINS: ${{ inputs.admit_asins }}
           CATALOG_ADMIT_SAVED_RUN: ${{ inputs.admit_saved_run }}
+          CATALOG_PHOTO_ASINS: ${{ inputs.photo_asins }}
           STUPID_GIFTS_WEBSITE_CAMPAIGNS: ${{ secrets.STUPID_GIFTS_WEBSITE_CAMPAIGNS }}
           STUPID_GIFTS_OPERATOR_MODE: hosted
           STUPID_GIFTS_CLOUDFLARE_API_TOKEN: ${{ secrets.STUPID_GIFTS_CLOUDFLARE_API_TOKEN }}
@@ -77,7 +82,7 @@ jobs:
           STUPID_GIFTS_R2_SECRET_ACCESS_KEY: ${{ secrets.STUPID_GIFTS_R2_SECRET_ACCESS_KEY }}
         run: |
           umask 077
-          node --import tsx scripts/catalog/hosted-coordinator.mjs "$CATALOG_MODE" "$CATALOG_CANARY_ASIN" "$CATALOG_ADMIT_ASINS" "$CATALOG_ADMIT_SAVED_RUN"
+          node --import tsx scripts/catalog/hosted-coordinator.mjs "$CATALOG_MODE" "$CATALOG_CANARY_ASIN" "$CATALOG_ADMIT_ASINS" "$CATALOG_ADMIT_SAVED_RUN" "$CATALOG_PHOTO_ASINS"
 
   cleanup:
     name: Stupid Gifts — Expired cleanup

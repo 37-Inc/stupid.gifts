@@ -73,6 +73,17 @@ test('scheduled identity prevents duplicate invocations while named runs can rep
     ['prepare','--run','one','--run','two'],['publish'],['unknown']])assert.throws(()=>operatorInvocation(args,calendar),/routine_command/);
 });
 
+test('exact photo IDs require photo-only preparation and cannot turn into discovery or admission',()=>{
+  const base=['prepare','--photos-only','--run','photos-targeted'],calendar={day:'2026-11-13'},ids='B01DVUSR1Y,B0DK82DBDG';
+  assert.deepEqual(operatorInvocation([...base,'--photo-asins',ids],calendar).photoAsins,ids.split(','));
+  for(const args of [
+    ['prepare','--run','photos-targeted','--photo-asins',ids],
+    [...base,'--photo-asins',''],[...base,'--photo-asins','B01DVUSR1Y,B01DVUSR1Y'],
+    [...base,'--photo-asins',ids,'--admit-asins','B000000001'],
+    ['start','--run','photos-targeted','--photo-asins',ids],
+  ])assert.throws(()=>operatorInvocation(args,calendar),/routine_command/);
+});
+
 test('automation is explicit opt-in and absent/disabled preserves the legacy config path',()=>{
   assert.equal(routineAutomationPolicy(null),null);
   assert.equal(routineAutomationPolicy({schemaVersion:1,enabled:false,discovery:true,homepage:true}),null);

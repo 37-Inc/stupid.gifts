@@ -7,6 +7,7 @@ import {once} from 'node:events';
 import {coordinateHostedCatalog,hostedRunRecord,hostedInvocationDay,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader,hostedAdmissionAsins,assertUnpreparedHostedAdmission,reportHostedCleanupFailure} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
+import {hostedRunKey} from '../scripts/catalog/hosted-run-record.mjs';
 import {routineReviewProduct,routineRecoveryPhase,operatorInvocation,routineHostedPending,routineHostedPreparation} from '../scripts/catalog/daily-operator.mjs';
 
 const SOURCE='a'.repeat(40),NEW_SOURCE='b'.repeat(40),HASH='c'.repeat(64),DAY='2026-11-06';
@@ -583,6 +584,25 @@ test('photo-current is a healthy skip; canary is explicit and never inferred fro
   const canary=fixture();await canary.run({mode:'canary',canaryId:'B000000001'});
   assert.deepEqual(canary.calls[0],['prepare','--canary-id','B000000001','--run','canary-'+DAY+'-B000000001']);
   await assert.rejects(fixture().run({mode:'canary'}),/canary/);await assert.rejects(fixture().run({canaryId:'B000000001'}),/canary/);
+});
+
+test('exact photo refresh pins only the requested cohort and never replaces other pending work',async()=>{
+  const photoAsins=['B01DVUSR1Y','B0DK82DBDG'],runKey=hostedRunKey('photos',DAY,SOURCE,undefined,undefined,undefined,photoAsins);
+  assert.notEqual(runKey,'photos-'+DAY);
+  const record={schemaVersion:1,kind:'photos',runKey,day:DAY,source:SOURCE,inputsRef:ref,photoAsins};
+  assert.deepEqual(hostedRunRecord(record),record);
+  assert.throws(()=>hostedRunRecord({...record,photoAsins:[photoAsins[0]]}),/run_record/);
+  const f=fixture();await f.run({mode:'photos',photoAsins});
+  assert.deepEqual(f.calls[0],['prepare','--photos-only','--photo-asins',photoAsins.join(','),'--run',runKey]);
+  const args=operatorInvocation(f.calls[0],{day:DAY});
+  assert.deepEqual(args.photoAsins,photoAsins);routineHostedPreparation(record,args);
+  assert.throws(()=>routineHostedPreparation(record,{...args,photoAsins:[photoAsins[0]]}),/hosted_pending/);
+  for(const ids of [[],[...photoAsins].reverse(),[photoAsins[0],photoAsins[0]]])
+    await assert.rejects(fixture().run({mode:'photos',photoAsins:ids}),/photo_asins/);
+  await assert.rejects(fixture().run({mode:'full',photoAsins}),/photo_asins/);
+  const other=fixture();await other.run({mode:'full'},{invoke:async()=>({state:'attention',errorCode:'fixture_pending'})});const calls=other.calls.length;
+  const result=await other.run({mode:'photos',photoAsins});
+  assert.equal(result.errorCode,'catalog_hosted_catalog_pending');assert.equal(other.calls.length,calls);
 });
 test('tampered review SHA, mismatched rows/copy and unsafe image links cannot reach publish',async()=>{
   for(const mutate of [f=>{f.proposalSha='e'.repeat(64);},f=>{f.summary[0].publicId='other';},

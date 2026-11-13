@@ -216,6 +216,8 @@ function defaults(runtime,environment){
         ||config.publication.codeSha!==record.source||config.publication.identityOrigin!=='https://stupid.gifts'||config.publication.sourceMode!=='stupid-production')fail('config_identity');
       if(record.kind==='canary'&&(canonicalJson(config.cadence.automation?.refreshIds??null)!==canonicalJson([record.canaryId])
         ||config.cadence.automation.discovery!==false||config.credentials.openai))fail('canary_config');
+      if(record.photoAsins&&(canonicalJson(config.cadence.automation?.refreshIds??null)!==canonicalJson(record.photoAsins)
+        ||config.cadence.automation.discovery!==false||config.credentials.openai))fail('photo_config');
       if(canonicalJson(config.cadence.admitAsins??null)!==canonicalJson(record.kind==='admit'?record.admitAsins:null)
         ||record.kind==='admit'&&config.cadence.automation||Boolean(config.inputs.savedAdmission)!==Boolean(record.admitSavedRun))fail('admission_config');
       if(record.admitSavedRun){const bytes=await runtime.state.bytes(config.inputs.savedAdmission.path),pin=json(bytes);
@@ -269,11 +271,12 @@ function defaults(runtime,environment){
 
 /** One manual/scheduled invocation, one existing run. The ONLY mutable progress
  * pointer refers to immutable intent; actual phases/dispatches stay in RunWorkspace. */
-export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins,admitSavedRun,source,day:capturedDay,runtime,environment=process.env},injected={}){
+export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins,admitSavedRun,photoAsins,source,day:capturedDay,runtime,environment=process.env},injected={}){
   if(!['shadow','full','photos','canary','code','admit'].includes(mode)||!SOURCE.test(source)||!runtime.hosted||!runtime.durable)fail('invocation');
   day(capturedDay);if(mode==='canary'?!ASIN.test(canaryId):canaryId!==undefined)fail('canary');
   if(mode==='admit'?!validAdmissionAsins(admitAsins):admitAsins!==undefined)fail('admission_asins');
   if(admitSavedRun!==undefined&&(mode!=='admit'||!validSavedAdmissionRun(admitSavedRun)))fail('admission_source');
+  if(photoAsins!==undefined&&(mode!=='photos'||!validAdmissionAsins(photoAsins)))fail('photo_asins');
   const deps={...defaults(runtime,environment),...injected},pointerFile=runtime.care+'/pending-run.json';
   let pointerBytes=await optional(()=>runtime.state.readPointer('pending-run',pointerFile)),record;
   if(pointerBytes){const pointer=json(pointerBytes);
@@ -291,13 +294,15 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
   // provider work. Scheduled wakes may still finish this saved exact intent.
   if(mode==='admit'&&record&&(record.kind!=='admit'||canonicalJson(record.admitAsins)!==canonicalJson(admitAsins)||record.admitSavedRun!==admitSavedRun))
     return{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_catalog_pending'};
+  if(photoAsins&&record&&(record.kind!=='photos'||canonicalJson(record.photoAsins??null)!==canonicalJson(photoAsins)))
+    return{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_catalog_pending'};
   if(!record){
     if(mode==='shadow'){const inputsRef=inputsReference(await deps.currentInputs());await deps.restoreInputs(inputsRef);await deps.checkout(source);
       return{state:'shadow',source,inputsVerified:true,workspace:'not_verified_readonly',pending:false,...shadowProviderFields(await deps.shadowCheck())};}
-    const runKey=hostedRunKey(mode,capturedDay,source,canaryId,admitAsins,admitSavedRun);
+    const runKey=hostedRunKey(mode,capturedDay,source,canaryId,admitAsins,admitSavedRun,photoAsins);
     const file=runtime.care+'/runs/'+runKey+'/hosted-run.json';let bytes=await optional(()=>runtime.state.bytes(file));
     if(bytes){record=hostedRunRecord(json(bytes));if(record.runKey!==runKey)fail('run_record');resumed=true;}
-    else{record=hostedRunRecord({schemaVersion:1,runKey,source,day:capturedDay,kind:mode,inputsRef:inputsReference(await deps.currentInputs({refreshCampaigns:true})),...(mode==='canary'?{canaryId}:mode==='admit'?{admitAsins,...(admitSavedRun?{admitSavedRun}:{})}:{})});
+    else{record=hostedRunRecord({schemaVersion:1,runKey,source,day:capturedDay,kind:mode,inputsRef:inputsReference(await deps.currentInputs({refreshCampaigns:true})),...(mode==='canary'?{canaryId}:mode==='admit'?{admitAsins,...(admitSavedRun?{admitSavedRun}:{})}:photoAsins?{photoAsins}:{})});
       bytes=await runtime.state.put(file,record);}
     pointerBytes=await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:{path:file,sha256:hash(bytes)}},pointerBytes);
   }
@@ -366,7 +371,7 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
       return repaired?finish({state:'accepted',...repaired}):{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_successor_pending'};
     }
     let result;
-    if(!status.prepared){result=await invoke('prepare',record.kind==='photos'?['--photos-only']:record.kind==='canary'?['--canary-id',record.canaryId]
+    if(!status.prepared){result=await invoke('prepare',record.kind==='photos'?['--photos-only',...(record.photoAsins?['--photo-asins',record.photoAsins.join(',')]:[])]:record.kind==='canary'?['--canary-id',record.canaryId]
       :record.kind==='admit'?['--admit-asins',record.admitAsins.join(','),...(record.admitSavedRun?['--admit-saved-run',record.admitSavedRun]:[])]:[]);
       if(['attention','pending'].includes(result.state))return{...result,runKey:record.runKey};
       if(result.state==='skipped'&&['photos_current','run_already_completed'].includes(result.reason)){
@@ -422,9 +427,11 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
 async function main(){
   process.umask(0o077);
   if(process.platform!=='linux'||process.versions.node.split('.')[0]!=='22'||homedir()!=='/home/runner')fail('runner');
-  const [mode='shadow',canaryId,admissionList,savedRun]=process.argv.slice(2);if(process.argv.length>6)fail('invocation');
+  const [mode='shadow',canaryId,admissionList,savedRun,photoList]=process.argv.slice(2);if(process.argv.length>7)fail('invocation');
   const admitAsins=hostedAdmissionAsins(mode,admissionList);
   const admitSavedRun=savedRun||undefined;
+  const photoAsins=photoList?photoList.split(',').map(id=>id.trim()).sort():undefined;
+  if(photoAsins&&(mode!=='photos'||!validAdmissionAsins(photoAsins)))fail('photo_asins');
   const runtime=automationRuntime(),source=process.env.GITHUB_SHA;
   if((await exec('git',['rev-parse','HEAD'],{cwd:ROOT,env:hostedCommandEnvironment(process.env,{credentials:false})})).stdout.trim()!==source)fail('reviewed_source');
   const now=new Date(),scheduledAt=catalogScheduledTime(mode,process.env.CATALOG_SCHEDULED_AT),capturedDay=hostedInvocationDay(mode,scheduledAt??now);
@@ -456,7 +463,7 @@ async function main(){
     const result=await runAdminAdmissions(runtime,{source,day:capturedDay,coordinate:coordinateHostedCatalog});
     console.log(JSON.stringify(result));if(['attention','pending'].includes(result.state))process.exitCode=1;return;
   }
-  const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),...(admitAsins?{admitAsins}:{}),...(admitSavedRun?{admitSavedRun}:{}),source,day:capturedDay,runtime});
+  const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),...(admitAsins?{admitAsins}:{}),...(admitSavedRun?{admitSavedRun}:{}),...(photoAsins?{photoAsins}:{}),source,day:capturedDay,runtime});
   console.log(JSON.stringify(result));if(result.state==='attention'){console.error('::warning::Catalog run remains pending; resume its existing identity.');process.exitCode=1;}
   // Explicit staff admissions only, after normal care releases its owner. Empty
   // queues make no supplier/model calls. Never replace an unfinished daily run.
