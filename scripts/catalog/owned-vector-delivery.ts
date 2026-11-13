@@ -11,7 +11,7 @@ import type { PublicationIntent, PublishedCatalogBinding } from '../../lib/catal
 import { validateCatalogSnapshot,publicProductRightsExpiry,persistentDisplayRights } from '../../lib/catalog/snapshot.ts';
 import {persistentPublicProduct} from '../../lib/catalog/display.ts';
 import { hasAccountedVectorReadback,hasAccountedVectorTransport } from './vectorize-rest.ts';
-import { pruneExistingRevision, prunedVectorIds, prunedVectorPlan, settleCapturedRevision, capturedRevisionBuildRequest } from '../../lib/catalog/prune-existing-revision.ts';
+import { pruneExistingRevision, prunedVectorIds, prunedVectorPlan, settleCapturedRevision, capturedRevisionBuildRequest, permanentCapturedRevision } from '../../lib/catalog/prune-existing-revision.ts';
 import type { HistoricalNativeBinding, NativeHistoryBinding, PrunedRevision, PrunedVectorObservation, PrunedVectorPlan } from '../../lib/catalog/prune-existing-revision.ts';
 import type { PermanentCatalogRevision } from '../../lib/catalog/freeze-permanent-catalog.ts';
 import { permanentCatalogOperationKey } from '../../lib/catalog/freeze-permanent-catalog.ts';
@@ -949,9 +949,9 @@ function planChecks(db:CatalogD1,owner:MutationOwner,revision:ApprovedCohortRevi
   return[mutationAssertion(db,owner,['freezing']),assertion(db,`EXISTS(SELECT 1 FROM catalog_projection_receipts WHERE ${rc.map(k=>`${k} IS ?`).join(' AND ')})
     AND EXISTS(SELECT 1 FROM catalog_revisions WHERE revision=? AND source_export_sha256=? AND status IN('importing','reconciled') AND abandonment_delivery_id IS NULL)
     AND (SELECT coalesce(max(rowid),0) FROM publication_receipts)=? AND (? IS NULL OR EXISTS(SELECT 1 FROM publication_receipts WHERE ${pc.map(k=>`${k} IS ?`).join(' AND ')}))
-    AND (SELECT coalesce(max(sequence),0) FROM vector_sync_outbox)=? AND NOT EXISTS(SELECT 1 FROM vector_sync_outbox WHERE status!='complete') AND ?>${NOW}`,
+    AND (SELECT coalesce(max(sequence),0) FROM vector_sync_outbox)=? AND NOT EXISTS(SELECT 1 FROM vector_sync_outbox WHERE status!='complete') AND (? OR ?>${NOW})`,
     [...rc.map(k=>receipt[k]),revision.snapshot.catalogRevision,revision.sourceDigest,revision.request.context.publicationReceiptWatermark,
-      revision.request.context.priorPublication?.releaseId??null,...pc.map(k=>prior[k]),revision.globalVectorWatermark,revision.request.context.cutoff])];
+      revision.request.context.priorPublication?.releaseId??null,...pc.map(k=>prior[k]),revision.globalVectorWatermark,permanentCapturedRevision(revision)?1:0,revision.request.context.cutoff])];
 }
 export {planChecks as approvedCatalogPlanChecks};
 async function assertPlanSource(db:CatalogD1,owner:MutationOwner,revision:ApprovedCohortRevision){

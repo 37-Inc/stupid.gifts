@@ -24,6 +24,7 @@ import {publishRuntimeCatalog,readAcceptedRuntimeHandoff} from './publish-runtim
 import { accountedPublicationReadFetch, accountedPublicationFetch, isAccountedPublicationFetch } from './publication-read-fetch.ts';
 import { accountedPublicationUploadCommand, isAccountedPublicationUploadCommand } from './publication-upload-command.ts';
 import { approvedRequestControl, hydrateApprovedRequest, approvedRevisionControl, hydrateApprovedRevision,
+  durableApprovedRevisionControl,hydrateDurableApprovedRevision,
   approvedArtifactObservedAt, readApprovedPrior, createPublishedApprovedCatalogSeal, createPublishedApprovedCatalogSealFromControl } from './approved-catalog-seal.ts';
 import {isPersistentCatalogSeal,reconstructPermanentSnapshot} from './permanent-catalog-seal.ts';
 import {recoverProjectionSeal} from './recover-projection-seal.ts';
@@ -41,6 +42,8 @@ import { canonicalTime } from '../../lib/catalog/snapshot.ts';
 import {repairApprovedNewSlugs} from './new-product-slug-repair.ts';
 import {syncApprovedSearchDelta} from './sync-semantic-delta.ts';
 import {maintenanceDigest} from './maintenance-state.ts';
+import {productPresentation} from '../../lib/catalog/presentation.ts';
+import type {Merchandising,GagAppeal} from '../../lib/catalog/merchandising.ts';
 import {prepareCatalogProducts} from './prepare-products.mjs';
 import {createReviewedPhaseJournal,applyReviewedPhase,reconcileReviewedPhaseOwner} from './reviewed-provider-phases.mjs';
 import {routineUploadRetry} from './routine-upload-retry.ts';
@@ -227,7 +230,23 @@ export async function putOrdered(ws:RunWorkspace,value:unknown,observedAt:string
 }
 export async function readOrdered<T>(ws:RunWorkspace,ref:ArtifactRef):Promise<T>{
   const value=await ws.readArtifact(ref);
+  if(ref.reference.startsWith('controls/'))return value as T;
   return JSON.parse(typeof value==='string'?value:new TextDecoder('utf-8',{fatal:true}).decode(await ws.readBlob(ref))) as T;
+}
+/** Reproduce the old content address without saving or renewing its body. */
+export function orderedArtifactRef(value:unknown):ArtifactRef{
+  const text=JSON.stringify(value),bytes=Buffer.from(text);
+  let body:unknown=text;
+  if(Buffer.byteLength(canonicalJson(text))>WORKSPACE_BLOB_LIMITS.artifactBytes){
+    const digest=createHash('sha256').update(bytes).digest('hex'),count=Math.ceil(bytes.length/WORKSPACE_BLOB_LIMITS.chunkBytes),parts=[];
+    for(let index=0;index<count;index++){
+      const part=bytes.subarray(index*WORKSPACE_BLOB_LIMITS.chunkBytes,(index+1)*WORKSPACE_BLOB_LIMITS.chunkBytes);
+      parts.push(sha256(canonicalJson({schemaVersion:1,type:'run-workspace-chunk',blobSha256:digest,blobByteLength:bytes.length,
+        index,count,sha256:createHash('sha256').update(part).digest('hex'),byteLength:part.length,base64:part.toString('base64')})));
+    }
+    body={schemaVersion:1,type:'run-workspace-blob',sha256:digest,byteLength:bytes.length,chunkBytes:WORKSPACE_BLOB_LIMITS.chunkBytes,parts};
+  }
+  const digest=sha256(canonicalJson(body));return{sha256:digest,reference:`objects/${digest}.json`};
 }
 async function readOriginalVectors(ws:RunWorkspace,ref:ArtifactRef):Promise<Record<string,unknown>> {
   const value=await ws.readArtifact(ref);
@@ -379,6 +398,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     ?await reviewed(options.reviewedUploadRetry.path,options.reviewedUploadRetry.sha256,repo) as Parameters<typeof executePublication>[0]['reviewedUploadRetry']:undefined;
   const scope={environment:config.environment,indexName:config.vectorIndex.name};const resolveToken=dependencies.resolveToken||resolveReadToken;
   const workspaceOptions:RunWorkspaceOptions={directory:options.workspace,repository:adoption?original.publication.sourceRoot:repo,mode:options.command==='start'?'create':'resume',
+    publicationControls:Boolean(config.publication.runtimeCatalog),
     ...(options.durable?{durable:options.durable}:{}),
     runId:original.runId,configSha256:options.configSha256,codeSha:original.codeSha,
     scope:{...scope,accountId:config.accountId,databaseId:config.database.id,databaseName:config.database.name,workerName:config.publication.workerName},
@@ -523,12 +543,41 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     let cp:WorkspaceCheckpoint;
     try{const full=await ws.readCheckpoint();cp=full?.checkpoint||{phase:'created',owner:null,state:{},pins:{},phaseComplete:null};saved=full;}
     catch(error){
+      if(error instanceof Error&&error.message==='run_workspace_expired'&&config.publication.runtimeCatalog
+        &&saved?.checkpoint.phase==='freezing'&&saved.checkpoint.owner?.phase==='freezing'
+        &&saved.checkpoint.pins.request&&!saved.checkpoint.pins.preparedRevision&&options.approval
+        &&original.cadence?.admitAsins&&!original.cadence.automation&&!saved.checkpoint.control){
+        // A pre-upgrade checkpoint may already have been purged. Recover its
+        // exact request from independently hash-bound inputs and immutable D1;
+        // do not resurrect provider journals or synthesize their lost telemetry.
+        const old=saved.checkpoint,owner=await readMutationOwner(db,scope);
+        if(!owner||canonicalJson({...owner,epoch:old.owner!.epoch})!==canonicalJson(old.owner)
+          ||owner.epoch<old.owner!.epoch||owner.epoch>old.owner!.epoch+1)throw Error('weekly_recovery_owner');
+        const prior=await reviewed(original.inputs.previous.path,original.inputs.previous.sha256,repo,8*1024*1024) as ApprovedCatalogSeal;
+        // These two inputs originally passed through canonical artifact storage,
+        // unlike the order-preserving predecessor. Reproduce those same bytes.
+        const context=JSON.parse(canonicalJson(await reviewed(original.inputs.context.path,original.inputs.context.sha256,repo))) as ApprovedCohortRequest['context'];
+        const approval=JSON.parse(canonicalJson(await reviewed(options.approval.path,options.approval.sha256,repo)));
+        if(prior.kind!=='approved-catalog-seal'||!old.pins.approval||sha256(canonicalJson(approval))!==old.pins.approval.sha256)
+          throw Error('weekly_recovery_approval');
+        const previous=await readApprovedPrior(db,owner,prior,context);
+        const request={previous,context,scope,codeSha:original.codeSha,predecessor:prior,approval,approvalSha256:old.pins.approval.sha256} as ApprovedCohortRequest;
+        const control=approvedRequestControl(request);
+        if(approvedCohortOperationKey(request)!==old.owner!.operationKey
+          ||canonicalJson(orderedArtifactRef(control))!==canonicalJson(old.pins.request))throw Error('weekly_recovery_request');
+        const publicationRequest=await ws.putPublicationControl('request',control);
+        const publicationSummary=await ws.putPublicationControl('summary',{counts:{originalPhases:null},timingsMs:{},usage:null,
+          warnings:[{phase:'publication',reasonCode:'original_summary_expired'}]});
+        saved=await ws.writeCheckpoint(saved.sha256,{...old,state:{},pins:{...old.pins,publicationRequest,publicationSummary}});
+        cp={...saved.checkpoint,state:{}};
+      }else{
       if(!saved||!resolving(saved.checkpoint)||!saved.checkpoint.owner)throw error;
       const result=await executePublication({db,owner:saved.checkpoint.owner,revision:null,requestId:saved.checkpoint.control!.publication!.requestId,
         runReference:saved.checkpoint.control!.publication!.runReference,workspace:ws,config:config.publication,credentials:{cloudflareToken:token,
           identityAuthorization:await identityAuthorization()},dependencies:publication,reviewedUploadRetry,finishAuthorization:finish?.authorization});
       return result.state==='published'?{state:'attention',phase:'published',reason:'finalization_requires_review',releaseId:result.releaseId,
         receiptSha256:result.receiptSha256,budget:await ws.budget()}:{...result,budget:await ws.budget()};
+      }
     }
     const hydrationOwner=saved?await recoverMarkedReviewedActivation({db,workspace:ws,saved:{sha256:saved.sha256,checkpoint:cp},config:config.publication,
       retry:reviewedUploadRetry,finishAuthorization:finish?.authorization}):null;
@@ -561,7 +610,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     }
     const reviewedPreparation=Boolean(config.cadence?.automation||config.cadence?.admitAsins&&!config.inputs.savedAdmission
       &&(cp.phase==='created'||cp.pins.productPreparation));
-    if(reviewedPreparation){
+    if(reviewedPreparation&&(!config.publication.runtimeCatalog||['created','phases_running','phases_complete'].includes(cp.phase))){
       const journalRef=cp.pins.automationJournal??state().automationJournal as ArtifactRef|undefined;
       const initial=journalRef?await readOrdered(ws,journalRef):undefined;
       const journal=createReviewedPhaseJournal({initial,read:(ref:ArtifactRef)=>readOrdered(ws,ref),readReceipt:(ref:ArtifactRef)=>ws.readReceipt(ref),
@@ -649,9 +698,12 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         };
         try{
           if(needsApplication)await run();
-          const complete=await journal.read('provider-phases-complete') as {summary:Record<string,unknown>};
-          const phaseComplete=await ws.putArtifact(finalization(complete.summary),{kind:'publication',observedAt:now()});
-          await write({phase:'phases_complete',owner:cursor.current,phaseComplete,pins:{...cp.pins,automationJournal:state().automationJournal as ArtifactRef}});
+          const complete=await journal.read('provider-phases-complete') as {summary:Record<string,unknown>;merchandising:Merchandising};
+          const phaseComplete=config.publication.runtimeCatalog?await ws.putPublicationControl('summary',finalization(complete.summary))
+            :await ws.putArtifact(finalization(complete.summary),{kind:'publication',observedAt:now()});
+          const appeals=config.publication.runtimeCatalog?await ws.putPublicationControl('appeals',Object.entries(complete.merchandising).map(([id,v])=>
+            ({id,sourceSha256:sha256(canonicalJson({title:v.sourceTitle,description:v.sourceDescription})),appeal:v.appeal}))):null;
+          await write({phase:'phases_complete',owner:cursor.current,phaseComplete,pins:{...cp.pins,automationJournal:state().automationJournal as ArtifactRef,...(appeals?{appeals}:{})}});
         }catch(error){return{state:'attention',phase:cp.phase,errorCode:safeCode(error),
           ...(catalogD1FailureDetail(error)?{diagnostic:catalogD1FailureDetail(error)}:{}),budget:await ws.budget()};}
       }
@@ -713,7 +765,8 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         const backend={runId:config.runId,gitSha:config.codeSha,backfillLimit:config.backfillLimit,
           maintenanceStore:maintenance,telemetryStore:telemetry,providerEvidence,deferPublicationFinalization:true,
           async publish(input:{finalization:Record<string,unknown>}){
-            const phaseComplete=await ws.putArtifact(finalization(input.finalization),{kind:'publication',observedAt:now()});
+            const phaseComplete=config.publication.runtimeCatalog?await ws.putPublicationControl('summary',finalization(input.finalization))
+              :await ws.putArtifact(finalization(input.finalization),{kind:'publication',observedAt:now()});
             await write({phase:'phases_complete',owner:cursor.current,phaseComplete});return{status:'pending'};
           },async finalizeRun(id:string,input:Record<string,unknown>){await telemetry.finishCatalogRun(id,input);return telemetry.loadCatalogRun(id,{items:false});}};
         if(config.cadence)await runDailyCatalogWithBackend({...backend,cadence:dependencies.cadence!,featuredIds:config.cadence.featuredIds,
@@ -787,17 +840,20 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         ...(automation?{automation}:{}),
         approval:await ws.readArtifact(cp.pins.approval),approvalSha256:cp.pins.approval.sha256} as unknown as ApprovedCohortRequest;
       approvedCohortOperationKey(request);
-      const pin=await putOrdered(ws,approvedRequestControl(request),now());await write({phase:'freezing',pins:{...cp.pins,request:pin}});
+      const pin=config.publication.runtimeCatalog?await ws.putPublicationControl('request',approvedRequestControl(request))
+        :await putOrdered(ws,approvedRequestControl(request),now());await write({phase:'freezing',pins:{...cp.pins,request:pin}});
     }
     let revision:ApprovedCohortRevision|undefined;
     if(cp.phase==='freezing'){
-      const stored=await readOrdered<ReturnType<typeof approvedRequestControl>>(ws,cp.pins.request);
+      const stored=await readOrdered<ReturnType<typeof approvedRequestControl>>(ws,cp.pins.publicationRequest??cp.pins.request);
       const recovered=stored.kind==='approved-request-control'&&!cp.pins.preparedRevision&&cp.owner?.phase==='freezing'
         ?await recoverProjectionSeal(db,cp.owner,stored):null;
       if(recovered&&canonicalJson(recovered.owner)!==canonicalJson(cp.owner))await write({owner:recovered.owner});
       let request:ApprovedCohortRequest;
       if(cp.pins.preparedRevision){
-        revision=await hydrateApprovedRevision(db,cp.owner!,await readOrdered<ReturnType<typeof approvedRevisionControl>>(ws,cp.pins.preparedRevision));
+        revision=cp.pins.preparedRevision.reference.startsWith('controls/')
+          ?await hydrateDurableApprovedRevision(db,cp.owner!,await readOrdered(ws,cp.pins.preparedRevision))
+          :await hydrateApprovedRevision(db,cp.owner!,await readOrdered(ws,cp.pins.preparedRevision));
         request=revision.request;
         // Hydration already verifies this request and its full predecessor.
         // Bind the independent checkpoint pin without reading the catalog twice.
@@ -811,7 +867,8 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         if(!owner)throw new Error('weekly_freeze_claim');await write({owner});
         owner=await repairApprovedNewSlugs(db,owner,request,now());await write({owner});
         const prepared=await prepareOwnedApprovedCohortPlan({db,owner,request,adapters});revision=prepared.revision;
-        const pin=await putOrdered(ws,approvedRevisionControl(revision),approvedArtifactObservedAt(revision.snapshot,now(),config.retention.rules.publication.maxAgeMs));
+        const pin=config.publication.runtimeCatalog?await ws.putPublicationControl('revision',durableApprovedRevisionControl(revision))
+          :await putOrdered(ws,approvedRevisionControl(revision),approvedArtifactObservedAt(revision.snapshot,now(),config.retention.rules.publication.maxAgeMs));
         await write({owner:prepared.owner,pins:{...cp.pins,preparedRevision:pin},state:{...state(),vectorOffset:0,vectorIds:prepared.remainingIds}});
       }
       const plan=approvedCohortVectorPlan(revision);
@@ -871,15 +928,27 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         const catalog=await reviewed(derived.path,derived.sha256,repo,8*1024*1024,true);
         const result=await syncApprovedSearchDelta({db,owner:cp.owner!,revision,catalog,
           accountId:config.accountId,token,fetch:generalSend});
-        const pin=await putOrdered(ws,{catalogRevision:revision.snapshot.catalogRevision,...result},now());
+        const value={catalogRevision:revision.snapshot.catalogRevision,...result};
+        const pin=config.publication.runtimeCatalog?await ws.putPublicationControl('search-delta',value):await putOrdered(ws,value,now());
         await write({pins:{...cp.pins,searchDelta:pin}});
       }
       const queued=await settleOwnedApprovedCohortVectorProof({db,owner:cp.owner!,revision,adapters});
-      const pin=await putOrdered(ws,approvedRevisionControl(revision),approvedArtifactObservedAt(revision.snapshot,now(),config.retention.rules.publication.maxAgeMs));
+      const pin=cp.pins.preparedRevision;
       await write({phase:'publishing',owner:queued.owner,pins:{...cp.pins,revision:pin},state:{...state(),requestId:queued.requestId}});
     }
     if(cp.phase==='publishing'){
-      revision=revision||await hydrateApprovedRevision(db,hydrationOwner??cp.owner!,await readOrdered<ReturnType<typeof approvedRevisionControl>>(ws,cp.pins.revision));
+      revision=revision||(cp.pins.revision.reference.startsWith('controls/')
+        ?await hydrateDurableApprovedRevision(db,hydrationOwner??cp.owner!,await readOrdered(ws,cp.pins.revision))
+        :await hydrateApprovedRevision(db,hydrationOwner??cp.owner!,await readOrdered(ws,cp.pins.revision)));
+      if(cp.pins.appeals){
+        const appeals=await ws.readArtifact(cp.pins.appeals) as unknown as Array<{id:string;sourceSha256:string;appeal:GagAppeal}>;
+        const merchandising={...config.publication.merchandising};
+        for(const product of revision.snapshot.products){const view=productPresentation(product),signal=appeals.find(s=>s.id===view.id);
+          if(signal?.sourceSha256===sha256(canonicalJson({title:view.title,description:view.description})))
+            merchandising[view.id]={sourceTitle:view.title,sourceDescription:view.description,appeal:signal.appeal};
+        }
+        config={...config,publication:{...config.publication,merchandising}};
+      }
       const result=config.publication.runtimeCatalog?await publishRuntimeCatalog({db,owner:cp.owner!,revision,requestId:String(state().requestId),runReference:config.runId,
         workspace:ws,config:config.publication,configSha256:options.configSha256,editHomepage:!config.cadence?.photosOnly,
         retainOriginalFailedTelemetry:await retainedFailedAdmission(ws,db,config,options.configSha256),
@@ -892,7 +961,8 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       if(actual.length!==1)throw new Error('weekly_publication_receipt_missing');
       const seal=await createPublishedApprovedCatalogSeal(db,revision,{releaseId:result.releaseId,receiptSha256:sha256(canonicalJson(actual[0]))});
       if(revision.persistent)await ws.recordCatalogSuccessor(seal);
-      const pin=await ws.putArtifact(result,{kind:'publication',observedAt:now()}),sealPin=revision.persistent?null:await putOrdered(ws,seal,now());
+      const pin=config.publication.runtimeCatalog?await ws.putPublicationControl('publication-result',result)
+        :await ws.putArtifact(result,{kind:'publication',observedAt:now()}),sealPin=revision.persistent?null:await putOrdered(ws,seal,now());
       await write({phase:'published',owner:null,pins:{...cp.pins,published:pin,...(sealPin?{publishedSeal:sealPin}:{})}});
     }
     if(cp.phase==='published'){
@@ -900,7 +970,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       const owner=await claimMutationOwnership(db,scope,{phase:'writing',ownerReference:`${config.runId}:finalize`,operationKey:sha256(`finalize:${options.configSha256}`)});
       if(!owner)throw new Error('weekly_finalize_owner');await write({owner});
       const cursor={current:owner};const telemetry=createD1CatalogTelemetryStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision});
-      const summary=await ws.readArtifact(cp.phaseComplete!) as Record<string,unknown>;
+      const summary=await ws.readArtifact(cp.pins.publicationSummary??cp.phaseComplete!) as Record<string,unknown>;
       const input={...summary,status:'completed',counts:{...summary.counts as object,publication:{status:'published',releaseId:receipt.releaseId,receiptSha256:receipt.receiptSha256}}};
       if(!await retainedFailedAdmission(ws,db,config,options.configSha256)){
         await telemetry.finishCatalogRun(config.runId,input);const actual=await telemetry.loadCatalogRun(config.runId,{items:false});

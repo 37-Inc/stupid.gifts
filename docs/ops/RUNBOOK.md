@@ -69,6 +69,15 @@ for shadow, canary, explicit activation and single-writer recovery, and
   exact prepared config only after proving both local and durable manifest/head
   absent. It retains the original source, hash, decisions, deadlines and run ID;
   an existing/uncertain workspace always uses normal recovery, never another start.
+- Runtime publication checkpoints and ID/hash-only request/revision controls do
+  not expire with supplier response bodies. They retain the original approval,
+  owner, accounting and source deadlines. Resume reconstructs the exact sealed
+  projection from D1; current serving still drops expired overlays in favor of
+  cleared content. A runner cutoff is not a content-expiry rule. Legacy finite-
+  only publications retain their freshness checks. The narrowly supported old
+  pre-plan admission recovery verifies the original request's content address
+  before replacing its purged body with control metadata; expired summary values
+  are explicitly unknown, never guessed. No supplier/model phase is replayed.
 
 Measured baseline: November 11 run `43016472526` started 7h29m late and the
 catalog job took 3h47m48s. Forty serial native updates spanned 111m03s; four

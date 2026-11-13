@@ -78,14 +78,19 @@ function matchesOwner(owner: MutationOwner, request: PruneRequest): void {
 function assertion(db: CatalogD1, sql: string, params: unknown[] = []) {
   return db.prepare(`SELECT json(CASE WHEN (${sql}) THEN 'true' ELSE 'prune_fenced' END)`).bind(...params);
 }
-function priorAssertion(db: CatalogD1, request: PruneRequest, globalWatermark: number, prior: Row) {
+function priorAssertion(db: CatalogD1, request: PruneRequest, globalWatermark: number, prior: Row,permanent=false) {
   const columns = ['release_id','catalog_revision','code_sha','completed_at','manifest_json'];
   return assertion(db, `(SELECT coalesce(max(rowid),0) FROM publication_receipts)=?
     AND (SELECT coalesce(max(sequence),0) FROM vector_sync_outbox)=?
     AND NOT EXISTS(SELECT 1 FROM vector_sync_outbox WHERE status!='complete')
     AND (? IS NULL OR EXISTS(SELECT 1 FROM publication_receipts WHERE ${columns.map(key => `${key} IS ?`).join(' AND ')}))
-    AND ?>${NOW}`, [request.context.publicationReceiptWatermark, globalWatermark, request.context.priorPublication?.releaseId ?? null,
-      ...columns.map(key => prior[key]), request.context.cutoff]);
+    AND (? OR ?>${NOW})`, [request.context.publicationReceiptWatermark, globalWatermark, request.context.priorPublication?.releaseId ?? null,
+      ...columns.map(key => prior[key]),permanent?1:0, request.context.cutoff]);
+}
+/** A runner deadline is not the lifetime of independently cleared content. */
+export function permanentCapturedRevision(revision:PrunedRevision){
+  return Boolean('persistent' in revision&&revision.persistent&&revision.snapshot.products.length
+    &&revision.snapshot.products.every(product=>catalogDisplayDeadline(product)===Infinity));
 }
 function held(value: { id: string; publicId: string; slug: string }, reason: SafeHeldProduct['reason']): SafeHeldProduct {
   return { id: value.id, publicId: value.publicId, slug: value.slug, path: `/gifts/${value.slug}`,
@@ -166,7 +171,7 @@ export async function sealCapturedRevision(db: CatalogD1, owner: MutationOwner, 
     throw new Error('prune_retry_source_changed');
   const imports = await unabandonedImportsQuery(db,owner.environment,revision);
   await assertPruningCurrent(db, owner, sourceRows);
-  const start = [mutationAssertion(db, owner, ['freezing']), priorAssertion(db, request, globalVectorWatermark, priorRow),
+  const start = [mutationAssertion(db, owner, ['freezing']), priorAssertion(db, request, globalVectorWatermark, priorRow,permanentCapturedRevision(input)),
     assertion(db, imports.sql, imports.params)];
   await db.batch([...start, db.prepare(`INSERT INTO catalog_revisions(revision,created_at,source_export_sha256,status)
     VALUES(?,?,?,'importing') ON CONFLICT(revision) DO NOTHING`).bind(revision, generatedAt, sourceDigest)]);
@@ -203,7 +208,7 @@ export async function sealCapturedRevision(db: CatalogD1, owner: MutationOwner, 
     const receiptPredicate = { sql: 'SELECT 1 FROM catalog_projection_receipts WHERE catalog_revision=? AND snapshot_sha256=? AND projection_sha256=?',
       params: [revision, packet.receipt.snapshot_sha256, packet.receipt.projection_sha256] };
     await assertPruningCurrent(db, owner, sourceRows);
-    await db.batch([mutationAssertion(db, owner, ['freezing']), priorAssertion(db, request, globalVectorWatermark, priorRow),
+    await db.batch([mutationAssertion(db, owner, ['freezing']), priorAssertion(db, request, globalVectorWatermark, priorRow,permanentCapturedRevision(input)),
       db.prepare(query.sql).bind(...query.params), mutationAdvance(db, owner, receiptPredicate), mutationAssertion(db, nextOwner, ['freezing'])]);
   }
   // An empty target has no per-revision events; global settlement is separately
@@ -335,13 +340,14 @@ export async function settleCapturedRevision(db: CatalogD1, owner: MutationOwner
   if (existingRequest) {
     if (existingRequest.request_json !== bytes) throw new Error('prune_build_request_changed');
     await db.batch([mutationAssertion(db, owner, ['freezing']), receiptAssertion(),
-      priorAssertion(db, revision.request, revision.globalVectorWatermark, revision.priorRow)]);
+      priorAssertion(db, revision.request, revision.globalVectorWatermark, revision.priorRow,permanentCapturedRevision(revision))]);
     return { state: 'existing' as const, requestId, owner };
   }
   const gate = mutationFenceQuery(owner, ['freezing']); const nextOwner = { ...owner, epoch: owner.epoch + 1 };
   await db.batch([mutationAssertion(db, owner, ['freezing']), receiptAssertion(),
-    priorAssertion(db, revision.request, revision.globalVectorWatermark, revision.priorRow),
-    assertion(db, `NOT EXISTS(SELECT 1 FROM catalog_public_products WHERE catalog_revision=? AND eligible_until<=${NOW})`, [revision.snapshot.catalogRevision]),
+    priorAssertion(db, revision.request, revision.globalVectorWatermark, revision.priorRow,permanentCapturedRevision(revision)),
+    assertion(db, `? OR NOT EXISTS(SELECT 1 FROM catalog_public_products WHERE catalog_revision=? AND eligible_until<=${NOW})`,
+      [permanentCapturedRevision(revision)?1:0,revision.snapshot.catalogRevision]),
     db.prepare(`UPDATE catalog_revisions SET status='reconciled' WHERE revision=? AND source_export_sha256=?
       AND status IN ('importing','reconciled') AND ${gate.sql}`).bind(revision.snapshot.catalogRevision, revision.sourceDigest, ...gate.params),
     assertion(db, "EXISTS(SELECT 1 FROM catalog_revisions WHERE revision=? AND source_export_sha256=? AND status='reconciled')",

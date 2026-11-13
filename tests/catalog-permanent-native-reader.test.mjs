@@ -4,7 +4,9 @@ import {readFile} from 'node:fs/promises';
 import {permanentCatalogFixture} from './helpers/permanent-catalog-fixture.mjs';
 import {scope,uuid} from './helpers/published-vector-fixture.mjs';
 import {preparePermanentCatalog,settlePermanentCatalog} from '../lib/catalog/freeze-permanent-catalog.ts';
-import {approvedCohortOperationKey} from '../lib/catalog/freeze-approved-cohort.ts';
+import {approvedCohortOperationKey,prepareApprovedCohort} from '../lib/catalog/freeze-approved-cohort.ts';
+import {durableApprovedRevisionControl,hydrateDurableApprovedRevision} from '../scripts/catalog/approved-catalog-seal.ts';
+import {validatePublicationControlArtifact} from '../scripts/catalog/publication-control.ts';
 import {claimMutationOwnership} from '../lib/catalog/mutation-fence.ts';
 import {claimBuildRequest,beginBuildActivation,resolveBuildActivation,permanentPublicationDeadline} from '../lib/catalog/build-requests.ts';
 import {enqueuePublication,claimPublication,recordPublicationDispatch,completePublication,completeActivatedApprovedCatalogPublication} from '../lib/catalog/publication.ts';
@@ -44,6 +46,21 @@ async function fixture(t,{publicationRevision}={}){
   assert.ok(current.revision.persistent);assert.ok(current.revision.snapshot.products.every(p=>p.eligibleUntil===null));
   return{...f,...current};
 }
+
+test('sealed permanent publication resumes after runner cutoff with body-free controls and unchanged source/owner',async t=>{
+  const f=await fixture(t),r=f.revision,control=durableApprovedRevisionControl(r),before=f.dispatches();
+  validatePublicationControlArtifact({schemaVersion:1,kind:'revision',value:control});
+  assert.equal(control.revision.snapshot,undefined);assert.equal(control.revision.packet,undefined);
+  assert.equal(control.sourceRows,undefined);
+  f.advance(120000);
+  assert.deepEqual(await hydrateDurableApprovedRevision(f.db,f.owner,control),r);
+  const rebuilt=await prepareApprovedCohort(f.db,f.owner,r.request);
+  assert.deepEqual(rebuilt.revision,r);assert.deepEqual(rebuilt.owner,f.owner);
+  const queued=await settleOwnedApprovedCohortVectorProof({db:f.db,owner:f.owner,revision:r,adapters:f.adapters});
+  assert.ok(queued.requestId);assert.equal(f.dispatches(),before);
+  assert.equal(r.request.context.cutoff,control.request.request.context.cutoff);
+  await assert.rejects(hydrateDurableApprovedRevision(f.db,queued.owner,{...control,revisionSha256:'0'.repeat(64)}));
+});
 
 test('publication-only policy preserves genuine historical native members without granting new native effects',async t=>{
   const f=await fixture(t,{publicationRevision:'native-recovery'}),plan=prunedVectorPlan(f.revision);
@@ -133,7 +150,9 @@ test('source counter covers all source tables and rolls back with the original w
 test('native-only permanent proof retains exact policy/bits/history after context expiry without repeating full source scans or mutations',async t=>{
   const f=await fixture(t),before=canonicalJson(f.revision),changes=f.sql.prepare('SELECT total_changes() n').get().n,dispatches=f.dispatches();
   await readOwnedApprovedCohortVectors(f.db,f.owner,f.revision,f.adapters);f.advance(60001);
-  await assert.rejects(readOwnedApprovedCohortVectors(f.db,f.owner,f.revision,f.adapters));
+  // An immutable, permanently cleared revision is not invalidated by the
+  // runner's old capture cutoff. Source/owner and exact native bits still bind it.
+  assert.equal((await readOwnedApprovedCohortVectors(f.db,f.owner,f.revision,f.adapters)).settled,true);
   const queries=[],db={...f.db,prepare(sql){queries.push(sql);return f.db.prepare(sql);}};
   assert.equal((await readOwnedPermanentCohortNative(db,f.owner,f.revision,f.adapters)).settled,true);
   const capture={prepare(sql){return{bind(){return{sql};}};}},old=approvedCatalogPlanChecks(capture,f.owner,f.revision);

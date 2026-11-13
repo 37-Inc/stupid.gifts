@@ -68,6 +68,44 @@ test('journal ACK precedes dispatch; fresh runner restores original bodies, owne
   assert.ok(bodyIndex>=0&&f.calls.slice(bodyIndex+1).some(([method,key])=>method==='cas'&&key.endsWith('/head.json')));
 });
 
+test('publication progress and summary survive supplier expiry and cold restore without renewing evidence',async t=>{
+  const f=await fixture(t),w=await f.open({publicationControls:true});
+  const body=await w.putArtifact({title:'finite supplier body'},{kind:'phase',observedAt:NOW});
+  const summary={counts:{refreshed:2},timingsMs:{productPreparation:100},usage:{embedding:2},warnings:[]};
+  const phaseComplete=await w.putPublicationControl('summary',summary);
+  const checkpoint={...cp(),phase:'freezing',state:{vectorOffset:0,vectorIds:[]},pins:{body},phaseComplete};
+  const first=await w.writeCheckpoint(null,checkpoint);await w.reserveBudget(reservation);
+  f.setNow(LATER);await w.purgeExpired();
+  await assert.rejects(w.readArtifact(body),/expired/);
+  const second=await w.writeCheckpoint(first.sha256,{...checkpoint,state:{vectorOffset:1,vectorIds:[]}});
+  await assert.rejects(w.writeCheckpoint(second.sha256,{...second.checkpoint,state:{title:'do not retain supplier content'}}),/publication_control_invalid/);
+  await assert.rejects(w.putPublicationControl('summary',{...summary,counts:{products:[{title:'unsafe'}]}}));
+  await w.close();
+  const restored=await f.open({directory:join(f.parent,'publication-runner'),mode:'resume'});
+  assert.deepEqual(await restored.readCheckpoint(),second);
+  assert.deepEqual(await restored.readArtifact(phaseComplete),summary);
+  assert.equal((await restored.budget()).unconfirmedRequests,1);
+  await assert.rejects(restored.readArtifact(body),/expired/);
+  await assert.rejects(restored.putArtifact({title:'not renewed'},{kind:'phase',observedAt:LATER}),/expired/);
+  const third=await restored.writeCheckpoint(second.sha256,{...second.checkpoint,state:{vectorOffset:2,vectorIds:[]}});
+  assert.equal(third.checkpoint.state.vectorOffset,2);
+  await assert.rejects(restored.writeCheckpoint(second.sha256,checkpoint),/checkpoint_cas/);
+});
+
+test('legacy expired control can advance with old immutable pins; no expired body is restored',async t=>{
+  const f=await fixture(t),w=await f.open();
+  const body=await w.putArtifact({title:'old supplier body'},{kind:'phase',observedAt:NOW});
+  const original=await w.writeCheckpoint(null,{...cp(),pins:{body},state:{vectorOffset:0}});
+  await w.close();f.setNow(LATER);
+  const restored=await f.open({mode:'resume',publicationControls:true});await restored.purgeExpired();
+  await assert.rejects(restored.readCheckpoint(),/expired/);
+  const summary=await restored.putPublicationControl('summary',{counts:{originalPhases:null},timingsMs:{},usage:null,warnings:[]});
+  const next=await restored.writeCheckpoint(original.sha256,{...original.checkpoint,state:{},pins:{body,publicationSummary:summary}});
+  assert.deepEqual(await restored.readCheckpoint(),next);
+  await assert.rejects(restored.readArtifact(body),/expired/);
+  await assert.rejects(restored.writeCheckpoint(next.sha256,{...next.checkpoint,pins:{publicationSummary:summary}}),/pin_rewrite/);
+});
+
 test('blob transfer batches metadata without changing any chunk bytes, hash, deadline or final ACK',async t=>{
   const f=await fixture(t),w=await f.open(),bytes=Buffer.alloc(8*1024*1024,7),count=32;
   const put=f.store.putImmutable,cas=f.store.compareAndSwap;let active=0,peak=0,acknowledged=0;

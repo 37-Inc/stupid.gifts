@@ -17,6 +17,8 @@ import { validateExecutionAdoption } from './execution-adoption.ts';
 import type { ExecutionAdoption } from './execution-adoption.ts';
 import {activatedPermanentRevisionControl,activatedPermanentSummary} from './activated-permanent-control.ts';
 import type {CatalogObjectStore,DurableObject} from './r2-object-store.ts';
+import {validatePublicationControlArtifact,validatePublicationCheckpointState} from './publication-control.ts';
+import type {DurablePublicationArtifact,PublicationControlKind} from './publication-control.ts';
 
 type Json = null | boolean | number | string | Json[] | { [key:string]:Json };
 type Kind = ProviderReceipt['kind'] | 'phase' | 'publication' | 'checkpoint';
@@ -91,6 +93,8 @@ export interface RunWorkspaceOptions {
   /** Runtime capability only: never changes historical manifest/config bytes.
    * Each journal ACK is durable before the caller can dispatch externally. */
   durable?:CatalogObjectStore;
+  /** Runtime-data publication controls outlive temporary provider bodies. */
+  publicationControls?:boolean;
 }
 export interface WorkspaceManifest {
   schemaVersion:1; runId:string; configSha256:string; codeSha:string; scope:WorkspaceScope;
@@ -114,6 +118,8 @@ type BlobChunk={schemaVersion:1;type:'run-workspace-chunk';blobSha256:string;blo
   index:number;count:number;sha256:string;byteLength:number;base64:string};
 type CheckpointView = {sha256:string;checkpoint:CheckpointControl};
 type Event = {type:'artifact';ref:ArtifactRef} | {type:'checkpoint';ref:ArtifactRef;previous:string|null;control:CheckpointControl}
+  | {type:'publication-artifact';ref:ArtifactRef;kind:PublicationControlKind}
+  | {type:'publication-checkpoint';sha256:string;previous:string|null;checkpoint:WorkspaceCheckpoint}
   | {type:'body-registered';artifact:PurgedArtifact}
   | {type:'blob-bodies';artifacts:PurgedArtifact[]}
   | {type:'blob-parts';refs:ArtifactRef[]}
@@ -133,6 +139,7 @@ type Event = {type:'artifact';ref:ArtifactRef} | {type:'checkpoint';ref:Artifact
 type RecordFile = {schemaVersion:1;sequence:number;parent:string|null;event:Event};
 type JournalHead={sequence:number;sha256:string|null};
 type State = {manifest:WorkspaceManifest;requestLimit:'enforce'|'observe';execution:ExecutionAdoption|null;recovery:RecoveryGrant|null;finish:FinishGrant|null;requestGrant:RequestGrant|null;success:PublicationSuccess|null;head:string|null;count:number;checkpoint:CheckpointView|null;body:ArtifactRef|null;previous:string|null;totals:BudgetTotals;
+  publicationCheckpoint:WorkspaceCheckpoint|null;controls:Map<string,{ref:ArtifactRef;kind:PublicationControlKind}>;
   successor:{sha256:string;count:number;parts:string[]}|null;
   refs:Map<string,ArtifactRef>;purged:Map<string,PurgedArtifact>;bodyRegistrations:Map<string,PurgedArtifact>;
   publications:Map<string,{retention:PublicationDirectories;buildCleaned:boolean;purged:boolean;package?:{ref:ArtifactRef;sha256:string}}>;
@@ -152,6 +159,7 @@ export interface RunWorkspace {
   adoptExecution(value:ExecutionAdoption):Promise<ExecutionAdoption>;
   assertHeld():Promise<void>;assertScope(scope:WorkspaceScope):Promise<void>;
   putArtifact(value:unknown,options:{kind:'phase'|'publication';observedAt:string}):Promise<ArtifactRef>;
+  putPublicationControl(kind:PublicationControlKind,value:unknown):Promise<ArtifactRef>;
   readArtifact(ref:ArtifactRef):Promise<Json>;
   registeredArtifacts():Promise<Array<{ref:ArtifactRef;kind:Kind}>>;
   putBlob(bytes:Uint8Array,options:{kind:'phase'|'publication';observedAt:string}):Promise<ArtifactRef>;
@@ -236,7 +244,14 @@ function options(value:RunWorkspaceOptions) {
   if(!exact(value.budgetCaps,['httpRequests','sqlStatements'])||!Object.values(value.budgetCaps).every(integer))fail('budget_caps');
 }
 function artifactRef(value:ArtifactRef) {
-  if(!exact(value,['sha256','reference'])||!hash(value.sha256)||value.reference!==`objects/${value.sha256}.json`)fail('reference');
+  if(!exact(value,['sha256','reference'])||!hash(value.sha256)
+    ||![`objects/${value.sha256}.json`,`controls/${value.sha256}.json`].includes(value.reference))fail('reference');
+}
+const controlRef=(ref:ArtifactRef)=>ref.reference===`controls/${ref.sha256}.json`;
+async function loadPublicationControl(directory:string,ref:ArtifactRef,kind:PublicationControlKind){
+  artifactRef(ref);if(!controlRef(ref))fail('reference');
+  const artifact=validatePublicationControlArtifact(await readJson(join(directory,ref.reference),8*1024*1024) as DurablePublicationArtifact);
+  if(artifact.kind!==kind||sha256(canonicalJson(artifact.value))!==ref.sha256)fail('publication_control_hash');return artifact;
 }
 const blobRef=(digest:string):ArtifactRef=>({sha256:digest,reference:`objects/${digest}.json`});
 function blobManifest(value:unknown):WorkspaceBlobManifest {
@@ -462,7 +477,7 @@ function validateStored(value:Stored,ref:ArtifactRef,manifest:WorkspaceManifest)
   return value;
 }
 function fresh(value:Stored,now:string) {if(Date.parse(value.observedAt)>Date.parse(now)||Date.parse(value.expiresAt)<=Date.parse(now))fail('expired');}
-const empty=(manifest:WorkspaceManifest,requestLimit:'enforce'|'observe'):State=>({manifest,requestLimit,execution:null,recovery:null,finish:null,requestGrant:null,success:null,successor:null,head:null,count:0,checkpoint:null,body:null,previous:null,
+const empty=(manifest:WorkspaceManifest,requestLimit:'enforce'|'observe'):State=>({manifest,requestLimit,execution:null,recovery:null,finish:null,requestGrant:null,success:null,successor:null,head:null,count:0,checkpoint:null,body:null,previous:null,publicationCheckpoint:null,controls:new Map(),
   totals:{httpRequests:0,sqlStatements:0,knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:0},refs:new Map(),purged:new Map(),bodyRegistrations:new Map(),publications:new Map(),reservations:new Map()});
 function publicationSuccess(state:State,p:PublicationSuccess) {
   const cp=state.checkpoint,c=cp?.checkpoint.control?.publication,o=c?.permit?.mutationOwner;
@@ -529,7 +544,20 @@ async function verifyExecutionMetadata(directory:string,state:State,repository:s
 }
 function apply(state:State,event:Event,dry=false) {
   if(state.success&&!['purge','publication-build-cleaned','publication-purged'].includes(event.type))fail('publication_completed');
-  if(event.type==='execution-adoption'){
+  if(event.type==='publication-artifact'){
+    if(!exact(event,['type','ref','kind'])||!['request','revision','summary','appeals','search-delta','publication-result'].includes(event.kind))fail('publication_control');
+    artifactRef(event.ref);if(!controlRef(event.ref))fail('reference');const old=state.controls.get(event.ref.sha256);
+    if(old&&!same(old,{ref:event.ref,kind:event.kind}))fail('publication_control');
+    if(!dry)state.controls.set(event.ref.sha256,{ref:event.ref,kind:event.kind});
+  }else if(event.type==='publication-checkpoint'){
+    if(!exact(event,['type','sha256','previous','checkpoint'])||event.previous!==(state.checkpoint?.sha256??null)
+      ||sha256(canonicalJson(event.checkpoint))!==event.sha256)fail('checkpoint_cas');
+    checkpoint(event.checkpoint);validatePublicationCheckpointState(event.checkpoint.state);bindCheckpoint(event.checkpoint,state.manifest,state.execution);
+    const {state:unused,...view}=event.checkpoint;void unused;const old=state.checkpoint?.checkpoint;
+    if(old){for(const [label,ref]of Object.entries(old.pins))if(!same(view.pins[label]??null,ref))fail('pin_rewrite');
+      if(old.phaseComplete!==null&&!same(old.phaseComplete,view.phaseComplete))fail('phase_complete_rewrite');controlEvolution(old,view);}
+    if(!dry){state.previous=event.previous;state.checkpoint={sha256:event.sha256,checkpoint:view};state.publicationCheckpoint=structuredClone(event.checkpoint);state.body=null;}
+  }else if(event.type==='execution-adoption'){
     if(!exact(event,['type','adoption']))fail('execution_adoption');
     const a=event.adoption;validateExecutionAdoption(a);
     const o=a.original,cp=state.checkpoint;
@@ -586,7 +614,7 @@ function apply(state:State,event:Event,dry=false) {
     if(old){for(const [label,ref]of Object.entries(old.pins))if(!same(event.control.pins[label]||null,ref))fail('pin_rewrite');
       if(old.phaseComplete!==null&&!same(old.phaseComplete,event.control.phaseComplete))fail('phase_complete_rewrite');
       controlEvolution(old,event.control,state.requestGrant?.publicationUntil);}
-    if(!dry){state.previous=event.previous;state.checkpoint={sha256:event.ref.sha256,checkpoint:event.control};state.body=event.ref;state.refs.set(event.ref.sha256,event.ref);}
+    if(!dry){state.previous=event.previous;state.checkpoint={sha256:event.ref.sha256,checkpoint:event.control};state.body=event.ref;state.publicationCheckpoint=null;state.refs.set(event.ref.sha256,event.ref);}
   }else if(event.type==='control'){
     if(!exact(event,['type','sha256','previous','control'])||!state.checkpoint||event.previous!==state.checkpoint.sha256
       ||event.sha256!==sha256(canonicalJson({previous:event.previous,control:event.control})))fail('control_cas');
@@ -821,6 +849,7 @@ async function location(input:RunWorkspaceOptions,create:boolean) {
   await privateDirectory(input.directory,create);for(const name of ['runs','locks'])await privateDirectory(join(input.directory,name),create);
   const directory=join(input.directory,'runs',input.runId);if(create){await mkdir(directory,{mode:0o700});await syncDirectory(dirname(directory));}
   await privateDirectory(directory,false);for(const name of ['objects','events'])await privateDirectory(join(directory,name),create);
+  await privateDirectory(join(directory,'controls'),true);
   return directory;
 }
 async function readManifest(directory:string,input:RunWorkspaceOptions) {
@@ -893,6 +922,10 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
       const body=await loadStored(directory,ref,manifest!);
       if(registration.storedSha256!==sha256(canonicalJson(body)))fail('body_registration');
       await put(ref.reference,await readBytes(join(directory,ref.reference)));});
+    if(event.type==='publication-artifact'){
+      await loadPublicationControl(directory,event.ref,event.kind);
+      await put(event.ref.reference,await readBytes(join(directory,event.ref.reference),8*1024*1024));
+    }
     const digest=sha256(canonicalJson(record));
     await put('events/'+eventName(record.sequence,digest),encoded(record));
     remote=await cas(remote.etag,{sequence:record.sequence,sha256:digest});
@@ -939,6 +972,11 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
     // New append/dispatch ACKs still use the fully synced default writer.
     await immutable(join(directory,'manifest.json'),manifest,false);
     for(const {name,record}of records)await immutable(join(directory,'events',name),record,false);
+    await transferAll([...state.controls.values()],async({ref,kind})=>{
+      const artifact=validatePublicationControlArtifact(remoteJson(await cached(ref.reference),8*1024*1024) as DurablePublicationArtifact);
+      if(artifact.kind!==kind||sha256(canonicalJson(artifact.value))!==ref.sha256)fail('publication_control_hash');
+      await immutableBytes(join(directory,ref.reference),encoded(artifact),8*1024*1024,false);
+    });
     await transferAll([...state.refs.values()].filter(ref=>!state.purged.has(ref.sha256)),async ref=>{
       const registration=state.bodyRegistrations.get(ref.sha256);
       const body=remoteJson(await (registration?cached(ref.reference):get(ref.reference))) as Stored;validateStored(body,ref,manifest);boundPublicationBody(body,state);
@@ -1141,7 +1179,7 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       const r=state.bodyRegistrations.get(ref.sha256);if(r&&'value'in v&&r.storedSha256!==sha256(canonicalJson(v)))fail('body_registration');
       usableUntil=Math.min(usableUntil,Date.parse(v.expiresAt));usableAfter=Math.max(usableAfter,Date.parse(v.observedAt));}
     for(const p of state.publications.values()){usableUntil=Math.min(usableUntil,Date.parse(p.retention.expiresAt));usableAfter=Math.max(usableAfter,Date.parse(p.retention.observedAt));}
-    const guards=await Promise.all([input.directory,join(input.directory,'runs'),join(input.directory,'locks'),directory,join(directory,'objects'),join(directory,'events')]
+    const guards=await Promise.all([input.directory,join(input.directory,'runs'),join(input.directory,'locks'),directory,join(directory,'objects'),join(directory,'controls'),join(directory,'events')]
       .map(async path=>({path,stat:await protectedStat(path,true)})));
     async function assertHeld(){if(closed)fail('closed');await pathWithoutLinks(input.directory);
       for(const guard of guards){const s=await protectedStat(guard.path,true);if(s.ino!==guard.stat.ino||s.dev!==guard.stat.dev)fail('directory_changed');}
@@ -1428,7 +1466,17 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       }),
       assertScope:async(expected:WorkspaceScope)=>{await assertHeld();scope(expected);if(!same(manifest.scope,expected))fail('scope_mismatch');},
       putArtifact:(value:unknown,o:{kind:'phase'|'publication';observedAt:string})=>serial(async()=>{if(!o||!['phase','publication'].includes(o.kind))fail('kind');await usable();return put(json(value),o.kind,o.observedAt,true);}),
-      readArtifact:(ref:ArtifactRef)=>serial(async()=>{const v=await read(ref);if(!['phase','publication'].includes(v.kind))fail('kind');return structuredClone(v.value);}),
+      putPublicationControl:(kind:PublicationControlKind,value:unknown)=>serial(async()=>{
+        const artifact=validatePublicationControlArtifact({schemaVersion:1,kind,value});
+        const digest=sha256(canonicalJson(value)),ref={sha256:digest,reference:`controls/${digest}.json`};
+        await immutableBytes(join(directory,ref.reference),encoded(artifact),8*1024*1024);await loadPublicationControl(directory,ref,kind);
+        if(!state.controls.has(digest))await append({type:'publication-artifact',ref,kind});return ref;
+      }),
+      readArtifact:(ref:ArtifactRef)=>serial(async()=>{
+        if(controlRef(ref)){const entry=state.controls.get(ref.sha256);if(!entry||!same(entry.ref,ref))fail('unregistered_artifact');
+          return structuredClone((await loadPublicationControl(directory,ref,entry.kind)).value) as Json;}
+        const v=await read(ref);if(!['phase','publication'].includes(v.kind))fail('kind');return structuredClone(v.value);
+      }),
       registeredArtifacts:()=>serial(async()=>{
         const result:Array<{ref:ArtifactRef;kind:Kind}>=[];
         for(const ref of state.refs.values())if(!state.purged.has(ref.sha256))
@@ -1457,18 +1505,29 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
         if(!same(await catalogSuccessor(),value))fail('catalog_successor');
       }),
       readCheckpoint:(o?:{controlOnly?:boolean})=>serial(async()=>{if(!state.checkpoint)return null;
-        if(o?.controlOnly===true)return structuredClone(state.checkpoint);await usable();
+        if(o?.controlOnly===true)return structuredClone(state.checkpoint);
+        if(state.publicationCheckpoint)return{sha256:state.checkpoint.sha256,checkpoint:{...structuredClone(state.publicationCheckpoint),...structuredClone(state.checkpoint.checkpoint)}};
+        await usable();
         const v=await read(state.body!);
         if(v.kind!=='checkpoint')fail('kind');checkpoint(v.value as unknown as WorkspaceCheckpoint);
         const body=v.value as unknown as WorkspaceCheckpoint;
         return{sha256:state.checkpoint.sha256,checkpoint:{...structuredClone(body),...structuredClone(state.checkpoint.checkpoint)}};}),
       writeCheckpoint:(expected:string|null,value:WorkspaceCheckpoint)=>serial(async()=>{
-        checkpoint(value);bindCheckpoint(value,manifest,state.execution);await usable();const digest=refFor(value).sha256;
+        checkpoint(value);bindCheckpoint(value,manifest,state.execution);const durable=input.publicationControls||state.publicationCheckpoint;
+        if(durable)validatePublicationCheckpointState(value.state);else await usable();const digest=refFor(value).sha256;
         if(state.checkpoint?.sha256===digest&&(state.previous===expected||expected===digest)){return{sha256:digest,checkpoint:structuredClone(value)};}
         if(expected!==(state.checkpoint?.sha256||null))fail('checkpoint_cas');
         for(const ref of [...Object.values(value.pins),...(value.phaseComplete?[value.phaseComplete]:[])]){
+          if(controlRef(ref)){const entry=state.controls.get(ref.sha256);if(!entry||!same(entry.ref,ref))fail('unregistered_artifact');
+            await loadPublicationControl(directory,ref,entry.kind);continue;}
+          // Existing immutable pins may name purged evidence. Recording progress
+          // does not read it or renew it; every newly introduced body must be fresh.
+          if(durable&&state.checkpoint&&[...Object.values(state.checkpoint.checkpoint.pins),state.checkpoint.checkpoint.phaseComplete]
+            .some(old=>old&&same(old,ref)))continue;
           const v=await read(ref);if(v.value&&typeof v.value==='object'&&!Array.isArray(v.value)&&v.value.type==='run-workspace-blob')await loadBlob(ref);
         }
+        if(durable){await append({type:'publication-checkpoint',sha256:digest,previous:expected,checkpoint:structuredClone(value)});
+          return{sha256:digest,checkpoint:structuredClone(value)};}
         const {state:unused,...view}=value;void unused;
         // First validate immutable pins/phase-complete before writing the body.
         const event:Event={type:'checkpoint',ref:refFor(value),previous:expected,control:json(view) as unknown as CheckpointControl};apply(state,event,true);

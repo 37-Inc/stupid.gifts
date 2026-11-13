@@ -10,7 +10,7 @@ import { encodeBuildRequest } from '../lib/catalog/build-requests.ts';
 import {encodePublicationIntent} from '../lib/catalog/publication.ts';
 import { createCatalogProviderEvidence } from '../scripts/catalog/provider-evidence.ts';
 import {createProjectionPacket} from '../lib/catalog/d1.ts';
-import {putOrdered} from '../scripts/catalog/run-cloudflare-weekly.ts';
+import {putOrdered,orderedArtifactRef} from '../scripts/catalog/run-cloudflare-weekly.ts';
 import {activatedPermanentRevisionControl} from '../scripts/catalog/activated-permanent-control.ts';
 import { encodePgvectorSendBase64, decodePgvectorSendBase64 } from '../scripts/catalog/pgvector-binary.ts';
 
@@ -35,6 +35,16 @@ const observation=()=>({schemaVersion:1,kind:'amazon-observation',operation:'get
   products:[{id:ID,availabilityStatus:'IN_STOCK',sourceFactsHash:HASH,snapshot:{title:'TEST ONLY gift',imageUrl:'https://example.invalid/test.jpg',sourceFacts:{fixture:true}}}],
   returnedIds:[ID],requestedIds:[ID]});
 const reservation=(id='request-1',sqlStatements=2)=>({id,requestSha256:HASH,units:{httpRequests:1,sqlStatements}});
+test('ordered recovery address matches original small and chunked artifacts without rewriting them',async t=>{
+  const f=await fixture(t),w=await f.open();
+  for(const value of [{kind:'control',value:'a'}, {kind:'large-control',value:'a'.repeat(600000)}]){
+    assert.deepEqual(orderedArtifactRef(value),await putOrdered(w,value,NOW));
+  }
+  const input={z:'first',a:{z:1,a:2}},pin=await w.putArtifact(input,{kind:'phase',observedAt:NOW});
+  const original=await putOrdered(w,{context:await w.readArtifact(pin)},NOW);
+  assert.deepEqual(orderedArtifactRef({context:JSON.parse(canonicalJson(input))}),original);
+  assert.notDeepEqual(orderedArtifactRef({context:input}),original,'raw file key order differs from the original canonical artifact');
+});
 async function tamper(path,value){await writeFile(path,`${canonicalJson(value)}\n`,{mode:0o600});}
 
 test('durable receipt capability independently reloads exact canonical provider receipts and original deadline',async t=>{
