@@ -45,7 +45,7 @@ export function createVectorizeRestAdapters(options: MutationScope & {
       if(controller.signal.aborted||!response.ok||!response.body){void response.body?.cancel().catch(()=>{});throw new Error();}
       reader=response.body.getReader();const chunks:Uint8Array[]=[];let size=0;
       try { for(;;){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;
-        if(size>128*1024){await reader.cancel();throw new Error();}chunks.push(part.value);} }
+        if(size>(path==='get_by_ids'?512:128)*1024){await reader.cancel();throw new Error();}chunks.push(part.value);} }
       finally {reader.releaseLock();}
       const bytes=Buffer.concat(chunks);const envelope=JSON.parse(bytes.toString('utf8'));
       if(!envelope||envelope.success!==true||!Object.hasOwn(envelope,'result'))throw new Error();
@@ -67,7 +67,7 @@ export function createVectorizeRestAdapters(options: MutationScope & {
     return v;
   }
   async function readbacks(ids:string[],signal:AbortSignal) {
-    if(!ids.length||ids.length>2||new Set(ids).size!==ids.length)throw new Error('vector_provider_invalid_id');
+    if(!ids.length||ids.length>8||new Set(ids).size!==ids.length)throw new Error('vector_provider_invalid_id');
     ids.forEach(id);const result=await request('get_by_ids',signal,JSON.stringify({ids}));
     if(!Array.isArray(result)||result.length>ids.length)throw new Error('vector_provider_failed');
     const found=new Map<string,SyncVector>();
