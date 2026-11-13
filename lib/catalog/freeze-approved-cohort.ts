@@ -94,7 +94,11 @@ async function prepare(db: CatalogD1, owner: MutationOwner, input: ApprovedCohor
     db,owner,seal:request.predecessor,approval:request.approval,approvalSha256:request.approvalSha256,
     ...(request.ownerBaseReview ? { ownerBaseReview: request.ownerBaseReview } : {}),...(request.automation?{automation:request.automation}:{})}):undefined;
   const source = await readPruningSource(db,request.previous,request.context,owner);
-  const now = new Date(source.observedAt); const cutoff = Date.parse(request.context.cutoff);
+  const revision = request.publicationRevision??request.approval.catalogRevision;
+  const existing = (await db.prepare('SELECT created_at FROM catalog_revisions WHERE revision=?').bind(revision).all()).results[0];
+  // Reconstruct a sealed candidate at its original observation time. This does
+  // not renew display rights: serving resolves finite overlays at real time.
+  const now = new Date(existing&&predecessor?canonicalTime(existing.created_at):source.observedAt); const cutoff = Date.parse(request.context.cutoff);
   if (now.getTime() < Date.parse(owner.capturedAt) || cutoff <= now.getTime()
     || cutoff - Date.parse(owner.capturedAt) > 26*3600000) throw new Error('cohort_window_elapsed');
   const extra = await readApprovedCurrentRows(db,request.approval.changes.map(value => value.publicId),owner,false,undefined,request.ownerBaseReview,request.automation);
@@ -223,8 +227,6 @@ async function prepare(db: CatalogD1, owner: MutationOwner, input: ApprovedCohor
   const nativeHistory=predecessor?.priorNativeHistory.map(group=>({...group,ids:group.ids.filter(id=>!targetIds.has(id))})).filter(group=>group.ids.length);
   const persistent=predecessor?{generation:owner.generation,inventory:predecessor.inventory,nativeHistory:nativeHistory!}:undefined;
   if (semantic.length + new Set([...removed.map(value=>value.publicId),...additionalAbsentIds]).size > SNAPSHOT_READ_LIMITS.identities) throw new Error('cohort_vector_proof_bound');
-  const revision = request.publicationRevision??request.approval.catalogRevision;
-  const existing = (await db.prepare('SELECT created_at FROM catalog_revisions WHERE revision=?').bind(revision).all()).results[0];
   const generatedAt = existing ? canonicalTime(existing.created_at) : owner.capturedAt;
   const snapshot: CatalogSnapshot = validateCatalogSnapshot({ ...source.snapshot,catalogRevision:revision,generatedAt,
     products:ready,heldProducts:safeHeld },now);

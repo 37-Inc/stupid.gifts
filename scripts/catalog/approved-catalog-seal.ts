@@ -181,6 +181,29 @@ export async function hydrateApprovedRevision(db:CatalogD1,owner:MutationOwner,c
   if(revision.persistent)await (await import('./permanent-catalog-seal.ts')).assertApprovedCatalogInventory(db,owner,revision);
   return revision;
 }
+/** Pending runtime publication retains only control, not another expiring copy
+ * of supplier fields. D1's immutable projection reconstructs the exact bytes. */
+export function durableApprovedRevisionControl(revision:ApprovedCohortRevision){
+  const {request,sourceRows,snapshot,packet,...rest}=revision;
+  if(!revision.persistent)throw Error('cohort_permanent_control_required');
+  return{schemaVersion:2 as const,kind:'approved-revision-control' as const,revision:rest,request:approvedRequestControl(request),
+    projection:{envelopeJson:JSON.stringify(createSealedSnapshotEnvelope(snapshot)),snapshotSha256:packet.receipt.snapshot_sha256,
+      projectionReceipt:packet.receipt},sourceIds:sourceRows.map(r=>String(r.public_id)),
+    sourceRowsSha256:sha256(canonicalJson(sourceRows)),revisionSha256:sha256(canonicalJson(revision))};
+}
+export async function hydrateDurableApprovedRevision(db:CatalogD1,owner:MutationOwner,control:ReturnType<typeof durableApprovedRevisionControl>){
+  const request=await hydrateApprovedRequest(db,owner,control.request),p=control.projection;
+  const snapshot=await readApprovedPrior(db,owner,p,{...request.context,envelopeSha256:sha256(p.envelopeJson+'\n'),
+    snapshotSha256:p.snapshotSha256,projectionSha256:p.projectionReceipt.projection_sha256,
+    sourceExportSha256:p.projectionReceipt.source_export_sha256});
+  const rows=await readOwnedProjection(db,owner,snapshot.catalogRevision,snapshot.products.map(p=>p.publicId).sort(),{approvedRecovery:true}) as ApprovedCohortRevision['packet']['rows'];
+  const sourceRows=await readApprovedRevisionSource(db,owner,control.sourceIds,request.approval.changes,request.ownerBaseReview,request);
+  const revision={...control.revision,request,snapshot,packet:{rows,receipt:p.projectionReceipt},sourceRows};
+  if(control.schemaVersion!==2||control.kind!=='approved-revision-control'||sha256(canonicalJson(sourceRows))!==control.sourceRowsSha256
+    ||sha256(canonicalJson(revision))!==control.revisionSha256)throw Error('cohort_revision_changed');
+  await (await import('./permanent-catalog-seal.ts')).assertApprovedCatalogInventory(db,owner,revision);
+  return revision;
+}
 /** Finite displayed fields keep their original deadline within existing rules. */
 export function approvedArtifactObservedAt(snapshot:CatalogSnapshot,now:string,maxAgeMs:number){
   const deadlines=snapshot.products.flatMap(p=>p.eligibleUntil===null?[]:[Date.parse(p.eligibleUntil)]);

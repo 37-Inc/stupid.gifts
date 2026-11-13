@@ -64,7 +64,7 @@ export async function publishRuntimeCatalog(input:{db:CatalogD1;owner:MutationOw
         revisionSha256:request.revisionSha256,planSha256:request.planSha256,ids:[...plan.products.map(p=>p.publicId),...plan.absentIds]});
     catalogSuccessorBytes(seal);
     const handoff=Buffer.from(canonicalJson({schemaVersion:1,owner,receipt,seal,retainOriginalFailedTelemetry:Boolean(input.retainOriginalFailedTelemetry),
-      summary:await ws.readArtifact(checkpoint.checkpoint.phaseComplete!)})),handoffSha256=sha256(handoff);
+      summary:await ws.readArtifact(checkpoint.checkpoint.pins.publicationSummary??checkpoint.checkpoint.phaseComplete!)})),handoffSha256=sha256(handoff);
     await input.store.putImmutable('runtime-handoffs/'+handoffSha256+'.json',handoff);
     control={schemaVersion:1,configSha256:input.configSha256,requestId:input.requestId,runReference:input.runReference,
       releaseId:config.releaseId,dataSha256:exported.dataSha256,sourceSnapshotSha256:exported.sourceSnapshotSha256,
