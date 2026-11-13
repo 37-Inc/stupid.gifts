@@ -1031,7 +1031,7 @@ export function prepareOwnedApprovedCohortPlan(options:{db:CatalogD1;owner:Mutat
       const bytes=canonicalJson(request);if(Buffer.byteLength(bytes)>200000)throw new Error('vector_payload_bound');
       const reusedRows=candidates.filter(r=>request.sources.some(s=>s.publicId===r.public_id));
       await assertPlanSource(db,owner,revision);await reuseReadback(adapters,vectors,timeoutOf(options.timeoutMs));
-      await readNativeHistory({db,owner,history:plan.history??[],adapters});
+      await readNativeHistory({db,owner,history:plan.history??[],adapters,acceptedOnly:Boolean(revision.persistent)});
       await assertPlanSource(db,owner,revision);
       const next={...owner,epoch:owner.epoch+1};
       try{await db.batch([...planChecks(db,owner,revision),reuseSourceAssertions(db,reusedRows),
@@ -1223,7 +1223,7 @@ async function readPlanVectors(db:CatalogD1,owner:MutationOwner,rows:Journal[],p
   // independently retain those same full-source checks outside this callback.
   if(historical&&historical.selected.some(id=>!vectors.has(id)))throw new Error('vector_plan_incomplete');
   await db.batch(checks(),{signal});await reuseReadback(adapters,historical?new Map(historical.selected.map(id=>[id,vectors.get(id)!])):vectors,timeout,signal);
-  if(!historical)await readNativeHistory({db,owner,history:request.plan.history??[],adapters,signal});
+  if(!historical)await readNativeHistory({db,owner,history:request.plan.history??[],adapters,signal,acceptedOnly:Boolean(revision?.persistent)});
   await db.batch(checks(),{signal});
   return{environment:owner.environment,indexName:owner.indexName,settled:true as const,planSha256:request.planSha256,
     reference:`owned-vectors:${sha256(canonicalJson(rows.map(r=>r.delivery_id).sort()))}`};
@@ -1488,10 +1488,14 @@ export function validateNativeHistory(history:NativeHistoryBinding[],currentIds:
       ||!REF.test(group.source.releaseId)))throw new Error('vector_history_invalid');
 }
 /** Flat, current membership; old publication receipts/journals remain the
- * authority. Never recurse through an expired workspace or rewrite old native
- * values. Current-delta and historical IDs must be strictly disjoint. */
+ * authority. Permanent delta publication reuses accepted history: the enclosing
+ * full inventory fence proves these identities did not change, and the real
+ * resolved receipt authenticates their original native proof. Do not fetch all
+ * old vector values again just to publish a different product. Explicit audits
+ * retain live provider readback by default. Current deltas are always read back.
+ * Current-delta and historical IDs must remain strictly disjoint. */
 export async function readNativeHistory(options:{db:CatalogD1;owner:MutationOwner;history:NativeHistoryBinding[];
-  adapters:Pick<OwnedVectorAdapters,'readback'|'environment'|'indexName'|'providerIdentity'>;signal?:AbortSignal}){
+  adapters:Pick<OwnedVectorAdapters,'readback'|'environment'|'indexName'|'providerIdentity'>;signal?:AbortSignal;acceptedOnly?:boolean}){
   const {db,owner,history,adapters,signal}=options;validateNativeHistory(history);adapterScope(owner,adapters);
   const exact=(table:string,row:Row)=>{const keys=Object.keys(row);
     if(!keys.length||keys.length>65||keys.some(k=>!/^[a-z_][a-z0-9_]*$/.test(k)))throw new Error('vector_history_invalid');
@@ -1503,12 +1507,12 @@ export async function readNativeHistory(options:{db:CatalogD1;owner:MutationOwne
     if(!plan||request.planSha256!==binding.planSha256||sha256(canonicalJson(plan))!==binding.planSha256
       ||request.revisionSha256!==binding.revisionSha256||base.generation>=owner.generation
       ||binding.ids.some(id=>!reuseIds(plan).includes(id)))throw new Error('vector_history_changed');
-    if(request.kind===REUSE_KIND){
+    if(request.kind===REUSE_KIND&&!options.acceptedOnly){
       const current=(await readApprovedCurrentRows(db,reuseIds(plan),owner,true,signal)).current;
       await readHistoricalNativePreservation({db,owner,native:{source:binding.source,revisionSha256:binding.revisionSha256,plan},current,
         changedIds:reuseIds(plan).filter(id=>!binding.ids.includes(id)),historicalOnly:true,adapters,signal});continue;
     }
-    if(request.kind!==PLAN_KIND)throw new Error('vector_history_changed');
+    if(![PLAN_KIND,REUSE_KIND].includes(request.kind))throw new Error('vector_history_changed');
     const receipts=(await db.prepare('SELECT * FROM publication_receipts WHERE release_id=?').bind(binding.source.releaseId).all<Row>({signal})).results;
     const builds=(await db.prepare("SELECT * FROM catalog_build_requests WHERE release_id=? AND state='resolved' LIMIT 2").bind(binding.source.releaseId).all<Row>({signal})).results;
     const outbox=(await db.prepare("SELECT * FROM publication_outbox WHERE release_id=? AND state='verified' LIMIT 2").bind(binding.source.releaseId).all<Row>({signal})).results;
@@ -1524,15 +1528,16 @@ export async function readNativeHistory(options:{db:CatalogD1;owner:MutationOwne
       ||buildRequest.priorReleaseId!==intent.priorReleaseId||String(saved.completed_at)>String(receipt.completed_at))throw new Error('vector_history_changed');
     const runtime=await readResolvedPublicationTransport(db,build,publication,intent,'vector_history_changed',signal);
     if(!runtime&&publication.dispatch_reference!==`version:${build.version_reference}`)throw new Error('vector_history_changed');
-    const rows=await planJournals(db,base,plan.catalogRevision,signal);
+    const rows=options.acceptedOnly?[]:await planJournals(db,base,plan.catalogRevision,signal);
     const historical={...base,epoch:Math.max(base.epoch+1,...rows.map(row=>Number(row.prior_epoch)+2))};
-    validatePlan(saved,historical,plan,adapters.providerIdentity);
+    if(request.kind===REUSE_KIND)validateReuse(saved,historical,plan,adapters.providerIdentity);
+    else validatePlan(saved,historical,plan,adapters.providerIdentity);
     // Historical membership proves OLD input and exact provider bytes, not
     // current supplier freshness. Current semantic targets have separate proofs.
     const checks=()=>[mutationAssertion(db,owner,[owner.phase]),exact('catalog_vector_deliveries',saved),exact('publication_receipts',receipt),
       exact('catalog_build_requests',build),exact('publication_outbox',publication),...(runtime?[exact('catalog_runtime_publications',runtime)]:[])];
     await db.batch(checks(),{signal});
-    await readPlanVectors(db,historical,rows,plan,adapters,undefined,signal,30000,{selected:binding.ids,owner});
+    if(!options.acceptedOnly)await readPlanVectors(db,historical,rows,plan,adapters,undefined,signal,30000,{selected:binding.ids,owner});
     await db.batch(checks(),{signal});
   }
   return history.flatMap(group=>group.ids);

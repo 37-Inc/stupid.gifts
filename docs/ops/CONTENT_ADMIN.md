@@ -19,6 +19,11 @@ prevents a delayed preparation from overwriting a subsequently changed gift;
 all catalog identities, including held products, remain part of deduplication.
 Old started admissions/recoveries keep their original path and source binding.
 
+Permanent-catalog publication reuses the genuine resolved receipt for unchanged
+native-index history instead of downloading those old vectors again. Changed
+vectors still receive exact provider readback, and the full inventory/owner
+fence remains. Explicit native-history audits retain live readback by default.
+
 This is the first part of `roadmap-lbbz1.32.1`, **not** a claim that the endpoint
 can publish independently yet. The hosted queue, whole-catalog publication and
 native-index acceptance still serialize admissions behind pending care. Finish
