@@ -9,6 +9,8 @@ import { openRunWorkspace, readRunWorkspace } from './run-workspace.ts';
 import type { RunWorkspaceOptions, WorkspaceManifest, RunWorkspace, PublicationSuccess } from './run-workspace.ts';
 import { isCatalogD1Rest } from './d1-write-rest.ts';
 import type { CatalogD1 } from '../../lib/catalog/storage/d1.ts';
+import {validatePublicationControlArtifact} from './publication-control.ts';
+import type {DurablePublicationArtifact} from './publication-control.ts';
 
 export const WORKSPACE_SWEEP_LIMITS=Object.freeze({runs:1000,entries:20_000,manifestBytes:32*1024,eventBytes:1024*1024});
 const KEY=/^[A-Za-z0-9._-]{1,100}$/;
@@ -59,13 +61,14 @@ async function resumeOptions(directory:string,repository:string,runId:string,now
 async function unregisteredOutputs(directory:string,success:PublicationSuccess|null){
   // openRunWorkspace has already independently validated/replayed the journal.
   // Extract registration identities only; do not maintain a second state machine.
-  const registered=new Set<string>();let unregistered=0;
+  const registered=new Set<string>(),controls=new Set<string>();let unregistered=0;
   for(const name of await names(join(directory,'events'))){
     await protectedPath(join(directory,'events',name),false);
     if(name.startsWith('.pending-')){unregistered++;continue;}
-    const record=await canonicalFile(join(directory,'events',name),WORKSPACE_SWEEP_LIMITS.eventBytes) as {event:{type:string;retention?:{releaseId:string}}};
+    const record=await canonicalFile(join(directory,'events',name),WORKSPACE_SWEEP_LIMITS.eventBytes) as {event:{type:string;retention?:{releaseId:string};ref?:{reference:string}}};
     if(name.split('.')[1]!==sha256(canonicalJson(record)))fail('journal_changed');
     if(record.event.type==='publication-directories')registered.add(record.event.retention!.releaseId);
+    if(record.event.type==='publication-artifact')controls.add(record.event.ref!.reference);
   }
   for(const parent of ['packages','publication-runtime']){
     const path=join(directory,parent);try{await protectedPath(path,true);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')continue;throw error;}
@@ -78,7 +81,14 @@ async function unregisteredOutputs(directory:string,success:PublicationSuccess|n
     await protectedPath(join(directory,'objects',name),false);
     if(!OBJECT.test(name))unregistered++;
   }
-  for(const name of await names(directory))if(!['manifest.json','head.json','objects','events','packages','publication-runtime'].includes(name)){
+  const controlDirectory=join(directory,'controls');await protectedPath(controlDirectory,true);
+  for(const name of await names(controlDirectory)){
+    const file=join(controlDirectory,name);await protectedPath(file,false);
+    if(!controls.has('controls/'+name)){unregistered++;continue;}
+    const artifact=validatePublicationControlArtifact(await canonicalFile(file,8*1024*1024) as DurablePublicationArtifact);
+    if(name!==sha256(canonicalJson(artifact.value))+'.json')fail('control_changed');
+  }
+  for(const name of await names(directory))if(!['manifest.json','head.json','objects','controls','events','packages','publication-runtime'].includes(name)){
     const path=join(directory,name);await protectedPath(path,(await lstat(path)).isDirectory());
     // The workspace independently validates its completion-pinned inventory;
     // the name alone is never registration, and these controls are not deleted.

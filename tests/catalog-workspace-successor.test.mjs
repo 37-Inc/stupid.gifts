@@ -118,7 +118,9 @@ test('cold hosted saved-admission cache restores original durable evidence with 
 });
 
 test('actual accounted resolved/idle snapshot records body-free success; expired registered bodies purge without rewriting old controls or charges',async t=>{
-  const f=await fixture(t),before=await f.w.readCheckpoint({controlOnly:true}),oldBudget=await f.w.budget(),proof=await recordSuccessfulPublication(f.input);
+  const f=await fixture(t),summary={counts:{refreshed:2},timingsMs:{},usage:null,warnings:[]};
+  const control=await f.w.putPublicationControl('summary',summary);
+  const before=await f.w.readCheckpoint({controlOnly:true}),oldBudget=await f.w.budget(),proof=await recordSuccessfulPublication(f.input);
   assert.equal(proof.scope.mutation_epoch,301);assert.equal(proof.scope.generation,7);assert.equal(proof.build.state,'resolved');
   assert.equal(proof.usage.unconfirmedRequests,1);assert.equal(proof.usage.httpRequests,oldBudget.httpRequests+1);assert.equal(proof.usage.sqlStatements,oldBudget.sqlStatements+3);
   assert.deepEqual(await f.w.readCheckpoint({controlOnly:true}),before);assert.ok(!JSON.stringify(proof).includes('TEST ONLY'));
@@ -132,6 +134,7 @@ test('actual accounted resolved/idle snapshot records body-free success; expired
   assert.deepEqual(await readdir(join(f.w.directory,'objects')),[]);assert.deepEqual(await readdir(join(f.w.directory,'publication-recovery-bounds')),metadata);
   const again=await purgeCompletedWorkspaces({directory:f.options.directory,repository:f.options.repository,now:()=>EXPIRED});assert.equal(again.runs[0].state,'retained');
   const resumed=await f.reopen();assert.deepEqual(await resumed.publicationSuccess(),proof);await assert.rejects(resumed.readArtifact(f.artifact),/expired/);
+  assert.deepEqual(await resumed.readArtifact(control),summary);
   assert.deepEqual(await recordSuccessfulPublication({...f.input,workspace:resumed}),proof);assert.equal(f.calls(),calls);
 });
 
