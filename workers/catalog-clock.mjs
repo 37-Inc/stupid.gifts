@@ -1,6 +1,5 @@
 import {catalogClockSlot} from '../lib/catalog/clock-slot.mjs';
-
-const DISPATCH='https://api.github.com/repos/37-Inc/stupid.gifts/actions/workflows/catalog-manual.yml/dispatches';
+import {dispatchCatalogWorkflow} from '../lib/catalog/github-dispatch.ts';
 /** A clock only: no catalog, merchant, model, database or storage credentials. */
 export async function dispatchCatalogClock(time,env,{send=fetch,now=Date.now,log=console.log}={}){
   const slot=catalogClockSlot(time);
@@ -13,16 +12,11 @@ export async function dispatchCatalogClock(time,env,{send=fetch,now=Date.now,log
   const started=now(),report={...slot,wakeAt:new Date(time).toISOString(),dispatchedAt:new Date(started).toISOString()};
   // Do not blindly retry an uncertain POST. The existing two-hour catch-up
   // uses the same durable run identity and cannot create another supplier batch.
-  let response;
-  try{response=await send(DISPATCH,{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{
-    authorization:`Bearer ${env.GITHUB_CATALOG_DISPATCH_TOKEN}`,accept:'application/vnd.github+json',
-    'content-type':'application/json','user-agent':'Stupid-Gifts-Catalog-Clock','x-github-api-version':'2026-03-10'},
-    body:JSON.stringify({ref:'main',inputs:slot})});}
-  catch{log(JSON.stringify({state:'dispatch_unknown',...report,elapsedMs:now()-started}));throw Error('catalog_clock_dispatch_unknown');}
-  await response.body?.cancel();
-  const result={state:response.status===204?'dispatched':'failed',...report,status:response.status,elapsedMs:now()-started};
+  const dispatch=await dispatchCatalogWorkflow(env.GITHUB_CATALOG_DISPATCH_TOKEN,slot,send);
+  const result={state:dispatch.state==='accepted'?'dispatched':dispatch.state==='rejected'?'failed':'dispatch_unknown',
+    ...report,status:dispatch.providerStatus,workflowRunId:dispatch.workflowRunId,elapsedMs:now()-started};
   log(JSON.stringify(result));
-  if(response.status!==204)throw Error('catalog_clock_dispatch_failed_'+response.status);
+  if(dispatch.state!=='accepted')throw Error(dispatch.state==='rejected'?'catalog_clock_dispatch_failed_'+dispatch.providerStatus:'catalog_clock_dispatch_unknown');
   return result;
 }
 const worker={

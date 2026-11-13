@@ -21,12 +21,12 @@ async function fixture(t){
 }
 test('dispatch is pinned to one repository/workflow/main and stores no token or provider body',async t=>{
   const f=await fixture(t);let calls=0;
-  const input={db:f.db,requestId,token:'TEST_ONLY_DISPATCH_TOKEN',now,send:async(url,init)=>{
-    calls++;assert.equal(url,'https://api.github.com/repos/37-Inc/stupid.gifts/actions/workflows/catalog-manual.yml/dispatches');
-    assert.equal(init.method,'POST');assert.equal(init.redirect,'error');
-    assert.equal(init.headers.Authorization,'Bearer TEST_ONLY_DISPATCH_TOKEN');
-    assert.equal(init.headers['X-GitHub-Api-Version'],'2026-03-10');
-    assert.deepEqual(JSON.parse(init.body),{ref:'main',inputs:{mode:'admin'}});return new Response(null,{status:204});}};
+  const input={db:f.db,requestId,token:'TEST_ONLY_DISPATCH_TOKEN',now,send:async(request)=>{
+    calls++;assert.equal(request.url,'https://api.github.com/repos/37-Inc/stupid.gifts/actions/workflows/catalog-manual.yml/dispatches');
+    assert.equal(request.method,'POST');assert.equal(request.redirect,'manual');
+    assert.equal(request.headers.get('Authorization'),'Bearer TEST_ONLY_DISPATCH_TOKEN');
+    assert.equal(request.headers.get('X-GitHub-Api-Version'),'2026-03-10');
+    assert.deepEqual(await request.json(),{ref:'main',inputs:{mode:'admin'}});return new Response(null,{status:204});}};
   assert.equal((await dispatchAdmission(input)).state,'accepted');
   assert.equal((await dispatchAdmission(input)).state,'accepted');assert.equal(calls,1);
   assert.ok(!JSON.stringify(f.sql.prepare('SELECT * FROM content_admin_dispatches').all()).includes('TOKEN'));
@@ -55,7 +55,7 @@ test('lost claim and settlement acknowledgements reuse exact durable identity',a
   assert.equal((await dispatchAdmission(input)).state,'accepted');
   assert.equal((await dispatchAdmission(input)).state,'accepted');assert.equal(calls,1);
 });
-for(const status of [401,403,422,429,500,502])test(`provider status ${status} is preserved without retry or publication claims`,async t=>{
+for(const status of [301,302,307,308,401,403,422,429,500,502])test(`provider status ${status} is preserved without retry or publication claims`,async t=>{
   const f=await fixture(t);let calls=0;
   const input={db:f.db,requestId,token:'TEST_ONLY',now,send:async()=>{calls++;return new Response('PRIVATE PROVIDER BODY',{status});}};
   const result=await dispatchAdmission(input);assert.equal(result.state,status<500?'rejected':'unknown');
