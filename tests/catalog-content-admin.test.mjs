@@ -111,7 +111,9 @@ test('optional admission dispatch stays behind staff auth, CSRF, durable save an
   const certFetch=globalThis.fetch;let calls=0;
   globalThis.fetch=async(url,init)=>{
     if(String(url)===ISSUER+'/cdn-cgi/access/certs')return certFetch(url,init);
-    assert.equal(String(url),'https://api.github.com/repos/37-Inc/stupid.gifts/actions/workflows/catalog-manual.yml/dispatches');
+    assert.ok(url instanceof Request);
+    assert.equal(url.url,'https://api.github.com/repos/37-Inc/stupid.gifts/actions/workflows/catalog-manual.yml/dispatches');
+    assert.equal(url.redirect,'manual');
     assert.equal(f.sql.prepare('SELECT count(*) n FROM content_admin_requests').get().n,1,'request exists before dispatch');
     calls++;return new Response(null,{status:204});
   };
