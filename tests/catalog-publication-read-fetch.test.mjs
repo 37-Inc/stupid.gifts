@@ -95,7 +95,7 @@ test('failed settlement is never retried or changed to another status',async()=>
 test('owned send accounting never grants an unbounded response-parser or stream-cancel join',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});let settled=0,cancelled=false;
   const read=accountedPublicationReadFetch({async reserveBudget(){},async settleBudget(){settled++;}},async()=>new Response(new ReadableStream({
-    start(c){c.enqueue(new Uint8Array(128*1024+1));},cancel(){cancelled=true;return new Promise(()=>{});}})),scope);
+    start(c){c.enqueue(new Uint8Array(512*1024+1));},cancel(){cancelled=true;return new Promise(()=>{});}})),scope);
   const api=createVectorizeRestAdapters({...scope,environment:'staging',token:'TEST_ONLY',fetch:read,timeoutMs:10});
   const pending=api.readback(id,new AbortController().signal),rejected=assert.rejects(pending,/cleanup_pending/);
   for(let i=0;i<12;i++)await Promise.resolve();assert.equal(settled,1);assert.equal(cancelled,true);
