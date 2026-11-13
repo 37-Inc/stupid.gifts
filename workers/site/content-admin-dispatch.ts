@@ -1,6 +1,6 @@
 import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
+import {dispatchCatalogWorkflow} from '../../lib/catalog/github-dispatch.ts';
 
-const DISPATCH='https://api.github.com/repos/37-Inc/stupid.gifts/actions/workflows/catalog-manual.yml/dispatches';
 type DispatchState='claimed'|'accepted'|'rejected'|'unknown';
 export interface AdmissionDispatch {state:DispatchState;providerStatus:number|null;workflowRunId:number|null;updatedAt:string}
 export async function readAdmissionDispatch(db:CatalogD1,requestId:string):Promise<AdmissionDispatch|null>{
@@ -32,21 +32,8 @@ export async function dispatchAdmission(input:{db:CatalogD1;requestId:string;tok
     if(saved)return saved;throw Error('admin_dispatch_claim_unconfirmed');}
   let state:DispatchState='unknown',status:number|null=null,workflowRunId:number|null=null;
   try{
-    const response=await (input.send??fetch)(DISPATCH,{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),
-      headers:{Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','Content-Type':'application/json',
-        'X-GitHub-Api-Version':'2026-03-10','User-Agent':'Stupid-Gifts-Content-Admin'},
-      body:JSON.stringify({ref:'main',inputs:{mode:'admin'}})});
-    status=response.status;
-    // The current API returns the run ID. Retain only that numeric identifier,
-    // never the response URLs/body or credentials. Older 204 ACKs are compatible.
-    if(status===200){
-      const result=await response.json() as {workflow_run_id?:unknown};
-      if(Number.isSafeInteger(result.workflow_run_id)&&Number(result.workflow_run_id)>0){
-        workflowRunId=Number(result.workflow_run_id);state='accepted';
-      }
-    }else state=status===204?'accepted':status>=400&&status<500?'rejected':'unknown';
-    // Provider bodies may contain account/credential details. Never persist or log them.
-    if(!response.bodyUsed)await response.body?.cancel();
+    const result=await dispatchCatalogWorkflow(token,{mode:'admin'},input.send);
+    state=result.state;status=result.providerStatus;workflowRunId=result.workflowRunId;
   }catch{/* A connection loss is unknown, never proof that no workflow started. */}
   try{await db.prepare(`UPDATE content_admin_dispatches SET state=?,provider_status=?,workflow_run_id=?,updated_at=?
     WHERE request_id=? AND claim_token=? AND state='claimed'`).bind(state,status,workflowRunId,now(),requestId,claim).run();}

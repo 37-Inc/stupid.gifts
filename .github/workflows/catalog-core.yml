@@ -52,7 +52,7 @@ jobs:
       - run: node --import tsx --test tests/runtime-*.test.mjs
       - run: node --import tsx --test tests/catalog-title-repairs.test.mjs tests/catalog-short-copy.test.mjs tests/catalog-provider-evidence.test.mjs
       - run: node --import tsx --test tests/catalog-semantic-delta.test.mjs tests/catalog-photo-vector-reuse.test.mjs tests/catalog-publication-read-fetch.test.mjs
-      - run: node --import tsx --test tests/catalog-clock.test.mjs tests/catalog-vectorize-rest.test.mjs
+      - run: node --import tsx --test tests/catalog-clock.test.mjs tests/catalog-dispatch-workerd.test.mjs tests/catalog-runtime-native-history.test.mjs tests/catalog-vectorize-rest.test.mjs
       - run: node --import tsx --test --test-name-pattern="native batch|batch intent|eight-product|unchanged source|source counter" tests/catalog-approved-cohort.test.mjs tests/catalog-permanent-native-reader.test.mjs
       - run: node --import tsx --test tests/catalog-editorial-equivalence.test.mjs
       - run: node --import tsx --test --test-name-pattern="body-free published bulk seal" tests/catalog-permanent-freeze.test.mjs

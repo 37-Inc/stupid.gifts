@@ -29,6 +29,7 @@ import { approvedBaseChangeLimit } from '../../lib/catalog/owner-base-review.ts'
 import type { OwnerBaseCatalogReview } from '../../lib/catalog/owner-base-review.ts';
 import {repairedSlugOriginalVector} from './new-product-slug-repair.ts';
 import {readPreservedPhotoVector} from './photo-vector-reuse.ts';
+import {readResolvedPublicationTransport} from './resolved-publication-transport.ts';
 
 type Row = Record<string, unknown>;
 type Code = 'provider_failed' | 'not_visible' | 'mutation_unknown' | 'attempts_exhausted';
@@ -1399,14 +1400,15 @@ export function readPublishedCatalogVectors(options:{db:CatalogD1;owner:Mutation
         ||publication.intent_json!==receipt.manifest_json||!publication.completed_token||!publication.dispatch_reference
         ||build.environment!==owner.environment||build.source_revision!==snapshot.catalogRevision||!build.lease_token||!build.run_reference
         ||build.request_id!==sha256(String(build.request_json))
-        ||typeof build.version_reference!=='string'||!REF.test(build.version_reference)
         ||receipt===original&&(build.request_json!==oldRequest||intent.codeSha!==revision.request.codeSha
           ||String(saved.completed_at)>String(receipt.completed_at)))throw new Error('vector_published_build_changed');
       const built=JSON.parse(String(build.request_json)) as CatalogBuildRequest;
       if(encodeBuildRequest(built)!==build.request_json||built.codeSha!==intent.codeSha||built.sourceRevision!==snapshot.catalogRevision
         ||built.sourceDigest!==request.sourceDigest||built.priorReleaseId!==intent.priorReleaseId||built.capturedAt!==snapshot.generatedAt)
         throw new Error('vector_published_request_changed');
-      bindings.push(exact('publication_receipts',receipt),exact('catalog_build_requests',build),exact('publication_outbox',publication));
+      const runtime=await readResolvedPublicationTransport(db,build,publication,intent,'vector_published_build_changed',signal);
+      bindings.push(exact('publication_receipts',receipt),exact('catalog_build_requests',build),exact('publication_outbox',publication),
+        ...(runtime?[exact('catalog_runtime_publications',runtime)]:[]));
     }
     if(request.codeSha===prior.code_sha)throw new Error('vector_published_code_unchanged');
     // Approved rows already carry exact full-row CAS in sourceRows. Capture the
@@ -1514,18 +1516,20 @@ export async function readNativeHistory(options:{db:CatalogD1;owner:MutationOwne
     if(receipts.length!==1||builds.length!==1||outbox.length!==1||sha256(canonicalJson(receipt))!==binding.source.receiptSha256
       ||encodePublicationIntent(intent)!==receipt.manifest_json||intent.releaseId!==binding.source.releaseId||intent.catalogRevision!==plan.catalogRevision
       ||receipt.catalog_revision!==plan.catalogRevision||intent.catalogSnapshotSha256!==plan.snapshotSha256||intent.codeSha!==receipt.code_sha
-      ||publication.intent_json!==receipt.manifest_json||!publication.completed_token||publication.dispatch_reference!==`version:${build.version_reference}`
-      ||build.environment!==owner.environment||build.source_revision!==plan.catalogRevision||!build.lease_token||!build.run_reference||!build.version_reference
+      ||publication.intent_json!==receipt.manifest_json||!publication.completed_token
+      ||build.environment!==owner.environment||build.source_revision!==plan.catalogRevision||!build.lease_token||!build.run_reference
       ||build.request_id!==sha256(String(build.request_json))||encodeBuildRequest(buildRequest)!==build.request_json
       ||buildRequest.sourceRevision!==plan.catalogRevision||buildRequest.sourceDigest!==plan.snapshotSha256||buildRequest.codeSha!==intent.codeSha
       ||buildRequest.priorReleaseId!==intent.priorReleaseId||String(saved.completed_at)>String(receipt.completed_at))throw new Error('vector_history_changed');
+    const runtime=await readResolvedPublicationTransport(db,build,publication,intent,'vector_history_changed',signal);
+    if(!runtime&&publication.dispatch_reference!==`version:${build.version_reference}`)throw new Error('vector_history_changed');
     const rows=await planJournals(db,base,plan.catalogRevision,signal);
     const historical={...base,epoch:Math.max(base.epoch+1,...rows.map(row=>Number(row.prior_epoch)+2))};
     validatePlan(saved,historical,plan,adapters.providerIdentity);
     // Historical membership proves OLD input and exact provider bytes, not
     // current supplier freshness. Current semantic targets have separate proofs.
     const checks=()=>[mutationAssertion(db,owner,[owner.phase]),exact('catalog_vector_deliveries',saved),exact('publication_receipts',receipt),
-      exact('catalog_build_requests',build),exact('publication_outbox',publication)];
+      exact('catalog_build_requests',build),exact('publication_outbox',publication),...(runtime?[exact('catalog_runtime_publications',runtime)]:[])];
     await db.batch(checks(),{signal});
     await readPlanVectors(db,historical,rows,plan,adapters,undefined,signal,30000,{selected:binding.ids,owner});
     await db.batch(checks(),{signal});
@@ -1573,14 +1577,16 @@ export function readHistoricalNativePreservation(options:{db:CatalogD1;owner:Mut
     ||intent.codeSha!==receipt.code_sha||intent.vectorSyncWatermark!==binding.plan.globalWatermark
     ||publication.intent_json!==receipt.manifest_json||!publication.completed_token||!publication.dispatch_reference
     ||build.environment!==owner.environment||build.source_revision!==binding.plan.catalogRevision||!build.lease_token||!build.run_reference
-    ||typeof build.version_reference!=='string'||!REF.test(build.version_reference)||build.request_id!==sha256(String(build.request_json))
+    ||build.request_id!==sha256(String(build.request_json))
     ||encodeBuildRequest(request)!==build.request_json||request.codeSha!==intent.codeSha||request.sourceRevision!==binding.plan.catalogRevision
     ||request.sourceDigest!==binding.plan.snapshotSha256||request.priorReleaseId!==intent.priorReleaseId
     ||String(saved.completed_at)>String(receipt.completed_at))throw new Error('vector_preserved_receipt_changed');
+  const runtime=await readResolvedPublicationTransport(db,build,publication,intent,'vector_preserved_receipt_changed',signal);
   const checks=()=>[mutationAssertion(db,owner,[owner.phase]),exact('catalog_vector_deliveries',saved),
     assertion(db,'EXISTS(SELECT 1 FROM catalog_mutation_scopes WHERE environment=? AND index_name=? AND captured_at=?)',
       [owner.environment,owner.indexName,owner.capturedAt]),
-    exact('publication_receipts',receipt),exact('catalog_build_requests',build),exact('publication_outbox',publication),reuseSourceAssertions(db,rows),
+    exact('publication_receipts',receipt),exact('catalog_build_requests',build),exact('publication_outbox',publication),
+    ...(runtime?[exact('catalog_runtime_publications',runtime)]:[]),reuseSourceAssertions(db,rows),
     ...pruningCurrentQueries(rows.map(row=>current.get(row.public_id)!)).map(q=>assertion(db,`(${q.sql})=?`,[...q.params,q.count]))];
   await db.batch(checks(),{signal});signal?.throwIfAborted();await reuseReadback(adapters,vectors,3000,signal);
   await db.batch(checks(),{signal});signal?.throwIfAborted();

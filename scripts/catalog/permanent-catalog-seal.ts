@@ -22,6 +22,7 @@ import {approvedBaseChangeLimit} from '../../lib/catalog/owner-base-review.ts';
 import type {OwnerBaseCatalogReview} from '../../lib/catalog/owner-base-review.ts';
 import {recoveredBaseLink} from './cleared-base-recovery.ts';
 import {effectiveSlugApproval} from './new-product-slug-repair.ts';
+import {readResolvedPublicationTransport} from './resolved-publication-transport.ts';
 
 type Row=Record<string,unknown>;
 const HASH=/^[a-f0-9]{64}$/,UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -157,18 +158,8 @@ export async function readCatalogPredecessor(options:{db:CatalogD1;owner:Mutatio
     ||intent.releaseId!==seal.publication.releaseId||intent.catalogRevision!==envelope.catalogRevision||intent.codeSha!==prior.request.codeSha
     ||receipts[0].catalog_revision!==intent.catalogRevision||receipts[0].code_sha!==intent.codeSha
     ||intent.catalogSnapshotSha256!==seal.snapshotSha256)fail();
-  // Data-only publication has a genuine receipt and resolved build, but no
-  // Worker version. Validate its actual runtime record instead of inventing one.
-  let runtime:Row|undefined;
-  if(builds[0].version_reference===null){
-    const rows=(await db.prepare('SELECT * FROM catalog_runtime_publications WHERE release_id=?').bind(seal.publication.releaseId).all<Row>()).results;
-    runtime=rows[0];
-    if(rows.length!==1||runtime.request_id!==builds[0].request_id||runtime.catalog_revision!==envelope.catalogRevision
-      ||runtime.data_sha256!==intent.manifestSha256||!HASH.test(String(runtime.data_sha256))
-      ||runtime.source_snapshot_sha256!==seal.snapshotSha256||runtime.previous_release_id!==intent.priorReleaseId
-      ||builds[0].dispatch_reference!==`runtime:${runtime.data_sha256}`
-      ||outbox[0].dispatch_reference!==builds[0].dispatch_reference)fail();
-  }else if(!builds[0].version_reference||outbox[0].dispatch_reference!==`version:${builds[0].version_reference}`)fail();
+  const runtime=await readResolvedPublicationTransport(db,builds[0],outbox[0],intent,'permanent_seal_changed');
+  if(!runtime&&outbox[0].dispatch_reference!==`version:${builds[0].version_reference}`)fail();
   if(seal.kind==='approved-catalog-seal'){
     const p=seal.persistent!,native=seal.currentNative!;
     const saved=(await db.prepare('SELECT * FROM catalog_vector_deliveries WHERE delivery_id=?').bind(native.source.deliveryId).all<Row>()).results;

@@ -39,8 +39,7 @@ for shadow, canary, explicit activation and single-writer recovery, and
   owner and inventory digest match. Any source write forces another scan; an
   absent migration keeps the original full-scan behavior. Accounting remains
   durable and unchanged; fewer requests mean fewer accounting round trips.
-- The separate `stupid-gifts-catalog-clock` Worker is staged disabled and deployed
-  with its reviewed cron only **after this workflow change is merged**. Its only
+- The separate `stupid-gifts-catalog-clock` Worker is the enabled clock. Its only
   secret can dispatch Actions on `37-Inc/stupid.gifts` (plus
   GitHub's mandatory Metadata read); it has no catalog/provider/storage binding
   and no public trigger. Token expiry: **2027-02-09**. Renew before that date.
@@ -54,6 +53,15 @@ for shadow, canary, explicit activation and single-writer recovery, and
   and let durable run identity handle duplicate wakes. A late wake is not a
   new batch. Disabled/non-Pacific-slot wakes emit a bounded skip reason instead
   of silently looking like successful dispatches.
+- Clock and staff dispatch share one Workers-tested transport. Use `redirect:
+  manual`, not unsupported `error`, and reject redirects without following them.
+  Accept GitHub's current HTTP200/numeric run ID as well as legacy204. Lost or
+  malformed acknowledgements stay unknown; never blindly retry the POST.
+- Historical native proof and current predecessor proof share the same resolved
+  transport reader. Runtime data releases require their genuine immutable runtime
+  row, receipt and matching `runtime:<hash>` dispatch, not a fictitious Worker
+  version. Old native groups need not be the current runtime head. Preserve their
+  exact original receipt, owner, vector bytes and history.
 - Catalog config uses the existing 8 MiB metadata-sized reader, not the obsolete
   32 KiB control limit. The November 11 delayed morning intent saved 34,159 bytes
   of valid config (including canonical title/editorial reviews) and failed before
