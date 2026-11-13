@@ -52,6 +52,19 @@ async function fixture(t){
   return{sql,db,env,worker,call,edit,snapshot,edition,store:createContentRequestStore(db),counts:()=>({writes,reads}),loseAck(){loseAck=true;}};
 }
 
+test('show edits retain already archived held IDs without admitting new held gifts or featuring them on home',async t=>{
+  const f=await fixture(t),handler=createContentAdminHandler({snapshot:f.snapshot,manifest:{merchandising:{}},
+    showCollections:{matan:['held-99','public-1']},activeShow:'matan',now:()=>NOW});
+  const write=async(name,ids)=>handler(new Request('https://stupid.gifts/api/content-admin/collections/'+name,{method:'PUT',
+    headers:{'Cf-Access-Jwt-Assertion':await token(),Origin:'https://stupid.gifts','Content-Type':'application/json','Idempotency-Key':'fixture-preserve-'+name},
+    body:JSON.stringify(f.edit({ids}))}),f.env);
+  assert.equal((await write('matan',['public-2','held-99','public-1'])).status,202);
+  assert.deepEqual((await f.store.get('/collections/matan')).payload.ids,['public-2','held-99','public-1']);
+  assert.equal((await write('new-show',['public-2','held-99'])).status,409);
+  const edition=structuredClone(f.edition);edition.anchors[0]='held-99';
+  assert.equal((await f.call('/collections/homepage',{method:'PUT',payload:f.edit({edition})})).status,409);
+});
+
 test('staff auth verifies signed audience/issuer/time and exact staff identity, not email/header assertions',async()=>{
   const request=jwt=>new Request('https://stupid.gifts/api/content-admin/status',{headers:{'Cf-Access-Jwt-Assertion':jwt}});
   assert.equal(await contentAdminActor(request(await token()),config,NOW,localKeys),'staff-fixture');

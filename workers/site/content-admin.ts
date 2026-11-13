@@ -56,9 +56,13 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
     if(!Array.isArray(ids)||!ids.length||ids.length>24||new Set(ids).size!==ids.length)invalid();
     if(ids.some(id=>typeof id!=='string'||! /^[a-zA-Z0-9._-]{1,100}$/.test(id)))invalid();
     const products=ids.map(id=>snapshot.products.find(product=>(product.publicId===id||resource==='/collections/homepage'&&product.id===id)&&resolvePublicProduct(product,now())));
-    if(checkCurrent&&products.some(p=>!p))
+    // A saved show keeps its archived identities when an item is temporarily
+    // held. Rendering still filters unavailable gifts; editing must not erase
+    // that history or admit a new held gift. Homepage picks must all be public.
+    const retained=resource==='/collections/homepage'?[]:options.showCollections[resource.slice(13)]??[];
+    if(checkCurrent&&products.some((p,i)=>!p&&!(retained.includes(ids[i])&&identities.has(ids[i]))))
       throw new ContentAdminError(409,'collection_product_not_public');
-    if(checkCurrent&&new Set(products.map(p=>p!.publicId)).size!==products.length)invalid();
+    if(checkCurrent&&new Set(products.map((p,i)=>p?.publicId??ids[i])).size!==products.length)invalid();
     return p;
   }
   return async(request:Request,env:SiteEnv)=>{

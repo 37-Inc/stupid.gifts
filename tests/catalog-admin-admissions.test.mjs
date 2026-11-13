@@ -16,11 +16,24 @@ async function fixture(t){
     actor:'staff',reason:'Owner picked this gift',baseCatalogRevision:'accepted',expectedRevision:0},'2026-11-11T12:00:00.000Z');
   return{sql,db,runtime,pending,request};
 }
-test('admin queue is inert when empty or unrelated catalog work is pending',async t=>{
+test('admin queue is inert when empty and preserves unfinished existing publication',async t=>{
   const f=await fixture(t),options={...f,source:'a'.repeat(40),day:'2026-11-11',coordinate:()=>{throw Error('must not run');}};
   assert.equal((await consumeAdminAdmissions(options)).state,'empty');
   await f.request('B000000001','admin-admission-one');f.pending.value={path:'original-pending'};
-  assert.equal((await consumeAdminAdmissions(options)).state,'waiting');assert.equal(f.sql.prepare('SELECT count(*) n FROM content_admin_results').get().n,0);
+  assert.equal((await consumeAdminAdmissions({...options,coordinate:async input=>{
+    assert.equal(input.resumeOnly,true);assert.equal(input.mode,'full');return{state:'attention',runKey:'original-pending'};
+  }})).state,'pending');assert.equal(f.sql.prepare('SELECT count(*) n FROM content_admin_results').get().n,0);
+});
+test('on-demand admission finishes the saved publisher then adds only its exact products in the same wake',async t=>{
+  const f=await fixture(t);await f.request('B000000001','admin-admission-one');f.pending.value={path:'original-pending'};
+  const calls=[];
+  const result=await consumeAdminAdmissions({...f,source:'a'.repeat(40),day:'2026-11-13',coordinate:async input=>{
+    calls.push(input);
+    if(input.resumeOnly){f.pending.value=null;return{state:'accepted',runKey:'original-pending'};}
+    assert.deepEqual(input.admitAsins,['B000000001']);f.sql.exec("INSERT INTO products VALUES('B000000001','public-one')");
+    return{state:'accepted',runKey:'new-admission',releaseId:'accepted',receiptSha256:'c'.repeat(64)};
+  }});
+  assert.equal(result.state,'accepted');assert.equal(calls.length,2);assert.equal(calls[1].mode,'admit');
 });
 test('exact claimed cohort/date survives retries and late requests, admission settlement does not refetch',async t=>{
   const f=await fixture(t);await f.request('B000000001','admin-admission-one');let calls=0;
