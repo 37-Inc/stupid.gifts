@@ -271,7 +271,7 @@ function defaults(runtime,environment){
 
 /** One manual/scheduled invocation, one existing run. The ONLY mutable progress
  * pointer refers to immutable intent; actual phases/dispatches stay in RunWorkspace. */
-export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins,admitSavedRun,photoAsins,source,day:capturedDay,runtime,environment=process.env},injected={}){
+export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins,admitSavedRun,photoAsins,resumeOnly=false,source,day:capturedDay,runtime,environment=process.env},injected={}){
   if(!['shadow','full','photos','canary','code','admit'].includes(mode)||!SOURCE.test(source)||!runtime.hosted||!runtime.durable)fail('invocation');
   day(capturedDay);if(mode==='canary'?!ASIN.test(canaryId):canaryId!==undefined)fail('canary');
   if(mode==='admit'?!validAdmissionAsins(admitAsins):admitAsins!==undefined)fail('admission_asins');
@@ -288,6 +288,9 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
       if(ref.path!==runtime.care+'/runs/'+record.runKey+'/hosted-run.json')fail('pending_path');}
   }
   let resumed=Boolean(record);
+  // An on-demand admission may finish the existing publisher first, but must
+  // never accidentally start a daily supplier batch when there is no pending run.
+  if(resumeOnly&&!record)return{state:'idle'};
   // A requested code-only release must never resume supplier/model phases.
   if(mode==='code'&&record&&record.kind!=='code')return{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_catalog_pending'};
   // Owner-picked admission never substitutes another cohort or resumes unrelated

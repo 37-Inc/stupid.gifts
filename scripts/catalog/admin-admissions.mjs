@@ -11,7 +11,10 @@ export async function consumeAdminAdmissions({db,runtime,source,day,coordinate,n
   let claim=running?JSON.parse(running.result_json):null;
   if(!claim){
     const pending=await runtime.durable.get('pointers/pending-run.json');
-    if(pending&&JSON.parse(Buffer.from(pending.bytes)).pending!==null)return{state:'waiting',reason:'existing_catalog_run'};
+    if(pending&&JSON.parse(Buffer.from(pending.bytes)).pending!==null){
+      const resumed=await coordinate({mode:'full',resumeOnly:true,source,day,runtime});
+      if(!['accepted','skipped','idle'].includes(resumed.state))return{state:'pending',reason:'existing_catalog_run',pending:resumed};
+    }
     const rows=(await db.prepare(`SELECT r.request_id,r.payload_json,p.public_id FROM content_admin_requests r
       LEFT JOIN content_admin_results a ON a.request_id=r.request_id LEFT JOIN products p ON p.id=json_extract(r.payload_json,'$.asin')
       WHERE r.action='admit' AND a.request_id IS NULL ORDER BY r.rowid LIMIT 10`).all()).results;

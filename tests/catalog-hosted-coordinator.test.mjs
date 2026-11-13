@@ -26,6 +26,12 @@ const providerReport=()=>({schemaVersion:1,kind:'cloudflare-runner-readiness',en
   resources:{accountId:CATALOG_SCOPE.accountId,databaseId:CATALOG_SCOPE.databaseId,databaseName:CATALOG_SCOPE.databaseName,indexName:CATALOG_SCOPE.indexName},
   status:'checks_passed_execution_unavailable',executionAvailable:false,issues:[],metrics:{requests:5,reportedRowsRead:201,reportedRowsWritten:0}});
 
+test('resume-only coordination never creates a daily run when the queue is empty',async()=>{
+  const f=fixture();
+  assert.deepEqual(await coordinateHostedCatalog({mode:'full',resumeOnly:true,source:SOURCE,day:DAY,runtime:f.runtime},f.deps),{state:'idle'});
+  assert.deepEqual(f.events,[]);assert.deepEqual(f.calls,[]);assert.equal(f.pointer(),null);
+});
+
 test('publication progress streams split lines before exit and never echoes raw data or secrets',async()=>{
   const value={state:'publication_progress',phase:'package',completedBytes:1024,completedFiles:1,totalFiles:4,blocks:1,elapsedMs:17};
   const expected={state:'progress',step:'publication',phase:'package',completedBytes:1024,completedFiles:1,totalFiles:4,blocks:1,elapsedMs:17};
