@@ -110,6 +110,13 @@ care. There is no preview-only product endpoint or parallel product database.
 Accepted products enter ordinary stock/photo refresh and native/serving index
 delivery. Do not reuse expired preview imagery or extend its old observation.
 
+For an owner-requested photo repair, the same workflow accepts `mode=photos`
+and `photo_asins` (up to ten exact existing public ASINs). The immutable run key
+includes that cohort. It uses the ordinary photo-only refresh, with no discovery,
+copy, article or embedding generation and no homepage edit. Other pending work
+must finish first; retries keep the saved IDs and observations. Omitting the
+field leaves scheduled due-photo selection unchanged.
+
 ## Authentication and rollout
 
 Before enabling, review/apply migrations0018/0019 through the runtime bootstrap

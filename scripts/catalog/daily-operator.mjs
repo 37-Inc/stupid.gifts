@@ -10,7 +10,7 @@ import {PHOTO_EXPIRY_SQL} from './maintenance-d1.ts';
 import {planRoutineAutomation} from './automation-plan.ts';
 import {loadAutomationMerchandising,loadAutomationDiscoveryInputs} from './automation-inputs.mjs';
 import {routineMerchandising} from './campaign-operator.mjs';
-import {hostedRunRecord,validSavedAdmissionRun} from './hosted-run-record.mjs';
+import {hostedRunRecord,validSavedAdmissionRun,validAdmissionAsins} from './hosted-run-record.mjs';
 import {loadSavedAdmission} from './saved-admission.mjs';
 import path from 'node:path';
 
@@ -81,10 +81,11 @@ export async function routineHostedPending(runtime,source,runKey,{recovery=false
   if(record.source!==source&&!recovery||! /^[a-f0-9]{40}$/.test(source)||record.runKey!==runKey||record.kind==='code')refuse('hosted_pending');
   return record;
 }
-export function routineHostedPreparation(pending,{command,photosOnly,admitAsins,admitSavedRun,canaryId}){
+export function routineHostedPreparation(pending,{command,photosOnly,admitAsins,admitSavedRun,canaryId,photoAsins}){
   if(canaryId&&(!pending||pending.kind!=='canary'||pending.canaryId!==canaryId)||pending?.kind==='canary'&&command==='prepare'&&!canaryId)refuse('canary_authority');
   if(pending&&command==='prepare'&&(Boolean(photosOnly)!==(pending.kind==='photos')
     ||canonicalJson(admitAsins??null)!==canonicalJson(pending.kind==='admit'?pending.admitAsins:null)
+    ||canonicalJson(photoAsins??null)!==canonicalJson(pending.photoAsins??null)
     ||admitSavedRun!==pending.admitSavedRun))refuse('hosted_pending');
 }
 export function routineAutomationPolicy(value){
@@ -218,7 +219,8 @@ export async function assertNoUnsealedMaintenance(db,seal,scope=SCOPE){
   if(rows.length)refuse('unsealed_maintenance');
 }
 function options(config,configPath,configSha256){return{config,driver:{configPath,configSha256,workspace:WORKSPACE,cadenceOnly:true,...(RUNTIME.durable?{durable:RUNTIME.durable}:{})},workspace:{directory:WORKSPACE,repository:ROOT,mode:'resume',runId:config.runId,codeSha:SOURCE,configSha256,scope:SCOPE,retention:config.retention,budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe',...(RUNTIME.durable?{durable:RUNTIME.durable}:{})}};}
-async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,admitSavedRun){
+async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,admitSavedRun,photoAsins){
+  if(photoAsins&&!RUNTIME.hosted)refuse('photo_hosted_only');
   if(admitSavedRun&&!RUNTIME.hosted)refuse('saved_admission_hosted_only');
   const old=await optional(directory+'/operator.json');
   if(old&&await optional(directory+'/success.json'))return{state:'skipped',reason:'run_already_completed',runId:old.runId};
@@ -228,7 +230,7 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,a
   const savedPreparation=await optional(directory+'/preparation.json');
   if(savedPreparation){if(savedPreparation.source!==SOURCE||savedPreparation.helperSha256!==self)refuse('operator_changed');
     return materializeRoutinePreparation(directory,savedPreparation);}
-  const automation=canaryId?{schemaVersion:1,enabled:true,discovery:false,homepage:false}
+  const automation=canaryId||photoAsins?{schemaVersion:1,enabled:true,discovery:false,homepage:false}
     :admitAsins?null:routineAutomationPolicy(await optional(CARE+'/automation-policy.json')),bundled=RUNTIME.hosted||Boolean(automation);
   if(await optional(directory+'/prepare-intent.json'))refuse('preparation_interrupted');
   const priorBytes=await priorSuccess();if(RUNTIME.hosted&&!priorBytes)refuse('hosted_catalog_bootstrap');
@@ -246,7 +248,7 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,a
   ]);
   if(rows[2].results.length!==1||sha256(canonicalJson(rows[2].results[0]))!==seal.publication.receiptSha256||rows[3].results.length!==1||rows[3].results[0].phase!=='idle'||rows[3].results[0].external_pending!==0)refuse('prior_or_owner');
   await assertNoUnsealedMaintenance(db,seal);
-  if(photosOnly){
+  if(photosOnly&&!photoAsins){
     const due=(await db.prepare(`SELECT p.id FROM products p WHERE p.source='amazon' AND p.is_active=1
       AND p.duplicate_of_product_id IS NULL AND p.public_display_json IS NOT NULL AND ${PHOTO_EXPIRY_SQL}<=? LIMIT 1`)
       .bind(new Date(Date.now()+18*3600000).toISOString()).all()).results;
@@ -298,6 +300,12 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,a
   const freshness=automation?planRoutineAutomation(pool,now,{exposedIds:[...homepageEdition.anchors,...homepageEdition.rotation],
     promotedIds:Object.entries(merchandising).filter(([,value])=>value.commissionPriority&&Date.parse(value.commissionUntil)>Date.parse(now)).map(([id])=>id),photosOnly}):null;
   if(canaryId){freshness.refreshIds=[canaryId];freshness.canaryId=canaryId;}
+  if(photoAsins){
+    const publicIds=(await db.prepare(`SELECT product_id FROM catalog_public_products WHERE catalog_revision=? AND product_id IN (${photoAsins.map(()=>'?').join(',')})`)
+      .bind(seal.projectionReceipt.catalog_revision,...photoAsins).all()).results.map(row=>row.product_id);
+    if(photoAsins.some(id=>!publicIds.includes(id)||!pool.some(p=>p.id===id&&p.isActive&&!p.duplicateOfProductId)))refuse('photo_not_cleared_public');
+    freshness.refreshIds=[...photoAsins];
+  }
   const automated=freshness?{schemaVersion:1,refreshIds:freshness.refreshIds,discovery:!photosOnly&&automation.discovery}:null;
   const needsModel=!canaryId&&(admitAsins||!photosOnly&&(automated?automated.discovery:calendar.monday));
   let discoveryInputs;
@@ -379,6 +387,8 @@ export async function cleanupAcceptedPublication(options,releaseId,open=openPubl
 export function operatorInvocation(argv,calendar){
   const args=[...argv],photoFlag=args.indexOf('--photos-only'),photosOnly=photoFlag>=0;
   if(photosOnly)args.splice(photoFlag,1);
+  const photoIdsFlag=args.indexOf('--photo-asins'),photoAsins=photoIdsFlag>=0?args[photoIdsFlag+1]?.split(','):undefined;
+  if(photoIdsFlag>=0)args.splice(photoIdsFlag,2);
   const admitFlag=args.indexOf('--admit-asins');
   const admitAsins=admitFlag>=0?args[admitFlag+1]?.split(','):undefined;
   if(admitFlag>=0)args.splice(admitFlag,2);
@@ -394,12 +404,13 @@ export function operatorInvocation(argv,calendar){
     ||!['prepare','review','start','resume','publish','recover','status','reconcile-availability'].includes(command)
     ||(command==='resume'?args.length<1||args.length>2:args.length!==(['publish','recover'].includes(command)?2:1))
     ||command==='resume'&&approvalSha!==undefined&&!HASH.test(approvalSha)||photosOnly&&command!=='prepare'||photosOnly&&flag<0
+    ||photoIdsFlag>=0&&(!photosOnly||!validAdmissionAsins(photoAsins))
     ||canaryFlag>=0&&(command!=='prepare'||flag<0||photosOnly||admitAsins||! /^[A-Z0-9]{10}$/.test(canaryId??'')
       ||runKey!=='canary-'+calendar.day+'-'+canaryId)
     ||savedFlag>=0&&(!admitAsins||!validSavedAdmissionRun(admitSavedRun))
     ||admitFlag>=0&&(command!=='prepare'||flag<0||photosOnly||!admitAsins?.length||admitAsins.length>10
       ||new Set(admitAsins).size!==admitAsins.length||admitAsins.some(id=>! /^[A-Z0-9]{10}$/.test(id))))refuse('command');
-  return{command,approvalSha,runKey,...(photosOnly?{photosOnly:true}:{}),...(admitAsins?{admitAsins}:{}),...(admitSavedRun?{admitSavedRun}:{}),...(canaryId?{canaryId}:{})};
+  return{command,approvalSha,runKey,...(photosOnly?{photosOnly:true}:{}),...(photoAsins?{photoAsins}:{}),...(admitAsins?{admitAsins}:{}),...(admitSavedRun?{admitSavedRun}:{}),...(canaryId?{canaryId}:{})};
 }
 /** A reviewed descendant may resume the original finite cohort with its exact
  * config digest. Saved provider/model stages are reused, never re-collected.
@@ -440,12 +451,12 @@ let calendar=pacificCatalogCalendar();
 // the immutable hosted pending record, never a CLI date/environment override.
 const rawRun=argv.indexOf('--run'),pending=RUNTIME.hosted?await routineHostedPending(RUNTIME,SOURCE,rawRun>=0?argv[rawRun+1]:'scheduled-'+calendar.day,{recovery:argv[0]==='recover'}):null;
 if(pending)calendar=pacificCatalogCalendar(pending.day+'T12:00:00Z');
-const {command,approvalSha,runKey,photosOnly,admitAsins,admitSavedRun,canaryId}=operatorInvocation(argv,calendar),directory=CARE+'/runs/'+runKey;
-routineHostedPreparation(pending,{command,photosOnly,admitAsins,admitSavedRun,canaryId});
+const {command,approvalSha,runKey,photosOnly,admitAsins,admitSavedRun,canaryId,photoAsins}=operatorInvocation(argv,calendar),directory=CARE+'/runs/'+runKey;
+routineHostedPreparation(pending,{command,photosOnly,admitAsins,admitSavedRun,canaryId,photoAsins});
 await source(command,runKey,pending);
 if(command==='prepare'||command==='reconcile-availability'){
   if(command==='reconcile-availability'&&(!argv.includes('--run')||photosOnly||admitAsins))refuse('availability_command');
-  const record=await prepare(directory,calendar,photosOnly,admitAsins,canaryId,admitSavedRun);
+  const record=await prepare(directory,calendar,photosOnly,admitAsins,canaryId,admitSavedRun,photoAsins);
   if(command==='prepare'||record.state==='skipped')console.log(JSON.stringify(record));
   else{
     const config=validateCloudflareWeeklyConfig(await json(record.configPath,record.configSha256)),entry=options(config,record.configPath,record.configSha256);
