@@ -184,6 +184,32 @@ test('finite photos retain exact deadlines, never enter evergreen SSR, and disap
   const fresh=await (await f.request('/gifts/'+base.slug)).text();assert.match(fresh,/A cleared offline desk toy description 1/);assert.doesNotMatch(fresh,/OFFLINE-NOT-FETCHED/);
 });
 
+test('homepage backfills only expired photo slots, without changing the edition, show or browse membership',async t=>{
+  const f=await runtimeFixture(t),[anchor]=f.products;
+  for(const p of f.products.slice(1))p.imageUrl='/images/offline.jpg';
+  const ids=f.products.map(p=>p.id),edition={schemaVersion:1,day:'2026-11-13',anchors:ids.slice(0,6),rotation:ids.slice(6,24)};
+  f.data.homepage=edition;
+  const savePhoto=async()=>{
+    const expiresAt=new Date(f.time.now+10000).toISOString();
+    const overlay={...anchor,imageUrl:'https://m.media-amazon.com/images/I/OFFLINE.jpg',eligibleUntil:expiresAt,persistent:anchor};
+    const bytes=new TextEncoder().encode(JSON.stringify([overlay])+'\n'),sha256=await runtimeDigest(bytes);
+    f.data.overlays=[{sha256,expiresAt}];f.objects.set(`catalog-v1/public-overlays/${Date.parse(expiresAt)}/${sha256}.json`,bytes);
+    await f.publish();return Date.parse(expiresAt);
+  };
+  const props=async(path)=>JSON.parse((await (await f.request(path)).text()).match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);
+  const expiry=await savePhoto(),before=await props('/');assert.equal(before.cards[0].id,anchor.id);
+  f.time.now=expiry;
+  const after=await props('/');assert.ok(!ids.slice(0,24).includes(after.cards[0].id));
+  assert.deepEqual(after.cards.slice(1).map(p=>p.id),before.cards.slice(1).map(p=>p.id));
+  const all=[...after.cards];let next=after.next;
+  while(next){const shard=await (await f.request(next)).json();all.push(...shard.products);next=shard.next;}
+  assert.deepEqual(all.map(p=>p.id).sort(),[...ids].sort());
+  assert.equal((await props('/gifts/'+anchor.slug)).products[0].id,anchor.id);
+  assert.ok((await props('/h')).products.some(p=>p.id===anchor.id));
+  await savePhoto();f.time.now+=5001; // Allow the normal runtime head poll.
+  assert.equal((await props('/')).cards[0].id,anchor.id);
+});
+
 test('runtime repaired-copy exclusion also rejects legacy provider-metadata fallback, without relabeling native vectors',async t=>{
   const f=await runtimeFixture(t),p=f.products[0],other=f.products[1];
   async function entry(product,recipe){const value={publicId:product.publicId,productId:product.id,publicFieldsSha256:await semanticHash(canonicalJson(semanticPublicFields(product,recipe))),
