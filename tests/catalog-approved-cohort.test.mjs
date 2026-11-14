@@ -80,18 +80,24 @@ async function batchFixture(t,count=4){
 }
 test('eight-product native batch stays inside existing D1 wire bounds',async t=>{
   const b=await batchFixture(t,8),wire=new WeakMap(),metrics={maxBytes:0,maxStatements:0},original=b.f.db;
+  let loads=0;
+  for(const source of Object.values(b.options.originals)){
+    const load=source.load;source.load=async(...args)=>{loads++;return load(...args);};
+  }
   const db={...original,prepare(sql){const statement=original.prepare(sql),bind=statement.bind;
     wire.set(statement,{sql,params:[]});statement.bind=function(...params){wire.set(statement,{sql,params});return bind.apply(this,params);};return statement;},
     async batch(statements){const bytes=Buffer.byteLength(JSON.stringify({batch:statements.map(s=>wire.get(s))}));
       metrics.maxBytes=Math.max(metrics.maxBytes,bytes);metrics.maxStatements=Math.max(metrics.maxStatements,statements.length);
       assert.ok(bytes<=512*1024,`D1 wire bytes: ${bytes}`);return original.batch(statements);}};
   const first=await deliverOwnedApprovedCohortBatch({...b.options,db});assert.equal(first.state,'pending');
+  assert.equal(loads,first.publicIds.length+1,'inspect at most one row beyond the next dispatch');
   const next=await deliverOwnedApprovedCohortBatch({...b.options,db,owner:first.owner});assert.equal(next.state,'complete');
   assert.equal(b.sends(),1);assert.ok(metrics.maxBytes>0);assert.ok(first.publicIds.length<8);
   assert.deepEqual(next.publicIds,first.publicIds);
   const remaining=b.options.publicIds.slice(next.publicIds.length);
   const rest=await deliverOwnedApprovedCohortBatch({...b.options,db,owner:next.owner,publicIds:remaining});
   const done=await deliverOwnedApprovedCohortBatch({...b.options,db,owner:rest.owner,publicIds:remaining});
+  assert.equal(loads,9,'all eight originals plus just the one boundary lookahead');
   assert.equal(done.state,'complete');assert.equal(b.sends(),2);
   assert.equal((await readOwnedApprovedCohortVectors(db,done.owner,b.options.revision,b.options.adapters)).settled,true);
   t.diagnostic(JSON.stringify(metrics));

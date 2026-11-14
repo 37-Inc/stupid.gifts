@@ -664,20 +664,21 @@ export function deliverOwnedApprovedCohortBatch(options:{db:CatalogD1;owner:Muta
       if(!policy||ids.some(id=>policy.sources.some(s=>s.publicId===id)))throw Error('vector_batch_invalid');
       await db.batch(planChecks(db,input,revision));
       const prepared:Array<{product:Row;request:Request;requestBytes:string;productBytes:string}>=[];
+      let wireBytes=0;
       for(const publicId of ids){
         const original=await approvedVectorOptions({...options,publicId,original:options.originals?.[publicId]});
         const p=await preparePruneRequest(original,true);
         if(!p.request.vector)throw Error('vector_batch_invalid');
         const request:Request={...p.request,providerIdentity:adapters.providerIdentity,batchIds:ids};
-        prepared.push({product:p.product,request,requestBytes:encodeRequest(request),productBytes:canonicalJson(p.product)});
+        const requestBytes=encodeRequest(request),productBytes=canonicalJson(p.product);
+        // Include repeated CAS values, escaping and statement overhead. Stop at
+        // the first row that won't fit; don't read/prove the unused tail again
+        // on every batch. The final, shorter membership only reduces this size.
+        wireBytes+=2*(Buffer.byteLength(JSON.stringify(productBytes))+Buffer.byteLength(JSON.stringify(requestBytes)))+16384;
+        if(prepared.length&&wireBytes>480*1024)break;
+        prepared.push({product:p.product,request,requestBytes,productBytes});
       }
-      // Keep both intent and completion below the existing 512KB D1 payload
-      // bound. This conservative bound includes duplicate CAS values/escaping;
-      // large rows use smaller batches, never truncate source or vector bytes.
-      while(ids.length>1&&prepared.reduce((n,p)=>n+Buffer.byteLength(JSON.stringify(p.productBytes))*2
-        +Buffer.byteLength(JSON.stringify(p.requestBytes))*2+16384,0)>480*1024){
-        ids=ids.slice(0,Math.ceil(ids.length/2));keys=keys.slice(0,ids.length);prepared.length=ids.length;
-      }
+      ids=ids.slice(0,prepared.length);keys=keys.slice(0,ids.length);
       for(const p of prepared){p.request.batchIds=ids;p.requestBytes=encodeRequest(p.request);}
       // Reserve one epoch per immutable member within ONE transaction. This
       // retains the existing unique generation/epoch identity and old readers.
