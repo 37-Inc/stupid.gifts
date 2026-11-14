@@ -4,7 +4,8 @@ export interface AutomationCohortAuthority {
   schemaVersion:1;runId:string;configSha256:string;journalSha256:string;writerGeneration:number;
   refreshIds:string[];admittedIds:string[];products:Array<{id:string;publicId:string}>;photosOnly?:true;
 }
-const HASH=/^[a-f0-9]{64}$/,ASIN=/^[A-Z0-9]{10}$/;
+const HASH=/^[a-f0-9]{64}$/;
+export const isCatalogAsin=(id:unknown):id is string=>typeof id==='string'&&/^[A-Z0-9]{10}$/.test(id);
 const UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const exact=(value:unknown,keys:string)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===keys;
 function refuse():never{throw Error('automation_cohort_invalid');}
@@ -17,7 +18,7 @@ export function validateAutomationCohort(value:AutomationCohortAuthority,approva
     // Existing complete captured-catalog transport bound, not a growth quota.
     ||value.refreshIds.length+value.admittedIds.length>10000||value.products.length>10000||value.photosOnly&&value.admittedIds.length)refuse();
   const allowed=[...value.refreshIds,...value.admittedIds];
-  if(new Set(allowed).size!==allowed.length||allowed.some(id=>typeof id!=='string'||!ASIN.test(id))
+  if(new Set(allowed).size!==allowed.length||allowed.some(id=>!isCatalogAsin(id))
     ||value.products.some(p=>!exact(p,'id,publicId')||typeof p.id!=='string'||typeof p.publicId!=='string')
     ||new Set(value.products.map(p=>p.id)).size!==value.products.length||new Set(value.products.map(p=>p.publicId)).size!==value.products.length
     ||value.products.some(p=>!exact(p,'id,publicId')||!allowed.includes(p.id)||!UUID.test(p.publicId))
