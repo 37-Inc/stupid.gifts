@@ -591,6 +591,30 @@ test('photo-current is a healthy skip; canary is explicit and never inferred fro
   assert.deepEqual(canary.calls[0],['prepare','--canary-id','B000000001','--run','canary-'+DAY+'-B000000001']);
   await assert.rejects(fixture().run({mode:'canary'}),/canary/);await assert.rejects(fixture().run({canaryId:'B000000001'}),/canary/);
 });
+test('a catch-up for the accepted slot does not claim, restore, inspect or publish',async()=>{
+  for(const mode of ['photos','full']){
+    const f=fixture();const accepted=await f.run({mode}),dir=f.runtime.care+'/runs/'+accepted.runKey;
+    const next={control:{path:dir+'/catalog-control.json',sha256:HASH},transport:'runtime-data',manifestSha256:HASH};
+    const saved={source:SOURCE,next,result:{state:'finalized',runId:'original'}},read=f.runtime.state.readPointer.bind(f.runtime.state);
+    f.runtime.state.readPointer=(name,...args)=>name==='last-success'?bytes(next):read(name,...args);
+    f.files.set(dir+'/success.json',bytes(saved));
+    const before=[f.events.length,f.restored.length,f.checkedOut.length,f.calls.length];
+    assert.deepEqual(await f.run({mode,source:NEW_SOURCE},{inspect:()=>{throw Error('no checkpoint replay');}}),
+      {state:'skipped',reason:'run_already_accepted',runKey:accepted.runKey,kind:mode});
+    assert.deepEqual([f.events.length,f.restored.length,f.checkedOut.length,f.calls.length],before);
+    f.files.set(dir+'/success.json',bytes({...saved,source:NEW_SOURCE}));await assert.rejects(f.run({mode}),/successor_identity/);
+    f.files.set(dir+'/success.json',bytes(saved));
+    const prior={path:'/previous/accepted',sha256:'e'.repeat(64)};
+    f.files.set(dir+'/config.json',bytes({codeSha:SOURCE,runId:'original',inputs:{previous:prior}}));
+    f.runtime.state.readPointer=(name,...args)=>name==='last-success'?bytes({...next,control:{path:'/newer/accepted',sha256:'f'.repeat(64)}}):read(name,...args);
+    assert.equal((await f.run({mode})).reason,'historical_slot_finalized');
+    f.runtime.state.readPointer=(name,...args)=>name==='last-success'?bytes({...next,manifestSha256:'e'.repeat(64)}):read(name,...args);
+    assert.equal((await f.run({mode})).errorCode,'catalog_hosted_slot_successor_changed');
+    assert.deepEqual([f.events.length,f.restored.length,f.checkedOut.length,f.calls.length],before);
+    f.runtime.state.readPointer=(name,...args)=>name==='last-success'?bytes({...next,control:prior}):read(name,...args);
+    await assert.rejects(f.run({mode},{inspect:()=>{throw Error('original handoff needs normal reconciliation');}}),/original handoff/);
+  }
+});
 
 test('exact photo refresh pins only the requested cohort and never replaces other pending work',async()=>{
   const photoAsins=['B01DVUSR1Y','B0DK82DBDG'],runKey=hostedRunKey('photos',DAY,SOURCE,undefined,undefined,undefined,photoAsins);

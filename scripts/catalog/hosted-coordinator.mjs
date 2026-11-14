@@ -26,6 +26,27 @@ async function optional(read){try{return await read();}catch(error){if(error.cod
 function day(value){const time=new Date(value+'T00:00:00Z');if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)
   ||!Number.isFinite(time.getTime())||time.toISOString().slice(0,10)!==value)fail('day');return value;}
 function inputsReference(value){if(!exact(value,'schemaVersion,key,sha256')||value.schemaVersion!==1||!HASH.test(value.sha256)||value.key!==`inputs/${value.sha256}.json`)fail('inputs_reference');return value;}
+// A cleared pointer plus this slot's finalized success and current accepted
+// successor prove a duplicate wake. This reports a skip, not a new acceptance.
+async function completedSlot(runtime,record){
+  const dir=runtime.care+'/runs/'+record.runKey;
+  const saved=await optional(async()=>json(await runtime.state.bytes(dir+'/success.json')));
+  if(!saved)return null;
+  if(saved.source!==record.source||saved.result?.state!=='finalized'||saved.next?.control?.path!==dir+'/catalog-control.json'
+    ||!HASH.test(saved.next.control.sha256)||!HASH.test(saved.next.manifestSha256))fail('successor_identity');
+  const current=json(await runtime.state.readPointer('last-success',runtime.care+'/last-success.json'));
+  if(canonicalJson(current)===canonicalJson(saved.next))return{state:'skipped',reason:'run_already_accepted'};
+  // success.json is written before the successor CAS. Only the original
+  // predecessor can still need that handoff. Never reclaim a newer head.
+  const config=json(await runtime.state.bytes(dir+'/config.json'));
+  const prior=config.inputs?.previous;
+  if(config.codeSha!==record.source||config.runId!==saved.result.runId||!HASH.test(prior?.sha256))fail('successor_identity');
+  if(current.control?.path===prior.path&&current.control.sha256===prior.sha256)return null;
+  if(HASH.test(current.control?.sha256)&&HASH.test(current.manifestSha256)&&typeof current.control?.path==='string'
+    &&current.control.path!==prior.path&&current.control.path!==saved.next.control.path)
+    return{state:'skipped',reason:'historical_slot_finalized'};
+  return{state:'attention',errorCode:'catalog_hosted_slot_successor_changed'};
+}
 export async function assertUnpreparedHostedAdmission(runtime,record){
   for(const file of ['operator.json','config.json','preparation.json','prepare-intent.json'])
     if(await optional(()=>runtime.state.bytes(runtime.care+'/runs/'+record.runKey+'/'+file)))fail('preparation_already_exists');
@@ -307,7 +328,10 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
       return{state:'shadow',source,inputsVerified:true,workspace:'not_verified_readonly',pending:false,...shadowProviderFields(await deps.shadowCheck())};}
     const runKey=hostedRunKey(mode,capturedDay,source,canaryId,admitAsins,admitSavedRun,photoAsins);
     const file=runtime.care+'/runs/'+runKey+'/hosted-run.json';let bytes=await optional(()=>runtime.state.bytes(file));
-    if(bytes){record=hostedRunRecord(json(bytes));if(record.runKey!==runKey)fail('run_record');resumed=true;}
+    if(bytes){record=hostedRunRecord(json(bytes));if(record.runKey!==runKey)fail('run_record');resumed=true;
+      if(pointerBytes&&(mode==='full'||mode==='photos'&&!photoAsins)){
+        const completion=await completedSlot(runtime,record);
+        if(completion)return{...completion,runKey,kind:record.kind};}}
     else{record=hostedRunRecord({schemaVersion:1,runKey,source,day:capturedDay,kind:mode,inputsRef:inputsReference(await deps.currentInputs({refreshCampaigns:true})),...(mode==='canary'?{canaryId}:mode==='admit'?{admitAsins,...(admitSavedRun?{admitSavedRun}:{})}:photoAsins?{photoAsins}:{})});
       bytes=await runtime.state.put(file,record);}
     pointerBytes=await runtime.state.pointer('pending-run',pointerFile,{schemaVersion:1,pending:{path:file,sha256:hash(bytes)}},pointerBytes);
