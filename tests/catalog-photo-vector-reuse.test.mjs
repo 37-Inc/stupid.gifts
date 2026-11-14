@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
 import {preservedPhotoVector,readPreservedPhotoVector} from '../scripts/catalog/photo-vector-reuse.ts';
+import {unchangedPhotoNativeIds} from '../scripts/catalog/owned-vector-delivery.ts';
 import {canonicalDescriptionEmbeddingInput} from '../lib/catalog/presentation.ts';
 import {maintenanceEmbeddingText} from '../scripts/catalog/maintenance-state.ts';
 import {encodePgvectorSendBase64} from '../scripts/catalog/pgvector-binary.ts';
-import {sha256} from '../scripts/catalog/migration.ts';
+import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
 const id='B000000001',publicId='00000000-0000-4000-8000-000000000001';
 function fixture(){
   const base={id,publicId,slug:'rooster-puppet',source:'amazon',title:'Rooster puppet',description:'A rooster hand puppet.',
@@ -72,4 +74,30 @@ test('photo-only refresh retains exact canonical public input across a raw retai
   assert.equal(preservedPhotoVector(f.product,f.state,f.previous,f.member,'fresh-photo').embeddingTextHash,null);
   display.title='Different public product';display.punnyTitle=null;f.product.public_display_json=JSON.stringify(display);
   assert.throws(()=>preservedPhotoVector(f.product,f.state,f.previous,f.member,'fresh-photo'),/vector_original_unproven/);
+});
+test('renewed photos retain only the exact receipted original, otherwise use ordinary delivery',async t=>{
+  const f=fixture(),sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
+  const db={prepare:s=>({bind:(...args)=>({all:async()=>({results:sql.prepare(s).all(...args)})})})};
+  sql.exec('CREATE TABLE catalog_vector_deliveries(delivery_id TEXT PRIMARY KEY,owner_json,request_json,status,disposition);CREATE TABLE products(id,public_id,source_facts_hash,embedding_text_hash);CREATE TABLE catalog_maintenance_products(product_id,embedding_native_base64,embedding_provenance_json);CREATE TABLE vector_sync_outbox(public_id,source_revision)');
+  const digest=x=>sha256(canonicalJson(x)),owner={environment:'production',indexName:'catalog',generation:2,epoch:7,token:'test',phase:'freezing',ownerReference:'original',operationKey:'f'.repeat(64),capturedAt:'2026-11-01T00:00:00.000Z'};
+  const plan={products:[f.member]},planHash=digest(plan),request={kind:'approved-cohort-plan',plan,revisionSha256:'a'.repeat(64),providerIdentity:'test'};
+  const insert=sql.prepare('INSERT INTO catalog_vector_deliveries VALUES(?,?,?,?,?)');
+  insert.run('previous',canonicalJson(owner),canonicalJson(request),'complete','verified');
+  const binding={source:{deliveryId:'previous',deliverySha256:digest(sql.prepare('SELECT * FROM catalog_vector_deliveries').get())},planSha256:planHash,revisionSha256:request.revisionSha256,ids:[publicId]};
+  const delivery=digest({environment:owner.environment,indexName:owner.indexName,generation:owner.generation,operationKey:owner.operationKey,identity:{kind:'prune',planHash,publicId}});
+  const state={...f.state,product_id:id},proof=JSON.parse(state.embedding_provenance_json);
+  const vector={id:publicId,nativeBase64:state.embedding_native_base64,metadata:{eligible:true,sourceFactsHash:f.member.sourceFactsHash,vectorBytesSha256:proof.vectorBytesSha256}};
+  insert.run(delivery,canonicalJson(owner),canonicalJson({kind:'prune',providerIdentity:'test',planSha256:planHash,vector}),'complete','verified');
+  sql.prepare('INSERT INTO products VALUES(?,?,?,?)').run(id,publicId,f.member.sourceFactsHash,null);
+  sql.prepare('INSERT INTO catalog_maintenance_products VALUES(?,?,?)').run(id,state.embedding_native_base64,state.embedding_provenance_json);
+  const check=()=>unchangedPhotoNativeIds(db,[binding],new Set([publicId]),{products:[f.previous]},new Map([[publicId,f.product]]),[state],'next');
+  assert.deepEqual([...await check()],[publicId]);
+  const previousDisplay=f.product.public_display_json;
+  for(const noDisplay of [null,'null']){f.product.public_display_json=noDisplay;assert.equal((await check()).size,0);}
+  f.product.public_display_json=previousDisplay;
+  sql.prepare('INSERT INTO vector_sync_outbox VALUES(?,?)').run(publicId,'next');assert.equal((await check()).size,0);
+  sql.exec('DELETE FROM vector_sync_outbox');sql.prepare("UPDATE catalog_vector_deliveries SET status='pending' WHERE delivery_id=?").run(delivery);assert.equal((await check()).size,0);
+  sql.prepare("UPDATE catalog_vector_deliveries SET status='complete' WHERE delivery_id=?").run(delivery);
+  sql.exec("UPDATE catalog_maintenance_products SET embedding_native_base64='different'");assert.equal((await check()).size,0);
+  binding.source.deliverySha256='f'.repeat(64);await assert.rejects(check,/vector_history_changed/);
 });

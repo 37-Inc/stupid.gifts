@@ -189,6 +189,11 @@ Otherwise start/review/publish with the same label and omit `--photos-only` on
 later commands; saved config pins it. Reuse unchanged copy/native bytes; no
 discovery, homepage/model or article generation. Failed observations never hide
 a listing or renew its deadline.
+New photo-only runs keep the original accepted native search record when the
+public search fields, saved vector bytes and source metadata still match and no
+new vector event exists. A new photo deadline alone is not new search input.
+Changed or unproven inputs follow ordinary delivery; existing saved runs keep
+their original policy. Explicit native audits still read the provider.
 
 Owner-picked admissions use `prepare --run <label> --admit-asins ASIN1,ASIN2`,
 then the same saved run. No unrelated fetch/search or automatic campaign joining;
