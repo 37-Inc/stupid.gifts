@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { CatalogD1, D1Statement } from '../../lib/catalog/storage/d1.ts';
 import type { ProductRights } from '../../lib/catalog/types.ts';
-import { mutationAssertion, mutationAdvance, readMutationOwner } from '../../lib/catalog/mutation-fence.ts';
+import { mutationAssertion, mutationAdvance, mutationFenceQuery, readMutationOwner } from '../../lib/catalog/mutation-fence.ts';
 import type { MutationOwner } from '../../lib/catalog/mutation-fence.ts';
 import { canonicalJson, canonicalTimestamp, EMBEDDING_MODEL, sha256 } from './migration.ts';
 import { decodePgvectorSendBase64, encodePgvectorSendBase64 } from './pgvector-binary.ts';
@@ -116,8 +116,6 @@ function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
   const all = async <T = Row>(sql: string, params: unknown[] = []) => (await prepare(sql, params).all<T>()).results;
   const checkOwner = async () => {
     if (!owner) return; // The preparation capability exposes reads only.
-    const current = await readMutationOwner(db, owner);
-    if (!sameOwner(current, owner) || current!.epoch !== owner.epoch) throw new Error('maintenance_fenced');
     try { await mutationAssertion(db,owner).all(); } catch { throw new Error('maintenance_fenced'); }
   };
   const decode = (row: Row): Loaded => {
@@ -244,10 +242,12 @@ function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
       ...(options.preservePermanentListings?{listingPolicy:'permanent-base-v1'}:{}) });
     const operationId = sha256(`${runId}:${inputHash}`);
     const replay = await currentReceipt(operationId, inputHash); if (replay) return replay.result as T;
-    await checkOwner();
     // Capture once AFTER the replay lookup; lost committed responses never create
     // a new write time or a new generated identity on retry.
-    const now = String((await all<{ now: string }>(`SELECT ${NOW} now`))[0].now);
+    const fence=mutationFenceQuery(owner);
+    const [clock]=await all<{now:string}>(`SELECT ${NOW} now WHERE ${fence.sql}`,fence.params);
+    if(!clock)throw new Error('maintenance_fenced');
+    const now=clock.now;
     explicitMaintenanceTime(now);
     const statements: D1Statement[] = [mutationAssertion(db, owner)]; const changes: Row[] = [];
     const result = await build(args, intent, now, statements, operationId, changes);
