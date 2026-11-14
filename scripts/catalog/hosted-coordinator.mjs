@@ -487,6 +487,10 @@ async function main(){
     const repository=await defaults(runtime,process.env).checkout(source);
     console.log(JSON.stringify(await previewHostedHomepage(runtime,{repository,source,day:capturedDay})));return;
   }
+  if(mode==='prepare-admin'){
+    const {prepareAdminAdmissions}=await import('./admin-admissions.mjs');
+    console.log(JSON.stringify(await prepareAdminAdmissions(runtime,{source,checkout:defaults(runtime,process.env).checkout})));return;
+  }
   if(mode==='admin'){
     if(canaryId||admissionList||savedRun)fail('invocation');
     const {runAdminAdmissions}=await import('./admin-admissions.mjs');
@@ -497,7 +501,7 @@ async function main(){
   console.log(JSON.stringify(result));if(result.state==='attention'){console.error('::warning::Catalog run remains pending; resume its existing identity.');process.exitCode=1;}
   // Explicit staff admissions only, after normal care releases its owner. Empty
   // queues make no supplier/model calls. Never replace an unfinished daily run.
-  if(mode==='full'&&['accepted','skipped'].includes(result.state)){
+  if(['full','photos'].includes(mode)&&['accepted','skipped'].includes(result.state)){
     const {runAdminAdmissions}=await import('./admin-admissions.mjs');
     const admissions=await runAdminAdmissions(runtime,{source,day:capturedDay,coordinate:coordinateHostedCatalog});
     console.log(JSON.stringify({adminAdmissions:admissions}));

@@ -32,11 +32,12 @@ target readback and receipt checks remain; a lost copy acknowledgement resumes
 from the actual saved rows without copying them twice.
 
 An authenticated admission wakes the existing coordinator immediately; it does
-not wait for the daily schedule or build/deploy the application. Jobs still share
-one publication queue, so an active catalog job can delay an addition. Do not
-create another publisher or refetch saved work to bypass it. Provider preparation
-runs before database-writer acquisition; final publication retains the existing
-catalog head, receipt and original-history checks.
+not wait for the daily schedule or build/deploy the application. Its
+`prepare-admin` job runs outside `catalog-production`: it looks up explicit
+requests, prepares the exact product and saves the original expiring evidence.
+It cannot publish. Only the existing catalog writer commits the saved product,
+with a fresh identity check against the current catalog. An active publisher
+can still delay that commit, not the Amazon or copy work.
 
 `CONTENT_ADMIN_DISPATCH_ENABLED=true` uses the approved repo-only GitHub
 credential. Migration0021 must be verified before deploying that setting;
@@ -48,7 +49,8 @@ in `admin` mode, after authenticated, same-origin, idempotent admission storage.
 It cannot send caller-chosen workflow/ref/ASIN inputs. A durable dispatch claim
 prevents duplicate POSTs after retries or lost acknowledgements. Its private
 status is distinct from product publication; rejected/unknown dispatch leaves
-the original admission queued for the existing coordinator. Provider responses
+the original admission queued; check its recorded workflow before manually waking
+`admin` again. Provider responses
 and credentials are never stored in the request or dispatch record. A dispatch
 ACK is not product publication. GET the request to distinguish dispatch from
 accepted catalog application; retain a real end-to-end admission measurement.
@@ -77,17 +79,16 @@ Admissions return HTTP202, `state: awaiting_application`,
 `publication: queued_for_existing_coordinator`. Saving an admission
 does **not** call Amazon/OpenAI. The existing serialized coordinator consumes
 up to ten explicit staff requests through on-demand workflow mode `admin`; the
-completed morning run remains a recovery fallback. There is no new clock.
-Unrelated pending care finishes first. A durable claim binds the
-exact ASINs and original date across retries; late requests stay queued. Existing
+completed morning/evening run can consume already prepared requests. There is no
+new clock. A durable preparation binds each explicit ASIN and request; retries
+reuse private receipts, never a new observation time. Existing
 identities (including held records) settle without refetching. Accepted runs
 report `catalog_identity_recorded` or `not_admitted`, not a promise that every
 requested gift is publicly listed. Request GET exposes that saved result.
 An empty `admin` wake does nothing. A request for an already published gift
-settles without touching unrelated care. For new gifts, the wake finishes any
-saved publisher, rereads the queue, then processes the remaining requests. The resume-only call
-cannot create a new daily batch when no pending identity exists. A failed saved
-publication remains pending and the new admission is left untouched.
+settles without touching unrelated care. A new gift waits for the existing
+publisher to clear. An expired preparation is not refreshed implicitly; review
+the request and make a fresh staff request if the product is still wanted.
 
 Factual copy, editorial visibility, collection ordering, active-show selection
 and restore use the shared
@@ -114,7 +115,7 @@ live-verified for `.32`; the first real queued-admission proof is tracked in `.3
 2. The response includes its fixed-workflow dispatch status and acknowledged run
    ID when available. It starts on demand. Unknown/rejected dispatch keeps the
    request; inspect the existing run before any manual continuation. Pending care
-   resumes under its original identity first, never a replacement batch.
+   retains its original identity and is never resumed by a new staff request.
 3. The same normal admission pipeline fetches only the claimed ASINs, deduplicates
    against all identities, reviews factual short copy and saves embeddings once.
    It does not run discovery, refresh the rest of the catalog, or build/deploy the

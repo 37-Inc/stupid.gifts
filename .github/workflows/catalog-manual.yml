@@ -36,10 +36,42 @@ permissions:
   contents: read
 
 jobs:
+  prepare-admin:
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'admin'
+    concurrency:
+      group: catalog-staff-preparation
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    environment: Production
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.23.1'
+      - run: env -i HOME=/home/runner PATH="$PATH" CI=true npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare exact staff requests without a catalog writer
+        env:
+          STUPID_GIFTS_OPERATOR_MODE: hosted
+          STUPID_GIFTS_CLOUDFLARE_API_TOKEN: ${{ secrets.STUPID_GIFTS_CLOUDFLARE_API_TOKEN }}
+          STUPID_GIFTS_AMAZON_CREDENTIAL_ID: ${{ secrets.STUPID_GIFTS_AMAZON_CREDENTIAL_ID }}
+          STUPID_GIFTS_AMAZON_CREDENTIAL_SECRET: ${{ secrets.STUPID_GIFTS_AMAZON_CREDENTIAL_SECRET }}
+          STUPID_GIFTS_OPENAI_API_KEY: ${{ secrets.STUPID_GIFTS_OPENAI_API_KEY }}
+          STUPID_GIFTS_R2_ACCESS_KEY_ID: ${{ secrets.STUPID_GIFTS_R2_ACCESS_KEY_ID }}
+          STUPID_GIFTS_R2_SECRET_ACCESS_KEY: ${{ secrets.STUPID_GIFTS_R2_SECRET_ACCESS_KEY }}
+        run: node --import tsx scripts/catalog/hosted-coordinator.mjs prepare-admin
   catalog:
-    if: github.ref == 'refs/heads/main'
+    needs: prepare-admin
+    if: >-
+      !cancelled() && github.ref == 'refs/heads/main' &&
+      (needs.prepare-admin.result == 'success' || (inputs.mode != 'admin' && needs.prepare-admin.result == 'skipped'))
     concurrency:
       group: catalog-production
+      queue: max
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     environment: Production
