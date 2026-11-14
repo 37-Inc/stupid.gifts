@@ -228,10 +228,13 @@ function defaults(runtime,environment){
       const local=await Promise.all(['manifest.json','head.json'].map(name=>optional(()=>lstat(path.join(runtime.workspace,'runs',config.runId,name)))));
       if(remote.every(v=>v===null)&&local.every(v=>v===null))return{prepared:true,started:false,config,configSha256:operator.configSha256};
       if(remote.some(v=>v===null))fail('workspace_uncertain');
-      const {openRunWorkspace}=await import('./run-workspace.ts');
-      const workspace=await openRunWorkspace({directory:runtime.workspace,repository:directory,mode:'resume',runId:config.runId,
+      const {openRunWorkspace,readApprovedPublicationRoute}=await import('./run-workspace.ts');
+      const options={directory:runtime.workspace,repository:directory,mode:'resume',runId:config.runId,
         codeSha:record.source,configSha256:operator.configSha256,scope:CATALOG_SCOPE,retention:config.retention,
-        budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe',durable:runtime.durable});
+        budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe',durable:runtime.durable};
+      const route=config.publication.runtimeCatalog&&await readApprovedPublicationRoute(options,...remote);
+      if(route)return{prepared:true,started:true,config,configSha256:operator.configSha256,...route};
+      const workspace=await openRunWorkspace(options);
       try{const checkpoint=await workspace.readCheckpoint({controlOnly:true});return{prepared:true,started:true,config,
         phase:checkpoint?.checkpoint.phase??'created',owner:checkpoint?.checkpoint.owner??null,configSha256:operator.configSha256,
         approvalPin:checkpoint?.checkpoint.pins.approval?.sha256,publication:checkpoint?.checkpoint.control?.publication,runtimeCatalog:checkpoint?.checkpoint.control?.runtimeCatalog};}

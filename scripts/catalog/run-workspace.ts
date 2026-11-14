@@ -882,6 +882,29 @@ function journalHead(value:unknown):JournalHead {
     ||(v.sequence===0?v.sha256!==null:!hash(v.sha256)))fail('durable_head');return v;
 }
 const eventName=(sequence:number,digest:string)=>`${String(sequence).padStart(6,'0')}.${digest}.json`;
+/** Routing hint ONLY. An approved in-flight runtime publication can go straight
+ * to the normal driver, which independently replays the entire journal before
+ * doing anything. Never infer supplier work, completion or acceptance here. */
+export async function readApprovedPublicationRoute(input:RunWorkspaceOptions,manifest:DurableObject,head:DurableObject){
+  const m=remoteJson(manifest) as WorkspaceManifest;manifestInfo(m,input);
+  let {sequence,sha256:digest}=journalHead(remoteJson(head));
+  for(let i=0;input.durable&&sequence>0&&i<8;i++,sequence--){
+    const obj=await input.durable.get(`runs/${input.runId}/events/${eventName(sequence,digest!)}`);
+    if(!obj)throw Error('run_workspace_durable_missing');
+    const record=remoteJson(obj) as RecordFile;
+    if(!exact(record,['schemaVersion','sequence','parent','event'])||record.schemaVersion!==1||record.sequence!==sequence
+      ||sha256(canonicalJson(record))!==digest||(sequence===1?record.parent!==null:!hash(record.parent)))fail('journal_chain');
+    const e=record.event;
+    if(e.type==='reserve'||e.type==='settle'){digest=record.parent;continue;}
+    if(e.type!=='publication-checkpoint')break;
+    const cp=e.checkpoint;
+    if(sha256(canonicalJson(cp))!==e.sha256)fail('checkpoint_cas');
+    checkpoint(cp);validatePublicationCheckpointState(cp.state);bindCheckpoint(cp,m);
+    if(!cp.pins.approval||!cp.owner||!['freezing','draining','publishing'].includes(cp.phase))break;
+    return{phase:cp.phase,owner:cp.owner,approvalPin:cp.pins.approval.sha256};
+  }
+  return null;
+}
 /** Join every started transfer, including on failure. Never leave late writes
  * running after the caller releases its original workspace/owner. */
 async function transferAll<T>(items:T[],action:(item:T)=>Promise<void>){

@@ -4,7 +4,7 @@ import {mkdtemp,chmod,rm,realpath,readFile,readdir,lstat,mkdir,writeFile} from '
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {openRunWorkspace,readRunWorkspace} from '../scripts/catalog/run-workspace.ts';
+import {openRunWorkspace,readRunWorkspace,readApprovedPublicationRoute} from '../scripts/catalog/run-workspace.ts';
 import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
 import {inventoryPublicationPackage} from '../scripts/catalog/publish-release.ts';
 
@@ -48,6 +48,23 @@ async function fixture(t){
   t.after(async()=>{for(const w of handles.reverse())try{await w.close();}catch{}await rm(parent,{recursive:true,force:true});});
   return{...m,input,parent,open,setNow:value=>{now=value;}};
 }
+
+test('route to the reviewed driver without restoring bodies; never shortcut terminal or uncertain control',async t=>{
+  const f=await fixture(t),w=await f.open({publicationControls:true}),prefix='runs/test-run/';
+  const peek=()=>readApprovedPublicationRoute(f.input,f.objects.get(prefix+'manifest.json'),f.objects.get(prefix+'head.json'));
+  const approval=await w.putArtifact({approved:'original'},{kind:'phase',observedAt:NOW});
+  const value={...cp(),phase:'freezing',state:{vectorOffset:0},pins:{approval}};
+  const saved=await w.writeCheckpoint(null,value);await w.reserveBudget(reservation);f.calls.length=0;
+  assert.deepEqual(await peek(),{phase:'freezing',owner:value.owner,approvalPin:approval.sha256});
+  assert.equal(f.calls.length,2);assert(f.calls.every(([method,key])=>method==='get'&&key.startsWith(prefix+'events/')));
+  const key=f.calls[0][1],original=f.objects.get(key);
+  const corrupt=JSON.parse(Buffer.from(original.bytes));corrupt.parent='0'.repeat(64);
+  f.objects.set(key,{...original,bytes:encode(corrupt)});await assert.rejects(peek(),/journal_chain/);f.objects.set(key,original);
+  for(let i=0;i<8;i++)await w.reserveBudget({...reservation,id:'extra-'+i});
+  f.calls.length=0;assert.equal(await peek(),null);assert.equal(f.calls.length,8);
+  await w.writeCheckpoint(saved.sha256,{...value,phase:'finalized',owner:null});
+  assert.equal(await peek(),null);
+});
 
 test('journal ACK precedes dispatch; fresh runner restores original bodies, owner and unknown reservation without locks',async t=>{
   const f=await fixture(t),w=await f.open();
