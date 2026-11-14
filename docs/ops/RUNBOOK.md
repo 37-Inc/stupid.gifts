@@ -93,6 +93,12 @@ yet a measured production-duration claim. Use the next normal due-work run;
 do not fetch an extra batch just to benchmark. Beads: `roadmap-lbbz1.36` and
 the existing unattended observation task `roadmap-lbbz1.16.1`.
 
+On a saved runtime publication, the coordinator may read the last few
+hash-linked control events to choose the approved publish/recover command.
+This read cannot fetch products, acquire a writer, or establish acceptance.
+Unclear or terminal state uses the full journal; the publisher itself always
+verifies the original workspace, approval and owner before continuing.
+
 November 6 baseline: 3,390 identities, 3,347 public gifts, 43 holds, 37 optional
 articles and roughly 7,008 static files. These are observations, not growth caps.
 Full migration/17k-file cleanup are complete. Earlier recoveries, grants and
