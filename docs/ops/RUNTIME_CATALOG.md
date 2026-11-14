@@ -84,10 +84,10 @@ unattended-cycle acceptance.
 
 ## Admin boundary
 
-See [CONTENT_ADMIN.md](CONTENT_ADMIN.md). Staff authentication stays default-off
-until the specific path-scoped Access application/audience/email allowlist is
-approved and verified. Collection writes then apply immediately. Exact-ASIN,
-copy and visibility requests remain explicit drafts pending the existing sole
-coordinator consumer; saving one must not be reported as an admission/re-index.
-Private campaign actions also remain separate unfinished admin work. No campaign
-is joined automatically.
+See [CONTENT_ADMIN.md](CONTENT_ADMIN.md). The verified path-only staff Access
+policy protects writes. Collection, copy and visibility revisions apply at
+runtime without a build. Exact-ASIN requests wake the existing coordinator on
+demand, sharing preparation and publication with daily care. An active catalog
+job can still queue an addition; HTTP202 or dispatch acknowledgement is not
+publication. The private campaign feed reports manual actions and freshness;
+no campaign is joined automatically.

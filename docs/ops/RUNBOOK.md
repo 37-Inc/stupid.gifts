@@ -39,6 +39,11 @@ for shadow, canary, explicit activation and single-writer recovery, and
   owner and inventory digest match. Any source write forces another scan; an
   absent migration keeps the original full-scan behavior. Accounting remains
   durable and unchanged; fewer requests mean fewer accounting round trips.
+- Predecessor reconstruction and inventory checks share the same process-local
+  source capture while that change counter and owner still match. Any change to
+  products, private product state or operation history invalidates it. Missing
+  migration or a changed owner falls back to full reads; no catalog or proof is
+  cached across runs. This removes repeated downloads of identical source rows.
 - The separate `stupid-gifts-catalog-clock` Worker is the enabled clock. Its only
   secret can dispatch Actions on `37-Inc/stupid.gifts` (plus
   GitHub's mandatory Metadata read); it has no catalog/provider/storage binding
@@ -183,7 +188,8 @@ Owner-picked admissions use `prepare --run <label> --admit-asins ASIN1,ASIN2`,
 then the same saved run. No unrelated fetch/search or automatic campaign joining;
 this does not change scheduled cadence.
 For staff requests, POST the exact ASINs through the [content admin API](CONTENT_ADMIN.md),
-then use the existing workflow's `admin` mode or next completed morning run.
+which wakes the existing workflow's `admin` mode immediately. A completed morning
+run also consumes saved requests if an on-demand dispatch was unavailable.
 Direct operator `admit` with `admit_asins` uses that same exact-ASIN admission
 pipeline. Both wait for unrelated pending publication to accept. Neither runs
 discovery, refreshes unrelated gifts, rebuilds the application, or permits a

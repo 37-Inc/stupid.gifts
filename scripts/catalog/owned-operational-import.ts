@@ -202,6 +202,22 @@ export function normalizeOwnedImportSequences(plan:OwnedOperationalImportPlan,pl
   return{input:normalized,proof};
 }
 
+/** Source triggers invalidate both row captures and inventory proofs. Missing
+ * migration retains ordinary reads; no cache survives this process. */
+export async function readOwnedSourceVersion(db:CatalogD1,owner:MutationOwner,signal?:AbortSignal){
+  const schema=await db.prepare(`SELECT count(*) n FROM sqlite_master WHERE (name='catalog_source_version' AND type='table')
+    OR (type='trigger' AND name IN('catalog_source_products_insert','catalog_source_products_update','catalog_source_products_delete',
+      'catalog_source_private_insert','catalog_source_private_update','catalog_source_private_delete',
+      'catalog_source_operations_insert','catalog_source_operations_update','catalog_source_operations_delete'))`).all<{n:number}>({signal});
+  if(schema.results[0]?.n!==10)return null;
+  const fence=pendingVectorReadFence(owner);
+  const row=(await db.prepare(`SELECT version,json(CASE WHEN ${fence.sql} THEN 'true' ELSE 'mutation_fenced' END) owned
+    FROM catalog_source_version WHERE singleton=1`).bind(...fence.params).all<{version:number}>({signal})).results;
+  if(row.length!==1||!Number.isSafeInteger(row[0].version)||row[0].version<0)refuse('source_version');
+  return row[0].version;
+}
+const sourceCaptures=new WeakMap<CatalogD1,{key:string;version:number;rows:Record<string,Row[]>}>();
+const SOURCE_TABLES=['catalog_maintenance_operations','catalog_maintenance_products','products'];
 /** Exact logical read bounded by SQLite's own serialized row sizes. Caller owns
  * the barrier; before/after assertions cannot replace gating every writer. */
 export async function readOwnedLogicalRows(db:CatalogD1,owner:MutationOwner,options:{phase?:'freezing'|'activating';signal?:AbortSignal;
@@ -213,6 +229,14 @@ export async function readOwnedLogicalRows(db:CatalogD1,owner:MutationOwner,opti
   const tables=options.tables??D1_RECOVERY_TABLES;
   if(!tables.length||new Set(tables).size!==tables.length||tables.some(t=>!D1_RECOVERY_TABLES.includes(t)))refuse('schema');
   options.signal?.throwIfAborted();await assert().all({signal:options.signal});
+  const cacheable=['freezing','activating'].includes(phase)&&[...tables].sort().join(',')===SOURCE_TABLES.join(','),
+    version=cacheable?await readOwnedSourceVersion(db,owner,options.signal):null,
+    cacheKey=canonicalJson({...owner,epoch:0,phase:'source-capture'}),cached=sourceCaptures.get(db);
+  if(version!==null&&cached?.key===cacheKey&&cached.version===version){
+    await assert().all({signal:options.signal});
+    if(await readOwnedSourceVersion(db,owner,options.signal)!==version)refuse('source_changed');
+    return structuredClone(cached.rows);
+  }
   const schemas=await db.batch(tables.map(t=>db.prepare(options.signal?`SELECT name FROM pragma_table_info('${t}')`:`PRAGMA table_info(${t})`)),{signal:options.signal}) as Array<{results:Array<{name:string}>}>;
   if(!Array.isArray(schemas)||schemas.length!==tables.length)refuse('schema');
   const result:Record<string,Row[]>={};
@@ -236,7 +260,12 @@ export async function readOwnedLogicalRows(db:CatalogD1,owner:MutationOwner,opti
     }
     result[table]=rows;
   }
-  await assert().all({signal:options.signal});return result;
+  await assert().all({signal:options.signal});
+  if(version!==null){
+    if(await readOwnedSourceVersion(db,owner,options.signal)!==version)refuse('source_changed');
+    sourceCaptures.set(db,{key:cacheKey,version,rows:structuredClone(result)});
+  }
+  return result;
 }
 
 async function inspect(db:CatalogD1,plan:OwnedOperationalImportPlan,planSha256:string,cursor:MutationOwner){

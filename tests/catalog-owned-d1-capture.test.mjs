@@ -10,7 +10,7 @@ import {reserveSemanticSearch} from '../workers/site/semantic-budget.ts';
 import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
 import {encodePgvectorSendBase64} from '../scripts/catalog/pgvector-binary.ts';
 import {createCatalogD1Rest} from '../scripts/catalog/d1-write-rest.ts';
-import {applyOwnedOperationalImport,prepareOwnedOperationalImport} from '../scripts/catalog/owned-operational-import.ts';
+import {applyOwnedOperationalImport,prepareOwnedOperationalImport,readOwnedLogicalRows} from '../scripts/catalog/owned-operational-import.ts';
 
 const originalFetch=globalThis.fetch;
 globalThis.fetch=async()=>{throw new Error('Network forbidden in capture tests');};test.after(()=>{globalThis.fetch=originalFetch;});
@@ -26,10 +26,10 @@ async function fixture(t,{products=2,longRows=false}={}){
   for(const name of(await readdir(new URL('../migrations/d1/',import.meta.url))).filter(n=>/^\d{4}.*\.sql$/.test(n)&&n<'0017').sort())
     sql.exec(await readFile(new URL(`../migrations/d1/${name}`,import.meta.url),'utf8'));
   sql.function('strftime',(format,instant)=>{assert.equal(format,'%Y-%m-%dT%H:%M:%fZ');assert.equal(instant,'now');return AT;});
-  let before;const metrics={http:0,sql:0,maxRows:0};
+  let before;const metrics={http:0,sql:0,maxRows:0,scanPages:0};
   const db={prepare(query){let params=[];return{bind(...v){params=v;assert.ok(v.length<=100);return this;},
     async all(){await before?.(query);metrics.http++;metrics.sql++;const results=sql.prepare(query).all(...params).map(r=>({...r}));
-      if(query.startsWith('WITH bounded')){assert.ok(results.length<=40);metrics.maxRows=Math.max(metrics.maxRows,results.length);}
+      if(query.startsWith('WITH bounded')){metrics.scanPages++;assert.ok(results.length<=40);metrics.maxRows=Math.max(metrics.maxRows,results.length);}
       return{results};},async run(){await before?.(query);metrics.http++;metrics.sql++;const result=sql.prepare(query).run(...params);return{success:true,meta:{changes:result.changes}};},
     execute(){return{results:sql.prepare(query).all(...params).map(r=>({...r}))};}};},
     async batch(statements){await before?.('BATCH');metrics.http++;metrics.sql+=statements.length;assert.ok(statements.length<=50);
@@ -50,6 +50,36 @@ async function fixture(t,{products=2,longRows=false}={}){
   const state=()=>Object.fromEntries(D1_RECOVERY_TABLES.map(table=>[table,sql.prepare(`SELECT * FROM ${table}`).all().map(r=>({...r}))]));
   return{sql,db,owner,options,state,metrics,native,claim,setBefore(fn){before=fn;}};
 }
+
+test('source captures reuse unchanged rows, invalidate writes and never expose mutable cached objects',async t=>{
+  const f=await fixture(t,{products:83});
+  f.sql.exec(await readFile(new URL('../migrations/d1/0020_catalog_source_version.sql',import.meta.url),'utf8'));
+  await releaseMutationOwnership(f.db,f.owner);
+  const owner=await claimMutationOwnership(f.db,scope,{phase:'freezing',ownerReference:'cache-test',operationKey:'c'.repeat(64)});
+  const read=()=>readOwnedLogicalRows(f.db,owner,{phase:'freezing',tables:['products','catalog_maintenance_products','catalog_maintenance_operations']});
+  const before=f.metrics.http,first=await read(),pages=f.metrics.scanPages,cold=f.metrics.http-before;
+  assert.ok(pages>0);first.products[0].title='caller mutation';
+  const warmStart=f.metrics.http,second=await read();assert.equal(f.metrics.scanPages,pages);assert.equal(second.products[0].title,'');
+  t.diagnostic(JSON.stringify({scope:'local 83-product capture fixture',coldRequests:cold,warmRequests:f.metrics.http-warmStart,repeatedDataPages:0}));
+  f.sql.exec("UPDATE products SET title='real change' WHERE id='fixture-1'");
+  assert.equal((await read()).products[0].title,'real change');assert.ok(f.metrics.scanPages>pages);
+  const refreshed=f.metrics.scanPages;
+  f.sql.exec("UPDATE catalog_maintenance_products SET embedding_provenance_json='{}' WHERE product_id='fixture-1'");
+  await read();assert.ok(f.metrics.scanPages>refreshed);
+  // Even a cache hit observes the real owner, not an old in-memory authority.
+  await releaseMutationOwnership(f.db,owner);await assert.rejects(read(),/malformed JSON/);
+});
+
+test('missing source-version migration never caches, and changes during capture refuse the result',async t=>{
+  const f=await fixture(t);await releaseMutationOwnership(f.db,f.owner);
+  const owner=await claimMutationOwnership(f.db,scope,{phase:'freezing',ownerReference:'cache-test',operationKey:'c'.repeat(64)});
+  const read=()=>readOwnedLogicalRows(f.db,owner,{phase:'freezing',tables:['products','catalog_maintenance_products','catalog_maintenance_operations']});
+  await read();const pages=f.metrics.scanPages;await read();assert.ok(f.metrics.scanPages>pages);
+  f.sql.exec(await readFile(new URL('../migrations/d1/0020_catalog_source_version.sql',import.meta.url),'utf8'));
+  let once=false;f.setBefore(query=>{if(!once&&query.startsWith('WITH bounded')){once=true;f.sql.exec("UPDATE products SET title='racing write' WHERE id='fixture-1'");}});
+  await assert.rejects(read(),/owned_import_source_changed/);f.setBefore(null);
+  assert.equal((await read()).products[0].title,'racing write');
+});
 
 test('capture binds all24 complete tables, allocator/native bytes, actual schema and cooperative writer inventory',async t=>{
   const f=await fixture(t),before=f.state();const result=await captureOwnedD1(f.options);

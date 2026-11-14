@@ -121,6 +121,7 @@ test('optional admission dispatch stays behind staff auth, CSRF, durable save an
   f.sql.exec('CREATE TABLE content_admin_results(request_id TEXT PRIMARY KEY);');
   f.sql.exec(await readFile(new URL('../migrations/d1/0021_content_admin_dispatch.sql',import.meta.url),'utf8'));
   Object.assign(f.env,{CONTENT_ADMIN_DISPATCH_ENABLED:'true',GITHUB_CATALOG_DISPATCH_TOKEN:'TEST_ONLY_DISPATCH_TOKEN'});
+  assert.equal((await(await f.call('/status')).json()).applications.admissions,'on_demand_existing_coordinator');
   const certFetch=globalThis.fetch;let calls=0;
   globalThis.fetch=async(url,init)=>{
     if(String(url)===ISSUER+'/cdn-cgi/access/certs')return certFetch(url,init);
