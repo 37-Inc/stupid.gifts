@@ -140,7 +140,7 @@ test('failed application durably records sanitized transaction context before re
     statementCount:53,requestBytes:192780,requestSha256:'a'.repeat(64)},error=Object.assign(Error('catalog_d1_batch_invalid'),{catalogDiagnostic:diagnostic});
   const prepared={mutations:[{method:'markConfirmedMissingUnavailable',args:[[product.id,'PRIVATE invalid value']],intent:{}}],items:[]};
   await assert.rejects(applyReviewedPhase({key:'phase-11',journal,prepared,store:{async markConfirmedMissingUnavailable(){throw error;}},
-    telemetryStore:{},runId:'fixture',withIntent:(_i,action)=>action(),checkpoint:()=>{throw Error('must not checkpoint failure as success');}}),e=>e===error);
+    telemetryStore:{},runId:'fixture',withIntent:(_i,action)=>action()}),e=>e===error);
   const key=Object.keys(saved.head.entries).find(k=>k.startsWith('failure-'));
   assert.ok(key);const failure=await journal.read(key);
   assert.equal(failure.diagnostic.statementCount,53);assert.equal(failure.diagnostic.phase,'phase-11');
@@ -187,13 +187,13 @@ test('preparation persists exact calls/native bytes/final-copy appeal before any
   assert.equal(Object.is(decodePgvectorSendBase64(prepared.mutations[0].nativeBase64)[0], -0), true);
   assert.equal(prepared.merchandising[product.id].sourceDescription, product.wittyDescription); assert.equal(prepared.merchandising[product.id].appeal, 'standout');
   await prepare(); assert.equal(executions, 1);
-  const apply = () => applyReviewedPhase({ key: 'phase-0', journal, prepared, store, telemetryStore: telemetry, runId, checkpoint: async () => {},
+  const apply = () => applyReviewedPhase({ key: 'phase-0', journal, prepared, store, telemetryStore: telemetry, runId,
     withIntent: async (intent, action) => { currentIntent = intent; return action(); } });
   const checkpointOwner = { ...cursor.current };
   await assert.rejects(applyReviewedPhase({ key: 'phase-0', journal, prepared, store, telemetryStore: telemetry, runId,
-    checkpoint: async () => { throw Error('test_only_runner_terminated_after_commit'); },
-    withIntent: async (intent, action) => { currentIntent = intent; return action(); } }), /runner_terminated/);
+    withIntent: async (intent, action) => { currentIntent = intent; await action(); throw Error('test_only_runner_terminated_after_commit'); } }), /runner_terminated/);
   const actual = await readMutationOwner(f.db, f.scope);
+  assert.equal(actual.epoch,checkpointOwner.epoch+1,'interruption occurred after commit, before a new checkpoint');
   await reconcileReviewedPhaseOwner({ db: f.db, owner: checkpointOwner, actual, journal, runId, catalogRevision: revision });
   const originalVersion = f.sqlite.prepare('SELECT version FROM catalog_maintenance_products WHERE product_id=?').get(product.id).version;
   await apply(); assert.equal(f.sqlite.prepare('SELECT version FROM catalog_maintenance_products WHERE product_id=?').get(product.id).version, originalVersion);
