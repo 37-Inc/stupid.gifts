@@ -9,6 +9,7 @@ async function fixture(t){
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
   sql.exec(await readFile(new URL('../migrations/d1/0018_content_admin_requests.sql',import.meta.url),'utf8'));
   sql.exec("CREATE TABLE products(id TEXT PRIMARY KEY,public_id TEXT);CREATE TABLE content_admin_results(request_id TEXT PRIMARY KEY,state TEXT,result_json TEXT,created_at TEXT);");
+  sql.exec("CREATE TABLE catalog_runtime_head(singleton INTEGER PRIMARY KEY,release_id TEXT,enabled INTEGER);CREATE TABLE catalog_runtime_publications(release_id TEXT PRIMARY KEY,catalog_revision TEXT);CREATE TABLE catalog_public_products(catalog_revision TEXT,product_id TEXT,public_id TEXT);");
   const db={prepare(query){let params=[];return{bind(...p){params=p;return this;},async all(){return{results:sql.prepare(query).all(...params)};},async run(){return sql.prepare(query).run(...params);}};},
     async batch(statements){sql.exec('BEGIN');try{for(const s of statements)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const pending={value:null},runtime={durable:{async get(){return{bytes:Buffer.from(JSON.stringify({pending:pending.value}))};}}};
@@ -18,11 +19,24 @@ async function fixture(t){
 }
 test('admin queue is inert when empty and preserves unfinished existing publication',async t=>{
   const f=await fixture(t),options={...f,source:'a'.repeat(40),day:'2026-11-11',coordinate:()=>{throw Error('must not run');}};
+  f.pending.value={path:'original-pending'};
   assert.equal((await consumeAdminAdmissions(options)).state,'empty');
-  await f.request('B000000001','admin-admission-one');f.pending.value={path:'original-pending'};
+  await f.request('B000000001','admin-admission-one');
   assert.equal((await consumeAdminAdmissions({...options,coordinate:async input=>{
     assert.equal(input.resumeOnly,true);assert.equal(input.mode,'full');return{state:'attention',runKey:'original-pending'};
   }})).state,'pending');assert.equal(f.sql.prepare('SELECT count(*) n FROM content_admin_results').get().n,0);
+});
+test('accepted public identity settles during unrelated care, staged identity waits without refetch',async t=>{
+  const f=await fixture(t),options={...f,source:'a'.repeat(40),day:'2026-11-11',coordinate:()=>{throw Error('must not run');}};
+  f.pending.value={path:'unrelated-photos'};
+  f.sql.exec("INSERT INTO catalog_runtime_head VALUES(1,'release',1);INSERT INTO catalog_runtime_publications VALUES('release','current');INSERT INTO products VALUES('B000000001','one'),('B000000002','two');INSERT INTO catalog_public_products VALUES('current','B000000001','one'),('staged','B000000002','two')");
+  await f.request('B000000001','admin-admission-published');
+  assert.equal((await consumeAdminAdmissions(options)).state,'settled');
+  await f.request('B000000002','admin-admission-staged');let calls=0;
+  const result=await consumeAdminAdmissions({...options,coordinate:async input=>{
+    calls++;assert.equal(input.resumeOnly,true);f.pending.value=null;return{state:'accepted'};
+  }});
+  assert.equal(calls,1);assert.equal(result.state,'settled');
 });
 test('on-demand admission finishes the saved publisher then adds only its exact products in the same wake',async t=>{
   const f=await fixture(t);await f.request('B000000001','admin-admission-one');f.pending.value={path:'original-pending'};

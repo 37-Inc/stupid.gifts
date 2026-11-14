@@ -10,14 +10,23 @@ export async function consumeAdminAdmissions({db,runtime,source,day,coordinate,n
   const running=(await db.prepare("SELECT request_id,result_json FROM content_admin_results WHERE state='running' AND json_extract(result_json,'$.kind')='admin-admission' ORDER BY created_at LIMIT 1").all()).results[0];
   let claim=running?JSON.parse(running.result_json):null;
   if(!claim){
-    const pending=await runtime.durable.get('pointers/pending-run.json');
+    const query=db.prepare(`SELECT r.request_id,r.payload_json,p.public_id,
+      EXISTS(SELECT 1 FROM catalog_runtime_head h JOIN catalog_runtime_publications v ON v.release_id=h.release_id
+        JOIN catalog_public_products c ON c.catalog_revision=v.catalog_revision AND c.product_id=p.id AND c.public_id=p.public_id
+        WHERE h.singleton=1 AND h.enabled=1) AS already_public
+      FROM content_admin_requests r LEFT JOIN content_admin_results a ON a.request_id=r.request_id
+      LEFT JOIN products p ON p.id=json_extract(r.payload_json,'$.asin')
+      WHERE r.action='admit' AND a.request_id IS NULL ORDER BY r.rowid LIMIT 10`);
+    let rows=(await query.all()).results;
+    if(!rows.length)return{state:'empty',admissions:0};
+    // Empty wakes and requests for already published gifts don't own or resume care.
+    // A row staged by an unfinished run is NOT an accepted product.
+    const pending=rows.some(r=>!r.already_public)&&await runtime.durable.get('pointers/pending-run.json');
     if(pending&&JSON.parse(Buffer.from(pending.bytes)).pending!==null){
       const resumed=await coordinate({mode:'full',resumeOnly:true,source,day,runtime});
       if(!['accepted','skipped','idle'].includes(resumed.state))return{state:'pending',reason:'existing_catalog_run',pending:resumed};
+      rows=(await query.all()).results;
     }
-    const rows=(await db.prepare(`SELECT r.request_id,r.payload_json,p.public_id FROM content_admin_requests r
-      LEFT JOIN content_admin_results a ON a.request_id=r.request_id LEFT JOIN products p ON p.id=json_extract(r.payload_json,'$.asin')
-      WHERE r.action='admit' AND a.request_id IS NULL ORDER BY r.rowid LIMIT 10`).all()).results;
     if(!rows.length)return{state:'empty',admissions:0};
     const newRows=rows.filter(r=>!r.public_id),createdAt=now();
     for(const row of rows.filter(r=>r.public_id))await db.prepare("INSERT INTO content_admin_results(request_id,state,result_json,created_at) VALUES(?,'applied',?,?)")

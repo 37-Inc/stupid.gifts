@@ -80,8 +80,9 @@ exact ASINs and original date across retries; late requests stay queued. Existin
 identities (including held records) settle without refetching. Accepted runs
 report `catalog_identity_recorded` or `not_admitted`, not a promise that every
 requested gift is publicly listed. Request GET exposes that saved result.
-An on-demand `admin` wake now resumes any saved publisher before claiming new
-requests, then processes those requests in the same wake. The resume-only call
+An empty `admin` wake does nothing. A request for an already published gift
+settles without touching unrelated care. For new gifts, the wake finishes any
+saved publisher, rereads the queue, then processes the remaining requests. The resume-only call
 cannot create a new daily batch when no pending identity exists. A failed saved
 publication remains pending and the new admission is left untouched.
 
