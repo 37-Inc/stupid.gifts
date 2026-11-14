@@ -56,7 +56,11 @@ for shadow, canary, explicit activation and single-writer recovery, and
 - Cloudflare wake timestamps need not land exactly on `:30:00.000`. Route by
   the intended Pacific slot hour, normalize to that hour's `:30` due identity,
   and let durable run identity handle duplicate wakes. A late wake is not a
-  new batch. Disabled/non-Pacific-slot wakes emit a bounded skip reason instead
+  new batch. When the pending pointer is clear and the slot's finalized success
+  matches the current accepted successor, its catch-up skips catalog checkout
+  and recovery. The morning staff-queue fallback still runs. A duplicate wake
+  is not a second successful cycle.
+  Disabled/non-Pacific-slot wakes emit a bounded skip reason instead
   of silently looking like successful dispatches.
 - Clock and staff dispatch share one Workers-tested transport. Use `redirect:
   manual`, not unsupported `error`, and reject redirects without following them.
