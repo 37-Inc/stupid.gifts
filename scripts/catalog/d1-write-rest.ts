@@ -34,6 +34,13 @@ type FailureDetail = { stage:'preflight'|'request'|'response';reason:string;disp
   phase?:string;method?:string;productIds?:string[] };
 /** Numeric/request-identity evidence only. Never include SQL, values, tokens or provider messages. */
 export function catalogD1FailureDetail(value:unknown):FailureDetail|undefined {
+  // Domain wrappers keep a safe public code; retain only this allowlisted
+  // diagnostic from their bounded cause chain, never raw SQL/provider errors.
+  for(let depth=0;value instanceof Error&&depth<8;depth++){
+    const error=value as Error&{catalogDiagnostic?:unknown};
+    if(error.catalogDiagnostic!==undefined){value=error.catalogDiagnostic;break;}
+    value=error.cause;
+  }
   const v=(value instanceof Error?(value as Error&{catalogDiagnostic?:unknown}).catalogDiagnostic:value) as FailureDetail;
   if(!v||!['preflight','request','response'].includes(v.stage)
     ||!['batch_statements','request_bytes','response_bytes','accounting_reservation','http_error','provider_error','invalid_response','timeout','cancelled','transport_error'].includes(v.reason)
