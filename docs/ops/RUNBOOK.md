@@ -59,7 +59,9 @@ for shadow, canary, explicit activation and single-writer recovery, and
   new batch. When the pending pointer is clear and the slot's finalized success
   matches the current accepted successor, its catch-up skips catalog checkout
   and recovery. The morning staff-queue fallback still runs. A duplicate wake
-  is not a second successful cycle.
+  is not a second successful cycle. A lost handoff against its original
+  predecessor still reconciles. An unexpected different successor is reported
+  without reclaiming the publication pointer.
   Disabled/non-Pacific-slot wakes emit a bounded skip reason instead
   of silently looking like successful dispatches.
 - Clock and staff dispatch share one Workers-tested transport. Use `redirect:
