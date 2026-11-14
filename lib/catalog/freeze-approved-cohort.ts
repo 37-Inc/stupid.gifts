@@ -216,7 +216,7 @@ async function prepare(db: CatalogD1, owner: MutationOwner, input: ApprovedCohor
   // listing, let alone dispatch a native DELETE for it. Stop before staging.
   if(removed.some(value=>persistentPublicProduct(value)&&!changed.has(value.publicId)&&!unavailable.has(value.publicId)))throw Error('cohort_unreviewed_withdrawal');
   const semantic = ready.filter(value => value.eligibleUntil !== null && Date.parse(value.eligibleUntil) > cutoff
-    &&(!predecessor||changed.has(value.publicId)));
+    &&(!predecessor||changed.has(value.publicId)&&!predecessor.preservedPhotos.has(value.publicId)));
   // A changed supplier input is not absence. Keep a still-public cleared base's
   // original native history; it must not be deleted or promoted as fresh input.
   const additionalAbsentIds = request.approval.changes.filter(value => value.publicId!==publicDuplicate?.publicId

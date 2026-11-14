@@ -724,7 +724,8 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           }
           const authority:AutomationCohortAuthority={schemaVersion:1,runId:config.runId,configSha256:options.configSha256,
             journalSha256:cp.pins.automationJournal.sha256,writerGeneration:cp.owner.generation,
-            refreshIds:config.cadence!.automation!.refreshIds,admittedIds:complete.admittedIds,products};
+            refreshIds:config.cadence!.automation!.refreshIds,admittedIds:complete.admittedIds,products,
+            ...(config.cadence!.photosOnly?{photosOnly:true as const}:{})};
           validateAutomationCohort(authority);
           const pin=await ws.putArtifact(authority,{kind:'publication',observedAt:now()});await write({pins:{...cp.pins,automationAuthority:pin}});
         }
@@ -795,7 +796,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       const automation=config.cadence?.automation?await ws.readArtifact(cp.pins.automationAuthority) as unknown as AutomationCohortAuthority:undefined;
       if(automation){
         validateAutomationCohort(automation);
-        if(automation.configSha256!==options.configSha256||automation.journalSha256!==cp.pins.automationJournal.sha256
+        if(automation.photosOnly&&!config.cadence!.photosOnly||automation.configSha256!==options.configSha256||automation.journalSha256!==cp.pins.automationJournal.sha256
           ||canonicalJson(automation.refreshIds)!==canonicalJson(config.cadence!.automation!.refreshIds))throw Error('automation_cohort_changed');
       }
       // Review is separate from running paid phases. Never synthesize an envelope

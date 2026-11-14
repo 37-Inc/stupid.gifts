@@ -16,7 +16,7 @@ import {canonicalJson,sha256} from './migration.ts';
 import {createSealedSnapshotEnvelope,readOwnedProjection,SNAPSHOT_READ_LIMITS} from './export-d1-snapshot.ts';
 import {readOwnedLogicalRows,readOwnedSourceVersion} from './owned-operational-import.ts';
 import {isCatalogD1Rest} from './d1-write-rest.ts';
-import {readNativeHistory,validateNativeHistory} from './owned-vector-delivery.ts';
+import {readNativeHistory,unchangedPhotoNativeIds,validateNativeHistory} from './owned-vector-delivery.ts';
 import type {OwnedVectorAdapters} from './owned-vector-delivery.ts';
 import {approvedBaseChangeLimit} from '../../lib/catalog/owner-base-review.ts';
 import type {OwnerBaseCatalogReview} from '../../lib/catalog/owner-base-review.ts';
@@ -193,10 +193,13 @@ export async function readCatalogPredecessor(options:{db:CatalogD1;owner:Mutatio
   await check();
   // Re-read the whole current capture, not an old source body from a workspace.
   if(!same(permanentSourceInventory(permanentSourceRows(await capture())),inventory))fail();
+  const preservedPhotos=options.automation?.photosOnly
+    ?await unchangedPhotoNativeIds(db,prior.nativeHistory,new Set(changed),snapshot,products,actual.catalog_maintenance_products,approval.catalogRevision)
+    :new Set<string>();
   // Changed members are candidates, not verified current input. The next cohort
   // removes actual replacements/absences before separately proving retained history.
   return{state:adapters?'verified' as const:'source_verified' as const,snapshotSha256:seal.snapshotSha256,preservedIds,changedIds:changed,inventory,nativeHistory,
-    priorNativeHistory:structuredClone(prior.nativeHistory),
+    priorNativeHistory:structuredClone(prior.nativeHistory),preservedPhotos,
     priorNativeIds:prior.nativeHistory.flatMap(group=>group.ids),
     ...(options.servingOnly?{snapshot,sourceRows:current}: {})};
 }

@@ -28,7 +28,8 @@ import type { ImmutableVectorPayload, SyncVector, VectorEvent } from './vector-o
 import { approvedBaseChangeLimit } from '../../lib/catalog/owner-base-review.ts';
 import type { OwnerBaseCatalogReview } from '../../lib/catalog/owner-base-review.ts';
 import {repairedSlugOriginalVector} from './new-product-slug-repair.ts';
-import {readPreservedPhotoVector} from './photo-vector-reuse.ts';
+import {preservedPhotoVector,readPreservedPhotoVector} from './photo-vector-reuse.ts';
+import {semanticPublicFields} from '../../lib/catalog/semantic-profile.ts';
 import {readResolvedPublicationTransport} from './resolved-publication-transport.ts';
 
 type Row = Record<string, unknown>;
@@ -174,6 +175,51 @@ function idFor(owner: MutationOwner, identity: unknown): string {
   mutationFenceQuery(owner, ['writing','freezing']);
   return sha256(canonicalJson({ environment: owner.environment, indexName: owner.indexName,
     generation: owner.generation, operationKey: owner.operationKey, identity }));
+}
+
+/** Reuse a previously accepted native upsert as HISTORY, not a new vector.
+ * Only photo renewals with identical public search input, bytes, and metadata
+ * qualify. Unknown/old receipt shapes take the ordinary delivery path. */
+export async function unchangedPhotoNativeIds(db:CatalogD1,history:NativeHistoryBinding[],changed:Set<string>,
+  previous:ApprovedCohortRequest['previous'],products:Map<unknown,Row>,states:Row[],revision:string){
+  const result=new Set<string>(),priorById=new Map(previous.products.map(p=>[p.publicId,p])),byId=new Map(states.map(s=>[s.product_id,s]));
+  for(const binding of history){
+    const ids=binding.ids.filter(id=>changed.has(id)&&priorById.has(id));
+    if(!ids.length)continue;
+    const saved=await journal(db,binding.source.deliveryId);
+    if(!saved||sha256(canonicalJson(saved))!==binding.source.deliverySha256)throw Error('vector_history_changed');
+    const request=JSON.parse(saved.request_json),owner=JSON.parse(saved.owner_json) as MutationOwner;
+    if(request.kind!==PLAN_KIND)continue;
+    if(sha256(canonicalJson(request.plan))!==binding.planSha256||request.revisionSha256!==binding.revisionSha256)throw Error('vector_history_changed');
+    const candidates=[];
+    for(const id of ids){
+      const row=products.get(id),prior=priorById.get(id)!,state=row&&byId.get(row.id),member=request.plan.products.find((m:{publicId:string})=>m.publicId===id);
+      if(!row||!state||!member||member.sourceFactsHash!==row.source_facts_hash||member.embeddingTextHash!==row.embedding_text_hash
+        ||!row.public_display_json)continue;
+      const display=JSON.parse(String(row.public_display_json));
+      if(canonicalJson(semanticPublicFields(prior))!==canonicalJson(semanticPublicFields(display))
+        ||canonicalJson(semanticPublicFields(prior,'canonical-short-description-v2'))!==canonicalJson(semanticPublicFields(display,'canonical-short-description-v2')))continue;
+      try{preservedPhotoVector(row,state,prior,member,revision);}
+      catch(error){if(error instanceof Error&&error.message==='vector_original_unproven')continue;throw error;}
+      candidates.push({id,delivery:idFor(owner,{kind:'prune',planHash:binding.planSha256,publicId:id})});
+    }
+    if(!candidates.length)continue;
+    const rows=(await db.prepare(`SELECT p.public_id FROM json_each(?) i
+      CROSS JOIN catalog_vector_deliveries d ON d.delivery_id=json_extract(i.value,'$.delivery')
+      CROSS JOIN products p ON p.public_id=json_extract(i.value,'$.id')
+      JOIN catalog_maintenance_products s ON s.product_id=p.id
+      WHERE d.status='complete' AND d.disposition='verified' AND json_extract(d.request_json,'$.kind')='prune'
+        AND json_extract(d.request_json,'$.planSha256')=? AND json_extract(d.request_json,'$.providerIdentity')=?
+        AND json_extract(d.request_json,'$.vector.id')=p.public_id AND json_extract(d.request_json,'$.vector.metadata.eligible')=1
+        AND json_extract(d.request_json,'$.vector.metadata.sourceFactsHash')=p.source_facts_hash
+        AND json_extract(d.request_json,'$.vector.metadata.embeddingTextHash') IS p.embedding_text_hash
+        AND json_extract(d.request_json,'$.vector.metadata.vectorBytesSha256')=json_extract(s.embedding_provenance_json,'$.vectorBytesSha256')
+        AND json_extract(d.request_json,'$.vector.nativeBase64')=s.embedding_native_base64
+        AND NOT EXISTS(SELECT 1 FROM vector_sync_outbox o WHERE o.public_id=p.public_id AND o.source_revision=?)`)
+      .bind(JSON.stringify(candidates),binding.planSha256,request.providerIdentity,revision).all<{public_id:string}>()).results;
+    for(const row of rows)result.add(row.public_id);
+  }
+  return result;
 }
 async function recoveredOwner(db: CatalogD1, input: MutationOwner, row: Journal): Promise<MutationOwner> {
   const base = JSON.parse(row.owner_json) as MutationOwner;
@@ -1188,7 +1234,7 @@ async function planJournals(db:CatalogD1,owner:MutationOwner,catalogRevision:str
  * policy evidence alone does not settle a single remaining UUID. */
 async function readPlanVectors(db:CatalogD1,owner:MutationOwner,rows:Journal[],plan:PrunedVectorPlan|ActivatedVectorPlan,
   adapters:Pick<OwnedVectorAdapters,'readback'|'readbacks'|'environment'|'indexName'|'providerIdentity'>,revision?:ApprovedCohortRevision,signal?:AbortSignal,timeout=3000,
-  historical?:{selected:string[];owner:MutationOwner}){
+  historical?:{selected:string[];owner:MutationOwner},auditHistory=false){
   const policies=rows.filter(r=>JSON.parse(r.request_json).kind===PLAN_KIND);
   if(policies.length!==1)throw new Error('vector_plan_incomplete');
   const request=validatePlan(policies[0],owner,plan,adapters.providerIdentity,revision),ids=reuseIds(request.plan);
@@ -1224,7 +1270,7 @@ async function readPlanVectors(db:CatalogD1,owner:MutationOwner,rows:Journal[],p
   // independently retain those same full-source checks outside this callback.
   if(historical&&historical.selected.some(id=>!vectors.has(id)))throw new Error('vector_plan_incomplete');
   await db.batch(checks(),{signal});await reuseReadback(adapters,historical?new Map(historical.selected.map(id=>[id,vectors.get(id)!])):vectors,timeout,signal);
-  if(!historical)await readNativeHistory({db,owner,history:request.plan.history??[],adapters,signal,acceptedOnly:Boolean(revision?.persistent)});
+  if(!historical)await readNativeHistory({db,owner,history:request.plan.history??[],adapters,signal,acceptedOnly:Boolean(revision?.persistent)&&!auditHistory});
   await db.batch(checks(),{signal});
   return{environment:owner.environment,indexName:owner.indexName,settled:true as const,planSha256:request.planSha256,
     reference:`owned-vectors:${sha256(canonicalJson(rows.map(r=>r.delivery_id).sort()))}`};
@@ -1329,7 +1375,7 @@ export function readOwnedPermanentCohortNative(db:CatalogD1,owner:MutationOwner,
     // publisher separately validates the snapshot and original deadlines.
     if(!revision.persistent||revision.snapshot.products.some(p=>!persistentPublicProduct(p)))throw new Error('vector_plan_invalid');
     adapterScope(owner,adapters);await db.batch([mutationAssertion(db,owner,['freezing'])]);
-    return readPlanVectors(db,owner,await planJournals(db,owner,revision.snapshot.catalogRevision),prunedVectorPlan(revision),adapters,revision,undefined,30000);
+    return readPlanVectors(db,owner,await planJournals(db,owner,revision.snapshot.catalogRevision),prunedVectorPlan(revision),adapters,revision,undefined,30000,undefined,true);
   });
 }
 /** Control-only readback after activation. No delivery, expiry renewal, watermark

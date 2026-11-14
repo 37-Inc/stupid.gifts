@@ -22,7 +22,7 @@ test('automation grants exact changed membership, not an arbitrary enlarged coun
 
 test('outside-pin IDs, duplicate identities, missing admissions, wrong run and malformed authority are rejected',()=>{
   const invalid=[
-    {...authority,extra:true}, {...authority,configSha256:'unknown'}, {...authority,writerGeneration:0},
+    {...authority,extra:true}, {...authority,photosOnly:true}, {...authority,photosOnly:false}, {...authority,configSha256:'unknown'}, {...authority,writerGeneration:0},
     {...authority,products:[...products.slice(1),{id:id(999),publicId:uuid(999)}]},
     {...authority,products:[...products.slice(1),products[1]]},
     {...authority,products:[{...products[0],publicId:products[1].publicId},...products.slice(1)]},
@@ -34,4 +34,8 @@ test('outside-pin IDs, duplicate identities, missing admissions, wrong run and m
     {...approval,changes:[...approval.changes.slice(1),{publicId:uuid(999)}]},
     {...approval,changes:[...approval.changes.slice(1),approval.changes[1]]}])
     assert.throws(()=>validateAutomationCohort(authority,changed),/automation_cohort_invalid/);
+});
+test('photo-only intent is optional for old pins and can only cover refreshes',()=>{
+  const photo={...authority,photosOnly:true,admittedIds:[],refreshIds:products.map(p=>p.id)};
+  assert.equal(validateAutomationCohort(photo,approval),photo);
 });
