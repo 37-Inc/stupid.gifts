@@ -39,7 +39,7 @@ export function preservedPhotoVector(product:Row,state:Row,previous:PublicCatalo
     ||state.embedding_present!==1||typeof state.embedding_native_base64!=='string')fail();
   const display=JSON.parse(String(product.public_display_json)),base=persistentPublicProduct(display),prior=persistentPublicProduct(previous!);
   if(!base||!prior||base.imageUrl!=='/images/gift-placeholder.svg'||canonicalJson(base)!==canonicalJson(prior)
-    ||typeof display.imageUrl!=='string'||!display.imageUrl.startsWith('https://')||display.eligibleUntil===null)fail();
+    ||typeof display.imageUrl!=='string'||!display.imageUrl.startsWith('https://')||display.eligibleUntil===null)return fail();
   const current=JSON.parse(String(state.semantic_json)) as SemanticProduct,proof=JSON.parse(String(state.embedding_provenance_json));
   // A refreshed supplier title is not the cleared public title. The canonical
   // recipe may bind the unchanged listing, not this incidental supplier text.
