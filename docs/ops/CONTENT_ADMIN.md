@@ -23,6 +23,9 @@ Permanent-catalog publication reuses the genuine resolved receipt for unchanged
 native-index history instead of downloading those old vectors again. Changed
 vectors still receive exact provider readback, and the full inventory/owner
 fence remains. Explicit native-history audits retain live readback by default.
+Repeated source captures reuse the existing database change counter within one
+process; product/private-state/history changes force a fresh capture. This is
+not a cross-run snapshot or permission to skip changed-product verification.
 
 An authenticated admission wakes the existing coordinator immediately; it does
 not wait for the daily schedule or build/deploy the application. Jobs still share

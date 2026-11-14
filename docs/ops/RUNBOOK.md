@@ -39,6 +39,11 @@ for shadow, canary, explicit activation and single-writer recovery, and
   owner and inventory digest match. Any source write forces another scan; an
   absent migration keeps the original full-scan behavior. Accounting remains
   durable and unchanged; fewer requests mean fewer accounting round trips.
+- Predecessor reconstruction and inventory checks share the same process-local
+  source capture while that change counter and owner still match. Any change to
+  products, private product state or operation history invalidates it. Missing
+  migration or a changed owner falls back to full reads; no catalog or proof is
+  cached across runs. This removes repeated downloads of identical source rows.
 - The separate `stupid-gifts-catalog-clock` Worker is the enabled clock. Its only
   secret can dispatch Actions on `37-Inc/stupid.gifts` (plus
   GitHub's mandatory Metadata read); it has no catalog/provider/storage binding
