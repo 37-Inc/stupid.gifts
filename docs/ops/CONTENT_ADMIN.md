@@ -26,6 +26,10 @@ fence remains. Explicit native-history audits retain live readback by default.
 Repeated source captures reuse the existing database change counter within one
 process; product/private-state/history changes force a fresh capture. This is
 not a cross-run snapshot or permission to skip changed-product verification.
+Unchanged public projection rows copy directly from the verified prior revision
+inside the database. Only differing rows use the normal insert batches. The full
+target readback and receipt checks remain; a lost copy acknowledgement resumes
+from the actual saved rows without copying them twice.
 
 An authenticated admission wakes the existing coordinator immediately; it does
 not wait for the daily schedule or build/deploy the application. Jobs still share

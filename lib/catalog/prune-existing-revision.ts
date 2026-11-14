@@ -158,7 +158,7 @@ async function prune(db: CatalogD1, owner: MutationOwner, request: PruneRequest)
 /** Shared seal transaction only. Policy stays in the subset pruner or explicit
  * approved-cohort caller; this helper never selects or approves product rows.
  */
-export async function sealCapturedRevision(db: CatalogD1, owner: MutationOwner, input: PrunedRevision) {
+export async function sealCapturedRevision(db: CatalogD1, owner: MutationOwner, input: PrunedRevision, priorProjection:Row[] = []) {
   owner = structuredClone(owner); input = structuredClone(input);
   const { request, snapshot, packet, sourceRows, sourceDigest, globalVectorWatermark, priorRow } = input;
   if (owner.phase !== 'freezing' || owner.operationKey !== input.operationKey || owner.environment !== request.scope.environment
@@ -179,8 +179,24 @@ export async function sealCapturedRevision(db: CatalogD1, owner: MutationOwner, 
   const partial = await readOwnedProjection(db,owner,revision,packet.rows.map(row=>String(row.public_id)).sort());
   const expected = new Map(packet.rows.map(row => [row.public_id, row]));
   if (partial.some(row => canonicalJson(row) !== canonicalJson(expected.get(String(row.public_id))))) throw new Error('prune_projection_changed');
-  const present = new Set(partial.map(row => row.public_id)); const missing = packet.rows.filter(row => !present.has(row.public_id));
+  const present = new Set(partial.map(row => row.public_id)); let missing = packet.rows.filter(row => !present.has(row.public_id));
   if (receipt && missing.length) throw new Error('prune_projection_changed');
+  // Reuse only byte-identical prior rows. The final complete projection readback
+  // below remains authoritative, including after a lost copy acknowledgement.
+  const prior = new Map(priorProjection.map(row=>[row.public_id,row]));
+  const copied = missing.filter(row=>{
+    const before=prior.get(row.public_id);
+    return before?.catalog_revision===request.previous.catalogRevision && Object.keys(before).length===Object.keys(row).length
+      && Object.keys(row).every(key=>key==='catalog_revision'||row[key]===before[key]);
+  }).map(row=>row.public_id);
+  if(copied.length){
+    await db.batch([mutationAssertion(db,owner,['freezing']),db.prepare(`INSERT INTO catalog_public_products
+      (catalog_revision,public_id,product_id,slug,title,description,tags,source_facts_hash,eligible_until,public_display_json,display_sha256)
+      SELECT ?,public_id,product_id,slug,title,description,tags,source_facts_hash,eligible_until,public_display_json,display_sha256
+      FROM catalog_public_products WHERE catalog_revision=? AND public_id IN (SELECT value FROM json_each(?))`)
+      .bind(revision,request.previous.catalogRevision,JSON.stringify(copied))]);
+    const reused=new Set(copied);missing=missing.filter(row=>!reused.has(row.public_id));
+  }
   // Chunks are restartable while visibility remains held behind the final seal.
   const gate = mutationFenceQuery(owner, ['freezing']);
   const guard = {sql:`SELECT json(CASE WHEN ${gate.sql} THEN 'true' ELSE 'mutation_fenced' END)`,params:gate.params};

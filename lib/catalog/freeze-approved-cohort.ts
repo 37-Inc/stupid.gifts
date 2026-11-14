@@ -242,7 +242,7 @@ async function prepare(db: CatalogD1, owner: MutationOwner, input: ApprovedCohor
     sourceDigest,globalVectorWatermark,vectorSyncWatermark:0,operationKey,additionalAbsentIds,
     ...(persistent?{persistent,nativeHistory}: {})} as ApprovedCohortRevision;
   await beforeSeal?.(owner,candidate);
-  const sealed = await sealCapturedRevision(db,owner,candidate);
+  const sealed = await sealCapturedRevision(db,owner,candidate,source.projection);
   return { state:ready.length ? 'prepared' as const : 'all_held' as const,owner:sealed.owner,
     revision:{...sealed.revision,request} as ApprovedCohortRevision };
 }

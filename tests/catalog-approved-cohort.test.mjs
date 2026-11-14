@@ -39,6 +39,34 @@ test('cohort failure preserves the sanitized D1 cause for publication diagnostic
     assert.equal(error.message,'cohort_failed');assert.equal(error.cause,original);assert.deepEqual(catalogD1FailureDetail(error),detail);return true;
   });
 });
+test('unchanged projection rows copy once; changed content and lost acknowledgements remain exact',async t=>{
+  for(const lostAck of [false,true])await t.test(String(lostAck),async t=>{
+    const f=await setup(t,{initial:3});await f.upsert(product(1,{sourceFacts:{fresh:true},description:'A fresh factual description.'}));await f.drain();
+    const rest=await boundedRest(t,f),claim=await f.freeze([uuid(1)]);let copies=0,changedInserts=0;
+    rest.before(batch=>{for(const q of batch){
+      if(q.sql.includes('FROM catalog_public_products WHERE catalog_revision=? AND public_id IN')){
+        copies++;assert.deepEqual(JSON.parse(q.params[2]).sort(),[uuid(2),uuid(3)]);
+      }else if(q.sql.startsWith('INSERT INTO catalog_public_products'))changedInserts++;
+    }});
+    if(lostAck)rest.after(batch=>{if(batch.some(q=>q.sql.includes('FROM catalog_public_products WHERE catalog_revision=? AND public_id IN'))){
+      rest.after(null);throw Error('test_only_lost_ack');
+    }});
+    if(lostAck)await assert.rejects(prepareApprovedCohort(f.db,claim.owner,claim.request),/cohort_failed/);
+    const prepared=await prepareApprovedCohort(f.db,claim.owner,claim.request);
+    assert.equal(copies,1);assert.equal(changedInserts,1);
+    const rows=f.sql.prepare('SELECT * FROM catalog_public_products WHERE catalog_revision=? ORDER BY public_id').all(prepared.revision.snapshot.catalogRevision).map(row=>({...row}));
+    assert.equal(canonicalJson(rows),canonicalJson([...prepared.revision.packet.rows].sort((a,b)=>a.public_id.localeCompare(b.public_id))));
+    assert.equal((await rest.workspace().budget()).unconfirmedRequests,lostAck?1:0);
+  });
+});
+test('unchanged projection rows reject corrupted copied content before sealing',async t=>{
+  const f=await setup(t),rest=await boundedRest(t,f),claim=await f.freeze();
+  rest.before(batch=>{for(const q of batch)if(q.sql.includes('FROM catalog_public_products WHERE catalog_revision=? AND public_id IN'))
+    q.sql=q.sql.replace('SELECT ?,public_id,product_id,slug,title,description,','SELECT ?,public_id,product_id,slug,title,\'Unexpected copied content\',');});
+  await assert.rejects(prepareApprovedCohort(f.db,claim.owner,claim.request),/prune_projection_changed/);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM catalog_projection_receipts').get().n,1);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM catalog_build_requests').get().n,0);
+});
 async function batchFixture(t,count=4){
   const f=await setup(t,{initial:count}),claim=await f.freeze();
   const prepared=await prepareOwnedApprovedCohortPlan({db:f.db,...claim,adapters:f.adapters});
