@@ -1203,6 +1203,16 @@ test('prepared config above the old 32 KiB limit retains exact bytes and execute
   assert.deepEqual(f.calls,paid);
 });
 
+test('resume checks capacity with the original ledger before any provider work',async t=>{
+  const f=await setup(t);assert.equal((await f.run('start')).reason,'awaiting_reviewed_approval');
+  const before={...f.calls},workspace=await openRunWorkspace({...f.workspaceOptions,mode:'resume'});
+  const spent=await workspace.budget();await workspace.close();let checks=0;
+  await assert.rejects(runCloudflareWeekly({...f.options,command:'resume'},{...f.dependencies,beforeResume:async usage=>{
+    checks++;assert.deepEqual(usage,spent);throw Error('test_capacity_unavailable');
+  }}),/test_capacity_unavailable/);
+  assert.equal(checks,1);assert.deepEqual(f.calls,before);
+});
+
 test('oversized original input still binds reviewed RAW hash; config keeps its metadata bound',async t=>{
   const f=await setup(t),bytes=Buffer.from(`{"nativeBase64":"${'A'.repeat(520*1024)}"}\n`);
   const file=path.join(path.dirname(f.options.configPath),'unconfirmed-originals.json');await put(file,bytes);

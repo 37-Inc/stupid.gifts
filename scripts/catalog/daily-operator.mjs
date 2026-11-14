@@ -491,13 +491,10 @@ else{
   else if(['start','resume','publish','recover','status'].includes(command)){
     if(['publish','recover'].includes(command)&&!HASH.test(approvalSha??''))refuse('explicit_review_digest');
     if(command==='start'||recoveryPhase==='start'){const token=await RUNTIME.token();await observeHeadroom(token,undefined,record.capacity,fetch,await currentD1Plan(token));}
-    if(['resume','publish'].includes(command)||recovering&&recoveryPhase!=='start'){
-      const w=await openRunWorkspace(entry.workspace);let spent;try{spent=await w.budget();}finally{await w.close();}
-      const token=await RUNTIME.token();await observeHeadroom(token,spent,record.capacity,fetch,await currentD1Plan(token));
-    }
     const result=await runCloudflareWeekly({...entry.driver,command:recoveryPhase==='start'?'start':command==='publish'||recovering?'resume':command,
       ...(approvalSha&&!['start','provider','admission-repair'].includes(recoveryPhase)?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})},
-      recovering?{repository:config.publication.sourceRoot,...(recoveryPhase==='admission-repair'?{repairSavedAdmission:true}:{})}:{});
+      {...(recovering?{repository:config.publication.sourceRoot}:{}),...(recoveryPhase==='admission-repair'?{repairSavedAdmission:true}:{}),
+        beforeResume:async spent=>{const token=await RUNTIME.token();await observeHeadroom(token,spent,record.capacity,fetch,await currentD1Plan(token));}});
     await remember(result,entry,config,directory);console.log(JSON.stringify(weeklyCommandSummary(result)));
     if(result.state==='finalized'&&!RUNTIME.hosted){
       await cleanupAcceptedPublication(entry.workspace,config.runId);
