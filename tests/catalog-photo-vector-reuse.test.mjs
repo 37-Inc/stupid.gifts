@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {preservedPhotoVector,readPreservedPhotoVector} from '../scripts/catalog/photo-vector-reuse.ts';
+import {canonicalDescriptionEmbeddingInput} from '../lib/catalog/presentation.ts';
 import {maintenanceEmbeddingText} from '../scripts/catalog/maintenance-state.ts';
 import {encodePgvectorSendBase64} from '../scripts/catalog/pgvector-binary.ts';
 import {sha256} from '../scripts/catalog/migration.ts';
@@ -60,5 +61,15 @@ for(const mutation of ['text','copy','native','provenance','absent','permanent-p
   if(mutation==='absent')f.state.embedding_present=0;
   if(mutation==='permanent-photo'){const p=JSON.parse(f.product.public_display_json);p.persistent.imageUrl='https://example.invalid/cleared.jpg';f.product.public_display_json=JSON.stringify(p);}
   if(mutation==='binding')f.member.embeddingTextHash='a'.repeat(64);
+  assert.throws(()=>preservedPhotoVector(f.product,f.state,f.previous,f.member,'fresh-photo'),/vector_original_unproven/);
+});
+test('photo-only refresh retains exact canonical public input across a raw retailer title change',()=>{
+  const f=fixture(),display=JSON.parse(f.product.public_display_json),proof=JSON.parse(f.state.embedding_provenance_json);
+  proof.text=canonicalDescriptionEmbeddingInput(display.persistent);proof.embeddingTextHash=sha256(proof.text);
+  f.state.embedding_provenance_json=JSON.stringify(proof);
+  const semantic=JSON.parse(f.state.semantic_json);semantic.title='New long supplier wording';f.state.semantic_json=JSON.stringify(semantic);
+  assert.notEqual(maintenanceEmbeddingText(semantic,proof.text),proof.text);
+  assert.equal(preservedPhotoVector(f.product,f.state,f.previous,f.member,'fresh-photo').embeddingTextHash,null);
+  display.title='Different public product';display.punnyTitle=null;f.product.public_display_json=JSON.stringify(display);
   assert.throws(()=>preservedPhotoVector(f.product,f.state,f.previous,f.member,'fresh-photo'),/vector_original_unproven/);
 });

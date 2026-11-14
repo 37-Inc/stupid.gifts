@@ -4,6 +4,7 @@ import {maintenanceEmbeddingText} from './maintenance-state.ts';
 import {decodePgvectorSendBase64} from './pgvector-binary.ts';
 import {nativeHash} from './vector-outbox.ts';
 import {persistentPublicProduct} from '../../lib/catalog/display.ts';
+import {canonicalDescriptionEmbeddingInput} from '../../lib/catalog/presentation.ts';
 import type {PublicCatalogProduct} from '../../lib/catalog/types.ts';
 import type {SemanticProduct} from './maintenance-state.ts';
 import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
@@ -38,9 +39,14 @@ export function preservedPhotoVector(product:Row,state:Row,previous:PublicCatalo
     ||state.embedding_present!==1||typeof state.embedding_native_base64!=='string')fail();
   const display=JSON.parse(String(product.public_display_json)),base=persistentPublicProduct(display),prior=persistentPublicProduct(previous!);
   if(!base||!prior||base.imageUrl!=='/images/gift-placeholder.svg'||canonicalJson(base)!==canonicalJson(prior)
-    ||typeof display.imageUrl!=='string'||!display.imageUrl.startsWith('https://')||display.eligibleUntil===null)fail();
+    ||typeof display.imageUrl!=='string'||!display.imageUrl.startsWith('https://')||display.eligibleUntil===null)return fail();
   const current=JSON.parse(String(state.semantic_json)) as SemanticProduct,proof=JSON.parse(String(state.embedding_provenance_json));
-  const text=maintenanceEmbeddingText(current,proof.text),bytes=Buffer.from(String(state.embedding_native_base64),'base64');
+  // A refreshed supplier title is not the cleared public title. The canonical
+  // recipe may bind the unchanged listing, not this incidental supplier text.
+  const publicText=canonicalDescriptionEmbeddingInput(base);
+  const text=proof.text===publicText&&canonicalDescriptionEmbeddingInput(display)===publicText
+    ?publicText:maintenanceEmbeddingText(current,proof.text);
+  const bytes=Buffer.from(String(state.embedding_native_base64),'base64');
   if(current.id!==product.id||current.publicId!==member.publicId||current.sourceFactsHash!==member.sourceFactsHash
     ||proof.input!=='verified'||proof.model!=='text-embedding-3-small'||typeof proof.reference!=='string'||!proof.reference.trim()
     ||proof.text!==text||proof.embeddingTextHash!==sha256(text)
