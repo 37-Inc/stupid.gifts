@@ -12,6 +12,7 @@ export async function prepareAdminAdmissions(runtime,{checkout,source}){
     WHERE r.action='admit' AND a.request_id IS NULL AND p.id IS NULL ORDER BY r.rowid LIMIT 10`).all()).results;
   const repos=new Map(),results=[];
   for(const row of rows){const day=requestDay(row.created_at),asin=JSON.parse(row.payload_json).asin;
+    if(await staffReady(runtime,day,asin)){results.push({state:'ready',reused:true});continue;}
     const original=(await staffIntent(runtime,day,asin))?.source??source;
     // Never execute today's provider logic claiming to be an older source.
     if(!repos.has(original))repos.set(original,await checkout(original));
@@ -36,18 +37,12 @@ export async function consumeAdminAdmissions({db,runtime,source,day,coordinate,r
       FROM content_admin_requests r LEFT JOIN content_admin_results a ON a.request_id=r.request_id
       LEFT JOIN products p ON p.id=json_extract(r.payload_json,'$.asin')
       WHERE r.action='admit' AND a.request_id IS NULL ORDER BY r.rowid LIMIT 10`);
-    let rows=(await query.all()).results;
+    const rows=(await query.all()).results;
     if(!rows.length)return{state:'empty',admissions:0};
     // Empty wakes and requests for already published gifts don't own or resume care.
     // A row staged by an unfinished run is NOT an accepted product.
     const pending=rows.some(r=>!r.already_public)&&await runtime.durable.get('pointers/pending-run.json');
-    if(pending&&JSON.parse(Buffer.from(pending.bytes)).pending!==null){
-      if(ready)return{state:'waiting',reason:'existing_catalog_run'};
-      const resumed=await coordinate({mode:'full',resumeOnly:true,source,day,runtime});
-      if(!['accepted','skipped','idle'].includes(resumed.state))return{state:'pending',reason:'existing_catalog_run',pending:resumed};
-      rows=(await query.all()).results;
-    }
-    if(!rows.length)return{state:'empty',admissions:0};
+    if(pending&&JSON.parse(Buffer.from(pending.bytes)).pending!==null)return{state:'waiting',reason:'existing_catalog_run'};
     let newRows=rows.filter(r=>!r.public_id);const createdAt=now();
     for(const row of rows.filter(r=>r.public_id))await db.prepare("INSERT INTO content_admin_results(request_id,state,result_json,created_at) VALUES(?,'applied',?,?)")
       .bind(row.request_id,canonicalJson({kind:'admin-admission',outcome:'already_exists',publicId:row.public_id}),createdAt).run();
@@ -99,7 +94,11 @@ export async function runAdminAdmissions(runtime,options){
     // can then run without waiting for tomorrow. Never restart unrelated care.
     let result;
     for(let i=0;i<10;i++){
-      result=await consumeAdminAdmissions({db,runtime,...options,ready:(d,id)=>staffReady(runtime,d,id)});
+      result=await consumeAdminAdmissions({db,runtime,...options,ready:async(d,id)=>{
+        const pin=await staffReady(runtime,d,id);if(pin)return pin;
+        const intent=await staffIntent(runtime,d,id);
+        return intent&&Date.parse(intent.expiresAt)<=Date.now()?intent:null;
+      }});
       if(result.state!=='accepted')break;
       console.log(JSON.stringify({state:'staff_admission_accepted',runKey:result.runKey,releaseId:result.releaseId}));
     }

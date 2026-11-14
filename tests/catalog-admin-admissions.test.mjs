@@ -22,9 +22,7 @@ test('admin queue is inert when empty and preserves unfinished existing publicat
   f.pending.value={path:'original-pending'};
   assert.equal((await consumeAdminAdmissions(options)).state,'empty');
   await f.request('B000000001','admin-admission-one');
-  assert.equal((await consumeAdminAdmissions({...options,coordinate:async input=>{
-    assert.equal(input.resumeOnly,true);assert.equal(input.mode,'full');return{state:'attention',runKey:'original-pending'};
-  }})).state,'pending');assert.equal(f.sql.prepare('SELECT count(*) n FROM content_admin_results').get().n,0);
+  assert.equal((await consumeAdminAdmissions(options)).state,'waiting');assert.equal(f.sql.prepare('SELECT count(*) n FROM content_admin_results').get().n,0);
 });
 test('accepted public identity settles during unrelated care, staged identity waits without refetch',async t=>{
   const f=await fixture(t),options={...f,source:'a'.repeat(40),day:'2026-11-11',coordinate:()=>{throw Error('must not run');}};
@@ -32,22 +30,21 @@ test('accepted public identity settles during unrelated care, staged identity wa
   f.sql.exec("INSERT INTO catalog_runtime_head VALUES(1,'release',1);INSERT INTO catalog_runtime_publications VALUES('release','current');INSERT INTO products VALUES('B000000001','one'),('B000000002','two');INSERT INTO catalog_public_products VALUES('current','B000000001','one'),('staged','B000000002','two')");
   await f.request('B000000001','admin-admission-published');
   assert.equal((await consumeAdminAdmissions(options)).state,'settled');
-  await f.request('B000000002','admin-admission-staged');let calls=0;
-  const result=await consumeAdminAdmissions({...options,coordinate:async input=>{
-    calls++;assert.equal(input.resumeOnly,true);f.pending.value=null;return{state:'accepted'};
-  }});
-  assert.equal(calls,1);assert.equal(result.state,'settled');
+  await f.request('B000000002','admin-admission-staged');
+  assert.equal((await consumeAdminAdmissions(options)).state,'waiting');
+  f.pending.value=null;
+  assert.equal((await consumeAdminAdmissions(options)).state,'settled');
 });
-test('on-demand admission finishes the saved publisher then adds only its exact products in the same wake',async t=>{
+test('on-demand admission never takes over care and adds only its exact products after that writer finishes',async t=>{
   const f=await fixture(t);await f.request('B000000001','admin-admission-one');f.pending.value={path:'original-pending'};
   const calls=[];
-  const result=await consumeAdminAdmissions({...f,source:'a'.repeat(40),day:'2026-11-13',coordinate:async input=>{
+  const opts={...f,source:'a'.repeat(40),day:'2026-11-13',coordinate:async input=>{
     calls.push(input);
-    if(input.resumeOnly){f.pending.value=null;return{state:'accepted',runKey:'original-pending'};}
     assert.deepEqual(input.admitAsins,['B000000001']);f.sql.exec("INSERT INTO products VALUES('B000000001','public-one')");
     return{state:'accepted',runKey:'new-admission',releaseId:'accepted',receiptSha256:'c'.repeat(64)};
-  }});
-  assert.equal(result.state,'accepted');assert.equal(calls.length,2);assert.equal(calls[1].mode,'admit');
+  }};
+  assert.equal((await consumeAdminAdmissions(opts)).state,'waiting');assert.equal(calls.length,0);f.pending.value=null;
+  assert.equal((await consumeAdminAdmissions(opts)).state,'accepted');assert.equal(calls.length,1);assert.equal(calls[0].mode,'admit');
 });
 test('exact claimed cohort/date survives retries and late requests, admission settlement does not refetch',async t=>{
   const f=await fixture(t);await f.request('B000000001','admin-admission-one');let calls=0;

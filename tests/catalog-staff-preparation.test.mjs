@@ -4,7 +4,7 @@ import {mkdtemp,realpath,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {createOperatorStateStore} from '../scripts/catalog/operator-state-store.ts';
 import {prepareStaffProduct,staffReady,importStaffPreparation} from '../scripts/catalog/staff-preparation.mjs';
-import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
+import {sha256} from '../scripts/catalog/migration.ts';
 
 test('a completed private preparation survives duplicate wakes and a changed catalog head without new provider work',async t=>{
   const base=await mkdtemp((await realpath(tmpdir()))+'/catalog-staff-');t.after(()=>rm(base,{recursive:true,force:true}));
