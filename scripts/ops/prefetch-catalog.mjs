@@ -1229,8 +1229,8 @@ async function getActiveCatalogIdentities(store = defaultMaintenanceStore()) {
   return store.getActiveCatalogIdentities();
 }
 
-async function getExistingEditorialWriteups(excludedIds = [], store = defaultMaintenanceStore()) {
-  return store.getExistingEditorialWriteups(excludedIds);
+function comparisonArticles(products, store, needed) {
+  return needed && products.length ? store.getExistingEditorialWriteups(products.map(product => product.id)) : [];
 }
 
 async function auditAndRepairAmazonAffiliateUrls({ dryRun }, store = defaultMaintenanceStore()) {
@@ -1371,7 +1371,7 @@ async function enrichRevalidatedSelection(products, rows, options, telemetry, st
     && (!currentCopy(product) || options.longEditorial === true && product.editorialStatus === 'short_ready'));
   options.assertRefreshDay?.();
   const generated = copies.length ? await enrichProducts(copies, { ...options, skipEnrichment: false, skipEmbeddings: true, preserveExistingListing: true },
-    await getExistingEditorialWriteups(copies.map(product => product.id), store), telemetry, evidence) : [];
+    await comparisonArticles(copies, store, options.longEditorial === true), telemetry, evidence) : [];
   const byId = new Map(generated.map(product => [product.id, product]));
   const original = new Map(products.map(product => [product.id, product]));
   const previous = new Map(rows.map(row => [row.id, row]));
@@ -1945,9 +1945,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
         });
       }
 
-      const existingWriteups = await getExistingEditorialWriteups(
-        duplicatePartition.winners.map((product) => product.id), store
-      );
+      const existingWriteups = await comparisonArticles(duplicatePartition.winners, store, editorialSeedProducts || options.longEditorial === true);
       const enrichmentStartedAt = Date.now();
       const enrichedBackfill = editorialSeedProducts
         ? applyEditorialSeed(duplicatePartition.winners, editorialSeedProducts, existingWriteups)
@@ -2185,7 +2183,7 @@ async function executeCatalog(options, editorialSeedProducts, telemetry, store =
 
   let inserted = 0;
   let updated = 0;
-  const existingWriteups = candidates.length ? await getExistingEditorialWriteups(candidates.map((product) => product.id), store) : [];
+  const existingWriteups = await comparisonArticles(candidates, store, options.longEditorial === true);
   const enrichedCandidates = await enrichProducts(candidates, options, existingWriteups, telemetry, evidence);
   const admittedIds = new Set();
 

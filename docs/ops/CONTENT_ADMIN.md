@@ -57,6 +57,9 @@ acknowledged, so status can identify the real run rather than infer it from a
 timestamp. A malformed/lost response remains unknown and is not redispatched.
 
 `prepareCatalogProducts` is the shared preparation entry point. It restores
+exact staff IDs with an indexed product lookup, including held products. Only
+open-ended discovery reads the full gift pool for comparison, and short-copy
+generation does not read the optional article library. Preparation restores
 saved provider evidence and exact prepared phases before initializing a model
 client; retrying a prepared phase does not collect or generate again. It owns
 no writer, global pending pointer, or publication. The existing routine driver

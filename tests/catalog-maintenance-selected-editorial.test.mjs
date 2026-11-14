@@ -47,7 +47,7 @@ async function fixture(t,{day=MONDAY,rows=[row(product())],remote=rows.map(r=>pr
     if(!review&&crossAfterDraft)current=TUESDAY;
     return Response.json({choices:[{message:{content:JSON.stringify({products:records.map(p=>review
       ?{id:p.id,approved:true,correctedDescription:null,qualityScore:.95,reasons:[]}
-      :{id:p.id,punnyTitle:'Test only refreshed title',wittyDescription:'Test only refreshed factual sentence.',humorTags:['fixture','desk'],
+      :{id:p.id,shortTitle:'Lobster desk bell',punnyTitle:'Test only refreshed title',wittyDescription:'Test only refreshed factual sentence.',humorTags:['fixture','desk'],
         isActive:true,qualityScore:.9,shortDescription:draftFails?'Incomplete draft':`A ${p.sourceFacts.material} lobster desk bell for a small tabletop.`})})},finish_reason:'stop'}],
       usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}});
   };

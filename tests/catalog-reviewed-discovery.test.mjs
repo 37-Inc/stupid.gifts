@@ -30,7 +30,8 @@ test('new discovery saves collection before judgment, ignores title taste/score 
         imageMatches:true,reason:p.id===products[2].id?'Ordinary cup without a distinctive visual gag.':'A distinctive alligator mouth design turns a kitchen tool into a visual joke.'}));
     }}};
   const store={getActiveCatalogIdentities:async({includeInactive})=>{assert.equal(includeInactive,true);return[{id:products[3].id,title:'Private held product'}];},
-    getExistingEditorialWriteups:async()=>[],upsertProduct:async p=>{written.push(p.id);return{inserted:true,slug:'fixture'};},recordEditorialEvent:async()=>{}};
+    getExistingEditorialWriteups:async()=>{throw Error('short-copy discovery must not read the article library');},
+    upsertProduct:async p=>{written.push(p.id);return{inserted:true,slug:'fixture'};},recordEditorialEvent:async()=>{}};
   const result=await executeCatalog(options,undefined,usage(),store);
   assert.deepEqual(written,products.slice(0,2).map(p=>p.id));
   assert.equal(result.editorialRejected,1);assert.equal(result.candidates,2);assert.equal(result.catalogDuplicates,1);
