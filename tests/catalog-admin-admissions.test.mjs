@@ -69,3 +69,14 @@ test('known held/private identities settle without supplier calls; rejected admi
   await consumeAdminAdmissions({...options,coordinate:async()=>({state:'accepted',runKey:'rejected',releaseId:'accepted',receiptSha256:'c'.repeat(64)})});
   assert.equal(JSON.parse(f.sql.prepare("SELECT result_json FROM content_admin_results WHERE request_id='admin-admission-rejected'").get().result_json).outcome,'not_admitted');
 });
+test('staff-only job cannot resume another writer, refetch unprepared work, or race an intervening admission',async t=>{
+  const f=await fixture(t);await f.request('012345678X','admin-admission-book');
+  const opts={...f,day:'2026-11-14',source:'a'.repeat(40),now:()=> '2026-11-11T14:00:00.000Z',coordinate:()=>assert.fail('no provider or writer')};
+  const pin={requestId:'admin-admission-book',day:'2026-11-11',asin:'012345678X',expiresAt:'2026-11-12T12:00:00.000Z'};
+  f.pending.value={path:'daily-run'};
+  assert.equal((await consumeAdminAdmissions({...opts,ready:()=>pin})).reason,'existing_catalog_run');
+  f.pending.value=null;
+  assert.equal((await consumeAdminAdmissions({...opts,ready:()=>null})).reason,'staff_preparation_not_ready');
+  f.sql.exec("INSERT INTO products VALUES('012345678X','already-added')");
+  assert.equal((await consumeAdminAdmissions({...opts,ready:()=>pin})).state,'settled');
+});

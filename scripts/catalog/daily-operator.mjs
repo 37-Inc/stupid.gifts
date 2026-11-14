@@ -101,7 +101,7 @@ export async function materializeRoutinePreparation(directory,bundle,save=put){
   if(bundle.schemaVersion!==1||bundle.kind!=='routine-preparation'||bundle.source!==operator.source
     ||bundle.helperSha256!==operator.helperSha256||config.codeSha!==operator.source||config.runId!==operator.runId
     ||operator.configPath!==directory+'/config.json'||digest(JSON.stringify(config)+'\n')!==operator.configSha256
-    ||Object.keys(inputs).sort().join(',')!==(config.inputs.savedAdmission?'context,rights,savedAdmission':'context,rights')
+    ||Object.keys(inputs).sort().join(',')!==['context','rights',...(config.inputs.savedAdmission?['savedAdmission']:[]),...(config.inputs.staffPreparation?['staffPreparation']:[])].join(',')
     ||bundle.freshness&&canonicalJson(config.cadence?.automation?.refreshIds)!==canonicalJson(bundle.freshness.refreshIds))refuse('preparation_bundle');
   if(bundle.freshness)await save(directory+'/freshness-plan.json',bundle.freshness);
   if(bundle.preparationReceipt)await save(directory+'/preparation-receipt.json',bundle.preparationReceipt);
@@ -126,7 +126,8 @@ export async function routineFreshnessPool(db,canaryId){
   }
 }
 export async function hydrateRoutineInputs(config,read=bytes){
-  for(const name of ['previous','context','rights',...(config.inputs.savedAdmission?['savedAdmission']:[])]){
+  for(const name of Object.keys(config.inputs)){
+    if(name==='originalVectors')continue;
     const ref=config.inputs[name];await read(ref.path,ref.sha256);
   }
   const derived=config.publication?.semanticSearch?.derivedCatalog;
@@ -259,10 +260,18 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,a
   const preparationReceipt={capacity,metrics:db.metrics(),servingPrior,prior,source:SOURCE,helperSha256:self};
   if(!bundled)await put(directory+'/preparation-receipt.json',preparationReceipt);
   const savedAdmission=admitSavedRun?await loadSavedAdmission(RUNTIME,admitSavedRun,admitAsins):null;
+  let staffPreparation=null;
+  if(RUNTIME.hosted&&admitAsins?.length===1&&!admitSavedRun){
+    const {staffReady,staffIntent}=await import('./staff-preparation.mjs');
+    if(await staffIntent(RUNTIME,calendar.day,admitAsins[0])){
+      staffPreparation=await staffReady(RUNTIME,calendar.day,admitAsins[0]);
+      if(!staffPreparation||Date.parse(staffPreparation.expiresAt)<=Date.now())refuse('staff_preparation_not_ready');
+    }
+  }
   const now=new Date().toISOString(),cutoff=new Date(Date.now()+(RUNTIME.hosted?24:2)*3600000).toISOString(),
-    notAfter=new Date(Math.min(Date.now()+86400000,savedAdmission?Date.parse(savedAdmission.pin.expiresAt):Infinity)).toISOString();
+    notAfter=new Date(Math.min(Date.now()+86400000,savedAdmission?Date.parse(savedAdmission.pin.expiresAt):Infinity,staffPreparation?Date.parse(staffPreparation.expiresAt):Infinity)).toISOString();
   const context={envelopeSha256:sha256(seal.envelopeJson+'\n'),snapshotSha256:seal.snapshotSha256,projectionSha256:seal.projectionReceipt.projection_sha256,sourceExportSha256:seal.projectionReceipt.source_export_sha256,vectorSyncWatermark:rows[0].results[0].n,publicationReceiptWatermark:rows[1].results[0].n,cutoff,priorPublication:seal.publication};
-  const inputValues={context,rights:{rightsById:{}},...(savedAdmission?{savedAdmission:savedAdmission.pin}:{})},inputs={previous:{path:prior.control.path,sha256:prior.control.sha256,observedAt:now}};
+  const inputValues={context,rights:{rightsById:{}},...(savedAdmission?{savedAdmission:savedAdmission.pin}:{}),...(staffPreparation?{staffPreparation}:{})},inputs={previous:{path:prior.control.path,sha256:prior.control.sha256,observedAt:now}};
   for(const [name,value]of Object.entries(inputValues)){const file=directory+'/'+name+'.json';inputs[name]={path:file,
     sha256:bundled?digest(JSON.stringify(value)+'\n'):await put(file,value),observedAt:now};}
   const runId='daily-'+calendar.day+'-'+SOURCE.slice(0,8)+'-'+digest(path.basename(directory)).slice(0,8);

@@ -66,7 +66,7 @@ export interface CloudflareWeeklyConfig {
     automation?:{schemaVersion:1;refreshIds:string[];discovery:boolean;leadAsins?:string[];searchTopics?:string[]}};
   credentials:{cloudflare:CloudflareCredentialReference;amazonId:CatalogCredentialReference;amazonSecret:CatalogCredentialReference;amazonVersion:string;openai?:CatalogCredentialReference;stagingAuthSecret?:CatalogCredentialReference};
   limits:{requests:number;statements:number;reportedRowsRead?:number;reportedRowsWritten?:number};retention:RetentionPolicy;
-  inputs:{previous:InputRef;context:InputRef;rights:InputRef;originalVectors?:InputRef;savedAdmission?:InputRef};publication:PublicationConfig;
+  inputs:{previous:InputRef;context:InputRef;rights:InputRef;originalVectors?:InputRef;savedAdmission?:InputRef;staffPreparation?:InputRef};publication:PublicationConfig;
 }
 export const WEEKLY_RESUME_STATES=Object.freeze({
   created:'No provider phase started; the exact initial claim can be recovered.',
@@ -160,7 +160,8 @@ export function validateCloudflareWeeklyConfig(input:unknown):CloudflareWeeklyCo
     ||rowBudget&&(!Number.isInteger(c.limits.reportedRowsRead)||!Number.isInteger(c.limits.reportedRowsWritten))
     ||c.limits.reportedRowsRead!==undefined&&(!Number.isInteger(c.limits.reportedRowsRead)||c.limits.reportedRowsRead<1||c.limits.reportedRowsRead>3_000_000)
     ||c.limits.reportedRowsWritten!==undefined&&(!Number.isInteger(c.limits.reportedRowsWritten)||c.limits.reportedRowsWritten<1||c.limits.reportedRowsWritten>50_000)
-    ||!exact(c.inputs,['context','previous','rights',...(c.inputs?.originalVectors?['originalVectors']:[]),...(c.inputs?.savedAdmission?['savedAdmission']:[])].sort().join(',')))throw new Error('weekly_configuration_invalid');
+    ||!exact(c.inputs,['context','previous','rights',...(c.inputs?.originalVectors?['originalVectors']:[]),...(c.inputs?.savedAdmission?['savedAdmission']:[]),...(c.inputs?.staffPreparation?['staffPreparation']:[])].sort().join(',')))throw new Error('weekly_configuration_invalid');
+  if(c.inputs.staffPreparation&&(c.cadence?.admitAsins?.length!==1||c.cadence.automation||c.inputs.savedAdmission))throw Error('weekly_staff_preparation_scope');
   if(c.inputs.savedAdmission&&(!c.cadence?.admitAsins||c.cadence.automation))throw Error('weekly_saved_admission_scope');
   if(c.cadence&&(!exact(c.cadence,`${Object.hasOwn(c.cadence,'admitAsins')?'admitAsins,':''}${Object.hasOwn(c.cadence,'automation')?'automation,':''}day,featuredIds${Object.hasOwn(c.cadence,'photosOnly')?',photosOnly':''}${c.cadence.runKey===undefined?'':',runKey'}`)
     ||c.cadence.admitAsins!==undefined&&(c.cadence.photosOnly||!c.cadence.runKey||!Array.isArray(c.cadence.admitAsins)
@@ -253,7 +254,7 @@ async function readOriginalVectors(ws:RunWorkspace,ref:ArtifactRef):Promise<Reco
   return(value&&typeof value==='object'&&!Array.isArray(value)&&value.type==='run-workspace-blob'
     ?JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await ws.readBlob(ref))):value) as Record<string,unknown>;
 }
-async function providerEnvironment(config:CloudflareWeeklyConfig,resolveToken:(ref:KeychainRef)=>Promise<string>,needsModel:boolean) {
+export async function providerEnvironment(config:Pick<CloudflareWeeklyConfig,'credentials'|'catalog'> & {inputs:{savedAdmission?:unknown}},resolveToken:(ref:KeychainRef)=>Promise<string>,needsModel:boolean) {
   if(needsModel&&!config.credentials.openai)throw new Error('weekly_model_credentials_missing');
   const names=Object.keys(process.env).filter(key=>/^(CATALOG_|AMAZON_|OPENAI_|GOOGLE_SEARCH_|POSTGRES_|VERCEL_)/.test(key));
   const values={...Object.fromEntries(names.map(key=>[key,undefined])),AMAZON_ASSOCIATE_TAG:config.catalog.associateTag,
@@ -262,7 +263,7 @@ async function providerEnvironment(config:CloudflareWeeklyConfig,resolveToken:(r
     OPENAI_API_KEY:needsModel?await resolveCatalogCredential(config.credentials.openai!,resolveToken):undefined};
   return values;
 }
-async function scopedProviders<T>(values:Awaited<ReturnType<typeof providerEnvironment>>,action:()=>Promise<T>) {
+export async function scopedProviders<T>(values:Awaited<ReturnType<typeof providerEnvironment>>,action:()=>Promise<T>) {
   const old=Object.fromEntries(Object.keys(values).map(key=>[key,process.env[key]]));
   try{for(const [key,value]of Object.entries(values)){if(value===undefined)delete process.env[key];else process.env[key]=value;}amazonCreators.clearToken();return await action();}
   finally{amazonCreators.clearToken();for(const [key,value]of Object.entries(old)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
@@ -623,6 +624,11 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         const phases=config.cadence!.automation?automatedCatalogPhases(config.cadence!.automation,{runId:config.runId,photosOnly:config.cadence!.photosOnly})
           :[exactProductAdmissionPhase(config.cadence!.admitAsins)];
         const needsApplication=!(await journal.read('provider-phases-complete'));
+        if(config.inputs.staffPreparation&&needsApplication&&!await journal.read('phase-0-prepared')){
+          const pin=await ws.readArtifact(cp.pins.staffPreparation) as unknown as {day:string;asin:string;expiresAt:string};
+          if(pin.day!==config.cadence!.day||pin.asin!==config.cadence!.admitAsins![0]||Object.values(config.retention.rules).some(r=>Date.parse(r.notAfter)>Date.parse(pin.expiresAt)))throw Error('weekly_staff_preparation_scope');
+          await (await import('./staff-preparation.mjs')).importStaffPreparation({runtime:automationRuntime(),repository:repo,pin,ws,journal,runId:config.runId,now});
+        }
         const needsProvider=needsApplication&&(await Promise.all(phases.map((_,index)=>journal.read(`phase-${index}-prepared`)))).some(value=>!value);
         const needsModel=needsProvider&&Boolean(config.cadence!.automation?.discovery||config.cadence!.admitAsins);
         const preparationIdentity={schemaVersion:1,kind:'product-preparation',runId:config.runId,configSha256:options.configSha256};
@@ -695,7 +701,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
             }
           }
           timingsMs.productApplication=Math.max(0,Date.now()-applicationStarted);
-          const summary={counts:{phases:results},warnings,timingsMs,usage:await journal.usage()};
+          const summary={counts:{phases:results},warnings,timingsMs,usage:config.inputs.staffPreparation?await journal.read('staff-usage'):await journal.usage()};
           await journal.put('provider-phases-complete',{schemaVersion:1,summary,merchandising,changedIds:[...changed],admittedIds:[...admitted]});
         };
         try{

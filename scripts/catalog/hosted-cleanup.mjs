@@ -65,12 +65,14 @@ export async function cleanupHostedRuns(runtime,checkout,{now=()=>new Date().toI
   try{
     const manifest=await manifestFor(runtime,ref.runId);if(hash(canonicalJson(manifest))!==ref.manifestSha256||manifest.codeSha!==ref.source)fail();
     const repository=await checkout(ref.source);if(repository!=='/home/runner/stupid-gifts/operators/'+ref.source)fail();
-    workspace=await open({directory:runtime.workspace,repository,mode:'resume',runId:manifest.runId,codeSha:manifest.codeSha,
+    const staff=/^staff-[a-f0-9]{32}$/.test(manifest.runId)&&manifest.retention.reviewReference==='staff/exact-product-preparation-v1';
+    workspace=await open({directory:staff?runtime.base+'/staff-preparation-workspaces':runtime.workspace,repository,mode:'resume',runId:manifest.runId,codeSha:manifest.codeSha,
       configSha256:manifest.configSha256,scope:manifest.scope,retention:manifest.retention,budgetCaps:manifest.budgetCaps,
       expectedManifestSha256:ref.manifestSha256,requestLimit:'observe',durable:runtime.durable,now});
     const cp=await workspace.readCheckpoint({controlOnly:true});
     const editorial=manifest.runId.match(/^homepage-(\d{4}-\d{2}-\d{2})-([a-f0-9]{8})$/);
-    if(editorial){
+    if(staff){if(cp&&(cp.checkpoint.owner!==null||cp.checkpoint.phase!=='preparing'))fail();}
+    else if(editorial){
       if(editorial[2]!==ref.source.slice(0,8)||cp&&cp.checkpoint.owner!==null
         ||manifest.retention.reviewReference!=='catalog-automation-spec/homepage-v1')fail();
     }else if(manifest.retention.reviewReference==='maintained/accepted-catalog-code-only'){
