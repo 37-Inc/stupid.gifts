@@ -6,6 +6,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {openRunWorkspace} from '../scripts/catalog/run-workspace.ts';
 import { createCatalogD1Rest, createCatalogD1ReadOnlyRest, CATALOG_D1_REST_LIMITS, catalogD1FailureDetail } from '../scripts/catalog/d1-write-rest.ts';
+
+test('sanitized D1 diagnostics survive bounded domain wrappers without exposing raw causes',()=>{
+  const detail={stage:'request',reason:'timeout',dispatched:true,statementCount:1,requestBytes:80,requestSha256:'a'.repeat(64)};
+  const source=Object.assign(Error('private provider message'),{catalogDiagnostic:{...detail,sql:'private query',token:'private credential'}});
+  const error=Error('vector_delivery_failed',{cause:Error('cohort_failed',{cause:source})});
+  assert.deepEqual(catalogD1FailureDetail(error),detail);
+  const cyclic=Error('cycle');cyclic.cause=cyclic;assert.equal(catalogD1FailureDetail(cyclic),undefined);
+  assert.equal(catalogD1FailureDetail(Error('no diagnostic')),undefined);
+});
 import { claimMutationOwnership, readMutationOwner, releaseMutationOwnership } from '../lib/catalog/mutation-fence.ts';
 import { createD1CatalogTelemetryStore } from '../scripts/catalog/telemetry-d1.ts';
 import {MAINTENANCE_SLUG_TRIGGER} from '../scripts/catalog/maintenance-state.ts';

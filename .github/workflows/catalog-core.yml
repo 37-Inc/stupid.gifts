@@ -54,7 +54,7 @@ jobs:
       - run: node --import tsx --test tests/catalog-semantic-delta.test.mjs tests/catalog-photo-vector-reuse.test.mjs tests/catalog-publication-read-fetch.test.mjs
       - run: node --import tsx --test tests/catalog-clock.test.mjs tests/catalog-dispatch-workerd.test.mjs tests/catalog-runtime-native-history.test.mjs tests/catalog-vectorize-rest.test.mjs
       - run: node --import tsx --test --test-name-pattern="publication progress|legacy expired control|ordered recovery address|sealed permanent publication" tests/catalog-workspace-durability.test.mjs tests/catalog-run-workspace.test.mjs tests/catalog-permanent-native-reader.test.mjs
-      - run: node --import tsx --test --test-name-pattern="native batch|batch intent|eight-product|unchanged source|source counter" tests/catalog-approved-cohort.test.mjs tests/catalog-permanent-native-reader.test.mjs
+      - run: node --import tsx --test --test-name-pattern="cohort failure preserves|native batch|batch intent|eight-product|unchanged source|source counter" tests/catalog-approved-cohort.test.mjs tests/catalog-permanent-native-reader.test.mjs
       - run: node --import tsx --test tests/catalog-editorial-equivalence.test.mjs
       - run: node --import tsx --test --test-name-pattern="body-free published bulk seal" tests/catalog-permanent-freeze.test.mjs
       - run: node --import tsx --test --test-name-pattern="acknowledged indexing waits in the same driver|prepared freezing revision reuses|prepared config|config keeps its metadata bound|atomic multi-product receipt|Monday discovery publishes through a real permanent predecessor|automation driver resumes|exact staff admission shares|automation prepared before midnight" tests/catalog-cloudflare-weekly.test.mjs tests/catalog-approved-cohort.test.mjs

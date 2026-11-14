@@ -248,8 +248,8 @@ async function prepare(db: CatalogD1, owner: MutationOwner, input: ApprovedCohor
 }
 async function safe<T>(operation:()=>Promise<T>):Promise<T> {
   try { return await operation(); } catch(error) {
-    if(error instanceof Error && error.message==='permanent_seal_changed')throw new Error('cohort_predecessor_changed');
-    throw new Error(error instanceof Error && /^(cohort_|prune_)[a-z_]+$/.test(error.message) ? error.message : 'cohort_failed');
+    if(error instanceof Error && error.message==='permanent_seal_changed')throw new Error('cohort_predecessor_changed',{cause:error});
+    throw new Error(error instanceof Error && /^(cohort_|prune_)[a-z_]+$/.test(error.message) ? error.message : 'cohort_failed',{cause:error});
   }
 }
 /** Supplied observations/rights only: no merchant/model calls, new approval,

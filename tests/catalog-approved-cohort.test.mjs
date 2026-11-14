@@ -24,12 +24,21 @@ import { claimBuildRequest, beginBuildActivation, resolveBuildActivation } from 
 import { enqueuePublication, claimPublication, recordPublicationDispatch, completeActivatedApprovedCatalogPublication } from '../lib/catalog/publication.ts';
 import { approvedRevisionControl, hydrateApprovedRevision, createApprovedCatalogSeal, readApprovedPrior } from '../scripts/catalog/approved-catalog-seal.ts';
 import { sealCapturedRevision, settleCapturedRevision } from '../lib/catalog/prune-existing-revision.ts';
-import { createCatalogD1Rest } from '../scripts/catalog/d1-write-rest.ts';
+import { createCatalogD1Rest,catalogD1FailureDetail } from '../scripts/catalog/d1-write-rest.ts';
 import { openRunWorkspace } from '../scripts/catalog/run-workspace.ts';
 import { createVectorizeRestAdapters } from '../scripts/catalog/vectorize-rest.ts';
 import { accountedPublicationReadFetch } from '../scripts/catalog/publication-read-fetch.ts';
 
 const AT = Date.parse('2026-10-20T12:00:00.000Z');
+test('cohort failure preserves the sanitized D1 cause for publication diagnostics',async t=>{
+  const f=await setup(t),claim=await f.freeze(),detail={stage:'response',reason:'response_bytes',dispatched:true,
+    statementCount:1,requestBytes:80,requestSha256:'a'.repeat(64),responseBytes:524289,responseLimit:524288};
+  const original=Object.assign(Error('catalog_d1_result_unknown'),{catalogDiagnostic:detail});
+  const db={...f.db,prepare(){throw original;}};
+  await assert.rejects(prepareApprovedCohort(db,claim.owner,claim.request),error=>{
+    assert.equal(error.message,'cohort_failed');assert.equal(error.cause,original);assert.deepEqual(catalogD1FailureDetail(error),detail);return true;
+  });
+});
 async function batchFixture(t,count=4){
   const f=await setup(t,{initial:count}),claim=await f.freeze();
   const prepared=await prepareOwnedApprovedCohortPlan({db:f.db,...claim,adapters:f.adapters});
