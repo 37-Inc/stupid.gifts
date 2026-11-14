@@ -60,8 +60,8 @@ for shadow, canary, explicit activation and single-writer recovery, and
   matches the current accepted successor, its catch-up skips catalog checkout
   and recovery. The morning staff-queue fallback still runs. A duplicate wake
   is not a second successful cycle. A lost handoff against its original
-  predecessor still reconciles. An unexpected different successor is reported
-  without reclaiming the publication pointer.
+  predecessor still reconciles. Once a newer run holds the head, skip the
+  historical finalized slot without claiming that its release is current.
   Disabled/non-Pacific-slot wakes emit a bounded skip reason instead
   of silently looking like successful dispatches.
 - Clock and staff dispatch share one Workers-tested transport. Use `redirect:

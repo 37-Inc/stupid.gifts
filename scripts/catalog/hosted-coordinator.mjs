@@ -42,6 +42,9 @@ async function completedSlot(runtime,record){
   const prior=config.inputs?.previous;
   if(config.codeSha!==record.source||config.runId!==saved.result.runId||!HASH.test(prior?.sha256))fail('successor_identity');
   if(current.control?.path===prior.path&&current.control.sha256===prior.sha256)return null;
+  if(HASH.test(current.control?.sha256)&&HASH.test(current.manifestSha256)&&typeof current.control?.path==='string'
+    &&current.control.path!==prior.path&&current.control.path!==saved.next.control.path)
+    return{state:'skipped',reason:'historical_slot_finalized'};
   return{state:'attention',errorCode:'catalog_hosted_slot_successor_changed'};
 }
 export async function assertUnpreparedHostedAdmission(runtime,record){

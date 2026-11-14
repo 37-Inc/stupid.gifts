@@ -607,6 +607,8 @@ test('a catch-up for the accepted slot does not claim, restore, inspect or publi
     const prior={path:'/previous/accepted',sha256:'e'.repeat(64)};
     f.files.set(dir+'/config.json',bytes({codeSha:SOURCE,runId:'original',inputs:{previous:prior}}));
     f.runtime.state.readPointer=(name,...args)=>name==='last-success'?bytes({...next,control:{path:'/newer/accepted',sha256:'f'.repeat(64)}}):read(name,...args);
+    assert.equal((await f.run({mode})).reason,'historical_slot_finalized');
+    f.runtime.state.readPointer=(name,...args)=>name==='last-success'?bytes({...next,manifestSha256:'e'.repeat(64)}):read(name,...args);
     assert.equal((await f.run({mode})).errorCode,'catalog_hosted_slot_successor_changed');
     assert.deepEqual([f.events.length,f.restored.length,f.checkedOut.length,f.calls.length],before);
     f.runtime.state.readPointer=(name,...args)=>name==='last-success'?bytes({...next,control:prior}):read(name,...args);
