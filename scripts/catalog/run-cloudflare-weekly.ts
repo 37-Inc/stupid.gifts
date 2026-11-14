@@ -616,10 +616,13 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     if(reviewedPreparation&&(!config.publication.runtimeCatalog||['created','phases_running','phases_complete'].includes(cp.phase))){
       const journalRef=cp.pins.automationJournal??state().automationJournal as ArtifactRef|undefined;
       const initial=journalRef?await readOrdered(ws,journalRef):undefined;
+      // Each pre-dispatch journal commit already writes a checkpoint. Include the
+      // last confirmed owner there; a crash in between is reconciled by exact D1 receipt.
+      let applying:{current:MutationOwner}|undefined;
       const journal=createReviewedPhaseJournal({initial,read:(ref:ArtifactRef)=>readOrdered(ws,ref),readReceipt:(ref:ArtifactRef)=>ws.readReceipt(ref),
         put:(value:unknown)=>putOrdered(ws,value,now(),'phase'),
         save:async(value:unknown)=>{const pin=await putOrdered(ws,value,now(),'phase');
-          await write({state:{...state(),automationJournal:{sha256:pin.sha256,reference:pin.reference}}});}});
+          await write({...(applying?{owner:applying.current}:{}),state:{...state(),automationJournal:{sha256:pin.sha256,reference:pin.reference}}});}});
       if(cp.phase==='created'||cp.phase==='phases_running'){
         const phases=config.cadence!.automation?automatedCatalogPhases(config.cadence!.automation,{runId:config.runId,photosOnly:config.cadence!.photosOnly})
           :[exactProductAdmissionPhase(config.cadence!.admitAsins)];
@@ -672,7 +675,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         if(owner)owner=await reconcileReviewedPhaseOwner({db,owner,actual:await readMutationOwner(db,scope),journal,runId:config.runId,catalogRevision:config.catalogRevision});
         else owner=await claimMutationOwnership(db,scope,{phase:'writing',ownerReference:config.runId,operationKey:sha256(`weekly:${options.configSha256}`)});
         if(!owner)return{state:'pending',phase:cp.phase,errorCode:'weekly_owner_busy',budget:await ws.budget()};
-        const cursor={current:owner};await write({owner});
+        const cursor=applying={current:owner};await write({owner});
         let capturedIntent:unknown=null;
         const maintenance=createD1CatalogMaintenanceStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision,preservePermanentListings:true,
           intent:async(method,args)=>{
@@ -684,14 +687,13 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           }});
         const telemetry=createD1CatalogTelemetryStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision,
           beforeMutation:input=>journal.beforeMutation(input)});
-        const checkpoint=()=>write({owner:cursor.current});
         const run=async()=>{
           const applicationStarted=Date.now();
-          await telemetry.startCatalogRun({id:config.runId,mode:'daily',trigger:'scheduled',gitSha:config.codeSha,config:{backfillLimit:0}});await checkpoint();
+          await telemetry.startCatalogRun({id:config.runId,mode:'daily',trigger:'scheduled',gitSha:config.codeSha,config:{backfillLimit:0}});
           const results=[],warnings=[],timingsMs:Record<string,number>={},merchandising:Record<string,unknown>={},changed=new Set<string>(),admitted=new Set<string>();
           for(let index=0;index<phases.length;index++){
             const key=`phase-${index}`,prepared=preparedPhases[index];
-            await applyReviewedPhase({key,journal,prepared,store:maintenance,telemetryStore:telemetry,runId:config.runId,checkpoint,
+            await applyReviewedPhase({key,journal,prepared,store:maintenance,telemetryStore:telemetry,runId:config.runId,
               withIntent:async(value:unknown,action:()=>Promise<unknown>)=>{capturedIntent=value;try{return await action();}finally{capturedIntent=null;}}});
             results.push(numbers(prepared.result));warnings.push(...prepared.warnings);Object.assign(merchandising,prepared.merchandising);
             for(const[key,value]of Object.entries(prepared.timingsMs))timingsMs[key]=(timingsMs[key]||0)+Number(value);

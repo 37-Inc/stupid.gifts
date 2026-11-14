@@ -196,7 +196,7 @@ export async function prepareReviewedPhase({ key, journal, execute, options, sto
   return prepared;
 }
 
-export async function applyReviewedPhase({ key, journal, prepared, store, telemetryStore, runId, withIntent, checkpoint }) {
+export async function applyReviewedPhase({ key, journal, prepared, store, telemetryStore, runId, withIntent }) {
   if (await journal.read(`${key}-applied`)) return;
   for (const mutation of prepared.mutations) {
     const args = copy(mutation.args);
@@ -215,11 +215,9 @@ export async function applyReviewedPhase({ key, journal, prepared, store, teleme
       await journal.put('failure-'+hash(failure),failure);
       throw error;
     }
-    await checkpoint();
   }
   for (let offset = 0; offset < prepared.items.length; offset += 20) {
     await telemetryStore.insertCatalogRunItems(runId, prepared.items.slice(offset, offset + 20));
-    await checkpoint();
   }
   await journal.put(`${key}-applied`, { schemaVersion: 1, preparationSha256: hash(prepared) });
 }
