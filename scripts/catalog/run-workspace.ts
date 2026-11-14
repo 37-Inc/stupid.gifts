@@ -810,14 +810,7 @@ async function loadState(directory:string,manifest:WorkspaceManifest,repairHead=
     previousHead={sequence:state.count,sha256:state.head};
     applyRecord(state,record,filename);
   }
-  for(const event of checkpoints){
-    if(!state.purged.has(event.ref.sha256)){
-      const sealed=await loadStored(directory,event.ref,manifest);if(sealed.kind!=='checkpoint')fail('checkpoint_body');
-      checkpoint(sealed.value as unknown as WorkspaceCheckpoint);
-      const {state:unused,...view}=sealed.value as unknown as WorkspaceCheckpoint;void unused;
-      if(!same(view,event.control))fail('checkpoint_body');
-    }
-  }
+  await verifyCheckpointBodies(directory,state,checkpoints);
   const head=await readJson(join(directory,'head.json')),next={sequence:state.count,sha256:state.head};
   if(!same(head,next)){
     // A fully fsynced trailing record is authoritative after lost head/ack.
@@ -825,8 +818,21 @@ async function loadState(directory:string,manifest:WorkspaceManifest,repairHead=
     if(!state.count||!same(head,previousHead))fail('journal_head');
     if(repairHead)await replaceHead(directory,previousHead,next);
   }
-  const usage=totals(state),limit=ceiling(state);if(requestLimit==='enforce'&&(usage.httpRequests>limit.httpRequests||usage.sqlStatements>limit.sqlStatements))fail('budget_exceeded');
+  verifyRestoredBudget(state);
   return state;
+}
+async function verifyCheckpointBodies(directory:string,state:State,checkpoints:Extract<Event,{type:'checkpoint'}>[]){
+  for(const event of checkpoints){
+    if(!state.purged.has(event.ref.sha256)){
+      const sealed=await loadStored(directory,event.ref,state.manifest);if(sealed.kind!=='checkpoint')fail('checkpoint_body');
+      checkpoint(sealed.value as unknown as WorkspaceCheckpoint);
+      const {state:unused,...view}=sealed.value as unknown as WorkspaceCheckpoint;void unused;
+      if(!same(view,event.control))fail('checkpoint_body');
+    }
+  }
+}
+function verifyRestoredBudget(state:State){
+  const usage=totals(state),limit=ceiling(state);if(state.requestLimit==='enforce'&&(usage.httpRequests>limit.httpRequests||usage.sqlStatements>limit.sqlStatements))fail('budget_exceeded');
 }
 function receipt(value:ProviderReceipt) {
   if(!value||value.schemaVersion!==1||!['amazon-observation','embedding-response'].includes(value.kind)||!Array.isArray(value.products)||value.products.length>20)fail('receipt');
@@ -965,13 +971,14 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
     prefetched.clear();prefetchErrors.clear();
     const state=empty(manifest,input.requestLimit??'enforce');
     for(const {name,record}of records.reverse())applyRecord(state,record,name);
-    registrations=state.bodyRegistrations;
+    // commit() observes remote ACKs before apply() advances caller state.
+    registrations=new Map(state.bodyRegistrations);
     if(state.head!==head.sha256||state.count!==head.sequence)fail('journal_chain');
     // These bytes are already durable in R2. The local copy is a verified cache,
     // not another authority requiring a disk flush for every restored record.
     // New append/dispatch ACKs still use the fully synced default writer.
     await immutable(join(directory,'manifest.json'),manifest,false);
-    for(const {name,record}of records)await immutable(join(directory,'events',name),record,false);
+    await transferAll(records,({name,record})=>immutable(join(directory,'events',name),record,false));
     await transferAll([...state.controls.values()],async({ref,kind})=>{
       const artifact=validatePublicationControlArtifact(remoteJson(await cached(ref.reference,8*1024*1024),8*1024*1024) as DurablePublicationArtifact);
       if(artifact.kind!==kind||sha256(canonicalJson(artifact.value))!==ref.sha256)fail('publication_control_hash');
@@ -1000,7 +1007,16 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
       if(local.sha256!==expected)fail('durable_local_fork');
       if(!same(local,head))await replaceHead(directory,local,head);
     }
-    const loaded=await loadState(directory,manifest,false,input.requestLimit);
+    // The remote chain was already replayed and each local file compared byte
+    // for byte. Only an unexpected local tail/fork needs the full disk replay.
+    const names=new Set((await readdir(join(directory,'events'))).filter(n=>!n.startsWith('.pending-')));
+    const exactCache=names.size===records.length&&records.every(({name})=>names.has(name))&&local.sequence<=head.sequence;
+    const loaded=exactCache?state:await loadState(directory,manifest,false,input.requestLimit);
+    if(exactCache){
+      if(!same(await readJson(join(directory,'head.json')),head))fail('journal_head');
+      await verifyCheckpointBodies(directory,state,records.flatMap(({record})=>record.event.type==='checkpoint'?[record.event]:[]));
+      verifyRestoredBudget(state);
+    }
     if(loaded.count!==head.sequence){
       // A failed remote CAS may leave ONE local fsynced tail. Reconcile its
       // original bytes/reservation remotely before permitting local head repair.

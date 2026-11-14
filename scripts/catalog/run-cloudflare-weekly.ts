@@ -293,6 +293,7 @@ export interface WeeklyDriverOptions {
   durable?:RunWorkspaceOptions['durable'];
 }
 type Dependencies={repository?:string;fetch?:typeof fetch;resolveToken?:(ref:KeychainRef)=>Promise<string>;resolveWranglerOAuth?:()=>Promise<string>;now?:()=>string;
+  beforeResume?:(spent:Awaited<ReturnType<RunWorkspace['budget']>>)=>Promise<void>;
   repairSavedAdmission?:true;
   /** Keep the hydrated revision in memory while an acknowledged native write becomes visible. */
   wait?:(ms:number)=>Promise<void>;
@@ -439,6 +440,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     workspace=await openRunWorkspace(workspaceOptions);const ws=workspace;
     if(adoption?canonicalJson(ws.execution)!==canonicalJson(adoption):ws.execution!==null)
       throw new Error('weekly_execution_adoption_required');
+    if(options.command==='resume'&&dependencies.beforeResume)await dependencies.beforeResume(await ws.budget());
     const finish=dependencies.finishRecovery;
     if(finish){
       const normal=await ws.readCheckpoint({controlOnly:true});

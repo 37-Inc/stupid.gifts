@@ -263,6 +263,15 @@ for(const target of ['event','body'])test(`same-runner resume refuses a tampered
   await assert.rejects(f.open({mode:'resume'}),/artifact_hash|journal_chain|body_registration/);
 });
 
+test('a stray local fork cannot use the already verified remote state',async t=>{
+  const f=await fixture(t),w=await f.open();await w.reserveBudget(reservation);await w.close();
+  const events=join(w.directory,'events'),[file]=await readdir(events);
+  const record=JSON.parse(await readFile(join(events,file)));
+  record.event.reservation.id='other-reservation';
+  await writeFile(join(events,'000001.'+sha256(canonicalJson(record))+'.json'),encode(record),{mode:0o600});
+  await assert.rejects(f.open({mode:'resume'}),/journal_chain/);
+});
+
 test('provider dispatch cannot pass an unfinished remote reservation CAS',async t=>{
   const f=await fixture(t),w=await f.open(),original=f.store.compareAndSwap.bind(f.store);let release,entered,dispatched=false;
   const barrier=new Promise(resolve=>{release=resolve;}),reached=new Promise(resolve=>{entered=resolve;});
