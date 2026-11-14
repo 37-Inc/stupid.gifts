@@ -3,7 +3,7 @@ import {pathToFileURL} from 'node:url';
 import {CATALOG_SCOPE} from './automation-runtime.mjs';
 import {createCatalogD1Rest,createCatalogD1ReadOnlyRest} from './d1-write-rest.ts';
 import {canonicalJson} from '../../lib/catalog/canonical-json.ts';
-import {prepareStaffProduct,staffIntent,staffReady} from './staff-preparation.mjs';
+import {legacyStaffJournalSource,prepareStaffProduct,staffIntent,staffReady} from './staff-preparation.mjs';
 const requestDay=at=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(at));
 export async function prepareAdminAdmissions(runtime,{checkout,source}){
   const s=CATALOG_SCOPE,db=await createCatalogD1ReadOnlyRest({accountId:s.accountId,databaseId:s.databaseId,databaseName:s.databaseName,token:await runtime.token(),requestLimit:'observe'});
@@ -17,7 +17,7 @@ export async function prepareAdminAdmissions(runtime,{checkout,source}){
     // Never execute today's provider logic claiming to be an older source.
     if(!repos.has(original))repos.set(original,await checkout(original));
     const repository=repos.get(original);
-    const prepare=original===source?prepareStaffProduct:(await import(pathToFileURL(repository+'/scripts/catalog/staff-preparation.mjs').href)).prepareStaffProduct;
+    const prepare=original===source||original===legacyStaffJournalSource?prepareStaffProduct:(await import(pathToFileURL(repository+'/scripts/catalog/staff-preparation.mjs').href)).prepareStaffProduct;
     results.push(await prepare({runtime,db,row,day,source:original,repository}));
   }
   return {state:'prepared',requests:rows.length,results};

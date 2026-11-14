@@ -6,13 +6,30 @@ import {registerHostedWorkspaceCleanup} from './hosted-cleanup.mjs';
 import {openRunWorkspace} from './run-workspace.ts';
 import {createD1CatalogPreparationStore} from './maintenance-d1.ts';
 import {createReviewedPhaseJournal} from './reviewed-provider-phases.mjs';
-import {prepareCatalogProducts} from './prepare-products.mjs';
 import {createCatalogProviderEvidence} from './provider-evidence.ts';
 import {exactProductAdmissionPhase} from '../ops/catalog-daily.mjs';
 import {isCatalogAsin} from '../../lib/catalog/automation-cohort.ts';
 import {resolveReadToken} from './check-cloudflare-runner.ts';
+import {savedAdmissionEvidence} from './saved-admission.mjs';
+import {pathToFileURL} from 'node:url';
 const fail=()=>{throw Error('catalog_admin_preparation_invalid');};
 const ref='staff/exact-product-preparation-v1';
+const journalRef=cp=>cp?.checkpoint.state?.journal??cp?.checkpoint.pins.journal;
+// Only this observed predecessor has a pending staff workspace with the old
+// immutable journal pin. Keep provider logic in the original source checkout.
+export const legacyStaffJournalSource='93498e6ea4e340e769187ca43003b47b5b827f21';
+export async function restoreStaffCollect(ws,journal,asin,runId,tag){
+  const stage='refresh-collect',inputSha256=sha256(canonicalJson({run:runId,phase:0,call:0,ids:[asin]})),k=stage+'-'+inputSha256;
+  if(!await journal.read(k+'-dispatch')||await journal.read(k+'-result'))return;
+  const refs=(await ws.registeredArtifacts()).filter(r=>r.kind==='amazon-observation');
+  if(refs.length!==1)throw Error('catalog_admin_supplier_outcome_unknown');
+  const ref=refs[0].ref,receipt=await ws.readReceipt(ref);
+  if(receipt.operation!=='getItems'||canonicalJson(receipt.requestedIds)!==canonicalJson([asin])
+    ||canonicalJson(receipt.returnedIds)!==canonicalJson([asin])||!receipt.products.length||receipt.products.some(p=>p.id!==asin))fail();
+  const products=await savedAdmissionEvidence({}, {receipt},[asin],tag).amazon('getItems',null,null,[asin]);
+  if(!journal.snapshot().receipts.some(r=>r.sha256===ref.sha256))await journal.receipt(ref);
+  await journal.put(k+'-result',{schemaVersion:1,stage,inputSha256,completedAt:receipt.observedAt,value:products});
+}
 export function staffPaths(runtime,day,asin){
   if(!isCatalogAsin(asin)||!/^\d{4}-\d\d-\d\d$/.test(day))fail();
   const base=runtime.care+'/staff-preparation/'+day+'/'+asin;
@@ -45,9 +62,9 @@ export async function prepareStaffProduct({runtime,repository,source,db,row,day,
     await registerHostedWorkspaceCleanup(runtime,ws.manifest);
     const {putOrdered,readOrdered}=await import('./run-cloudflare-weekly.ts');
     let cp=await ws.readCheckpoint();
-    const journal=createReviewedPhaseJournal({initial:cp&&await readOrdered(ws,cp.checkpoint.pins.journal)||undefined,
+    const journal=createReviewedPhaseJournal({initial:cp&&await readOrdered(ws,journalRef(cp))||undefined,
       read:r=>readOrdered(ws,r),readReceipt:r=>ws.readReceipt(r),put:v=>putOrdered(ws,v,now(),'phase'),
-      save:async v=>{const pin=await putOrdered(ws,v,now(),'phase');cp=await ws.writeCheckpoint(cp?.sha256??null,{phase:'preparing',owner:null,state:{},pins:{journal:pin},phaseComplete:null});}});
+      save:async v=>{const journal=await putOrdered(ws,v,now(),'phase');cp=await ws.writeCheckpoint(cp?.sha256??null,{phase:'preparing',owner:null,state:{journal},pins:cp?.checkpoint.pins??{},phaseComplete:null});}});
     const tag='goose-gifts-37-20';
     const evidence=createCatalogProviderEvidence({associateTag:tag,now,readReceipt:r=>ws.readReceipt(r),
       saveReceipt:async v=>{const r=await ws.saveReceipt(v);await journal.receipt(r);return r;},
@@ -55,17 +72,20 @@ export async function prepareStaffProduct({runtime,repository,source,db,row,day,
         await journal.put('short-proof-'+r.sha256,r);return r;}});
     const store=createD1CatalogPreparationStore({db,runId:opts.runId,catalogRevision:opts.runId,preservePermanentListings:true});
     if(!await journal.read('phase-0-prepared')){
-      await prepare({runtime,tag,phases:[exactProductAdmissionPhase([asin])],runId:opts.runId,journal,evidence,store,now});
+      await restoreStaffCollect(ws,journal,asin,opts.runId,tag);
+      await prepare({runtime,repository,tag,phases:[exactProductAdmissionPhase([asin])],runId:opts.runId,journal,evidence,store,now});
     }
-    const ready={...intent,manifestSha256:ws.manifestSha256,journal:cp.checkpoint.pins.journal,preparedAt:now()};
+    const ready={...intent,manifestSha256:ws.manifestSha256,journal:journalRef(cp),preparedAt:now()};
     await runtime.state.put(paths.ready,ready);return{state:'ready',elapsedMs:Date.parse(ready.preparedAt)-Date.parse(intent.startedAt)};
   }finally{await ws.close();}
 }
-async function prepareExact({runtime,tag,...input}){
-  const {providerEnvironment,scopedProviders}=await import('./run-cloudflare-weekly.ts');
+async function prepareExact({runtime,repository,tag,...input}){
+  const original=p=>import(pathToFileURL(repository+'/scripts/'+p).href);
+  const {providerEnvironment,scopedProviders}=await original('catalog/run-cloudflare-weekly.ts');
   const env=await providerEnvironment({credentials:{...runtime.credentials,amazonVersion:'3.1'},catalog:{associateTag:tag,marketplace:'www.amazon.com'},inputs:{}},resolveReadToken,true);
   return scopedProviders(env,async()=>{
-    const {executeCatalog}=await import('../ops/prefetch-catalog.mjs');
+    const {executeCatalog}=await original('ops/prefetch-catalog.mjs');
+    const {prepareCatalogProducts}=await original('catalog/prepare-products.mjs');
     return prepareCatalogProducts({...input,execute:executeCatalog});
   });
 }
@@ -79,7 +99,7 @@ export async function importStaffPreparation({runtime,repository,pin,ws,journal,
   try{
     const {readOrdered}=await import('./run-cloudflare-weekly.ts');
     const cp=await source.readCheckpoint();
-    if(cp?.checkpoint.owner!==null||canonicalJson(cp.checkpoint.pins.journal)!==canonicalJson(pin.journal))fail();
+    if(cp?.checkpoint.owner!==null||canonicalJson(journalRef(cp))!==canonicalJson(pin.journal))fail();
     const snapshot=await readOrdered(source,pin.journal);
     const saved=createReviewedPhaseJournal({initial:snapshot,read:r=>readOrdered(source,r),readReceipt:r=>source.readReceipt(r)});
     for(const r of snapshot.receipts){
