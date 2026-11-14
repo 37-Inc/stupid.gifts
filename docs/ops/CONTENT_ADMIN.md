@@ -8,7 +8,7 @@ Staff access uses the owner-approved path-only Access app. The existing `/admin`
 
 ## Explicit boundary
 
-### Product-preparation simplification (not instant publication yet)
+### On-demand additions, one shared pipeline
 
 New exact-ASIN admissions and automatic care share the same saved preparation
 code. Amazon collection, short-copy drafting/review and embedding preparation
@@ -24,28 +24,27 @@ native-index history instead of downloading those old vectors again. Changed
 vectors still receive exact provider readback, and the full inventory/owner
 fence remains. Explicit native-history audits retain live readback by default.
 
-This is the first part of `roadmap-lbbz1.32.1`, **not** a claim that the endpoint
-can publish independently yet. The hosted queue, whole-catalog publication and
-native-index acceptance still serialize admissions behind pending care. Finish
-that integration and prove an actual endpoint admission before enabling an
-immediate-dispatch credential or describing an addition as live. Do not run a
-second supplier batch or take over the existing publisher to demonstrate speed.
+An authenticated admission wakes the existing coordinator immediately; it does
+not wait for the daily schedule or build/deploy the application. Jobs still share
+one publication queue, so an active catalog job can delay an addition. Do not
+create another publisher or refetch saved work to bypass it. Provider preparation
+runs before database-writer acquisition; final publication retains the existing
+catalog head, receipt and original-history checks.
 
-The implementation includes a **disabled** dispatch adapter for the approved repo-only
-GitHub credential. `CONTENT_ADMIN_DISPATCH_ENABLED` remains `false`. Migration
-0021 and `GITHUB_CATALOG_DISPATCH_TOKEN` are not provisioned by app deployment.
+`CONTENT_ADMIN_DISPATCH_ENABLED=true` uses the approved repo-only GitHub
+credential. Migration0021 must be verified before deploying that setting;
+neither it nor `GITHUB_CATALOG_DISPATCH_TOKEN` is provisioned by app deployment.
 The owner-approved Actions-write/Metadata-read token for this repository was
 created November 12 and saved encrypted as that Cloudflare secret; it expires
-December 12, 2026. This does not activate dispatch or prove product admission.
-If later enabled, the adapter can only dispatch `catalog-manual.yml` on `main`
+December 12, 2026. The adapter can only dispatch `catalog-manual.yml` on `main`
 in `admin` mode, after authenticated, same-origin, idempotent admission storage.
 It cannot send caller-chosen workflow/ref/ASIN inputs. A durable dispatch claim
 prevents duplicate POSTs after retries or lost acknowledgements. Its private
 status is distinct from product publication; rejected/unknown dispatch leaves
 the original admission queued for the existing coordinator. Provider responses
-and credentials are never stored in the request or dispatch record. Merely
-enabling this adapter would still use the existing serialized publication
-queue: finish that separation and its endpoint proof before changing the flag.
+and credentials are never stored in the request or dispatch record. A dispatch
+ACK is not product publication. GET the request to distinguish dispatch from
+accepted catalog application; retain a real end-to-end admission measurement.
 The current GitHub dispatch API's numeric workflow-run ID is retained when
 acknowledged, so status can identify the real run rather than infer it from a
 timestamp. A malformed/lost response remains unknown and is not redispatched.
@@ -67,9 +66,9 @@ need editorial approval. An article is not required for listing or indexing.
 Admissions return HTTP202, `state: awaiting_application`,
 `publication: queued_for_existing_coordinator`. Saving an admission
 does **not** call Amazon/OpenAI. The existing serialized coordinator consumes
-up to ten explicit staff requests after a completed morning run, or through
-manual workflow mode `admin`. The optional dispatch adapter above is disabled;
-there is no new clock. Unrelated pending care finishes first. A durable claim binds the
+up to ten explicit staff requests through on-demand workflow mode `admin`; the
+completed morning run remains a recovery fallback. There is no new clock.
+Unrelated pending care finishes first. A durable claim binds the
 exact ASINs and original date across retries; late requests stay queued. Existing
 identities (including held records) settle without refetching. Accepted runs
 report `catalog_identity_recorded` or `not_admitted`, not a promise that every
@@ -94,16 +93,17 @@ override underlying stock/rights holds. Contradictory old semantic vectors are
 excluded; correct keyword results remain available without a model call.
 
 The [runtime catalog](RUNTIME_CATALOG.md) publishes data independently of app
-builds. No temporary GitHub auto-dispatch bridge or direct product-table writer
-is added. Path-only staff authentication and immediate runtime edits were
+builds. The fixed workflow dispatch only wakes the existing coordinator; it is
+not a direct product-table writer. Path-only staff authentication and immediate runtime edits were
 live-verified for `.32`; the first real queued-admission proof is tracked in `.34`.
 
 ## Add an exact product without a full refresh
 
 1. POST `/admissions` once per owner-selected ASIN. Retain the request ID.
-2. Run the existing hosted workflow in `admin` mode, or let the next completed
-   morning run consume the queue. If another catalog run is pending, finish that
-   original run first; do not create a replacement batch or a local publisher.
+2. The response includes its fixed-workflow dispatch status and acknowledged run
+   ID when available. It starts on demand. Unknown/rejected dispatch keeps the
+   request; inspect the existing run before any manual continuation. Pending care
+   resumes under its original identity first, never a replacement batch.
 3. The same normal admission pipeline fetches only the claimed ASINs, deduplicates
    against all identities, reviews factual short copy and saves embeddings once.
    It does not run discovery, refresh the rest of the catalog, or build/deploy the

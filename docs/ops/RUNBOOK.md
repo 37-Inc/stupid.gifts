@@ -183,7 +183,8 @@ Owner-picked admissions use `prepare --run <label> --admit-asins ASIN1,ASIN2`,
 then the same saved run. No unrelated fetch/search or automatic campaign joining;
 this does not change scheduled cadence.
 For staff requests, POST the exact ASINs through the [content admin API](CONTENT_ADMIN.md),
-then use the existing workflow's `admin` mode or next completed morning run.
+which wakes the existing workflow's `admin` mode immediately. A completed morning
+run also consumes saved requests if an on-demand dispatch was unavailable.
 Direct operator `admit` with `admit_asins` uses that same exact-ASIN admission
 pipeline. Both wait for unrelated pending publication to accept. Neither runs
 discovery, refreshes unrelated gifts, rebuilds the application, or permits a

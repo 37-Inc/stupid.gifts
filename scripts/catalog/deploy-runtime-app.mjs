@@ -61,6 +61,7 @@ export async function deployRuntimeApp({runtime,source,root=ROOT,send=fetch,comm
     config.vectorize[1].index_name=derived.index_name;
     if(bindings.find(b=>b.name==='DB')?.id!==SCOPE.databaseId||bindings.find(b=>b.name==='VECTORIZE')?.index_name!==SCOPE.indexName
       ||!bindings.some(b=>b.name==='OPENAI_API_KEY'&&b.type==='secret_text')
+      ||contentAdminSettings.CONTENT_ADMIN_DISPATCH_ENABLED==='true'&&!bindings.some(b=>b.name==='GITHUB_CATALOG_DISPATCH_TOKEN'&&b.type==='secret_text')
       ||bindings.some(b=>b.name==='GITHUB_CATALOG_DISPATCH_TOKEN'&&b.type!=='secret_text'))fail('bindings_need_review');
     await fs.writeFile(configPath,JSON.stringify(config));
     const marker='runtime-app-'+source.slice(0,12)+'-'+output.manifestSha256.slice(0,12)+'-'+settingsSha256.slice(0,12),deploymentMarker=marker+'-activate';

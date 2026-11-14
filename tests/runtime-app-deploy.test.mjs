@@ -33,7 +33,7 @@ test('bootstrap uses real advisory D1 accounting and retains unknown attempts ac
   assert.ok(![...objects.values()].map(String).join('').includes('SYNTHETIC_TOKEN'));
   assert.ok(![...objects.values()].map(String).join('').includes('SELECT'));
 });
-function fixture({lostActivation=false,lostUpload=false,dispatchBinding}={}){
+function fixture({lostActivation=false,lostUpload=false,dispatchBinding={name:'GITHUB_CATALOG_DISPATCH_TOKEN',type:'secret_text'}}={}){
   const objects=new Map(),writes=[],state={version:old,marker:null,uploads:0,activations:0},bindings=[{name:'DB',type:'d1',id:SCOPE.databaseId},
     {name:'ASSETS',type:'assets'},{name:'VECTORIZE',type:'vectorize',index_name:SCOPE.indexName},{name:'SEMANTIC_VECTORIZE',type:'vectorize',index_name:'actual-existing-search'},
     {name:'OPENAI_API_KEY',type:'secret_text'},{name:'ENVIRONMENT',type:'plain_text',text:'production'},{name:'SEMANTIC_SEARCH_ENABLED',type:'plain_text',text:'true'},
@@ -83,7 +83,12 @@ test('app deploy retains an existing dispatch secret without putting it in gener
   assert.equal((await deployRuntimeApp({...f,source})).state,'deployed');
   assert.deepEqual(f.state.bindings.find(b=>b.name==='GITHUB_CATALOG_DISPATCH_TOKEN'),{name:'GITHUB_CATALOG_DISPATCH_TOKEN',type:'secret_text'});
   assert.ok(!JSON.stringify([...f.objects.values()].map(bytes=>Buffer.from(bytes).toString())).includes('TEST_ONLY_DISPATCH_TOKEN'));
-  assert.equal(contentAdminSettings.CONTENT_ADMIN_DISPATCH_ENABLED,'false','not activated before independent publication proof');
+  assert.equal(contentAdminSettings.CONTENT_ADMIN_DISPATCH_ENABLED,'true');
+});
+test('enabled admission dispatch requires its approved secret before app upload',async()=>{
+  const f=fixture({dispatchBinding:null});
+  await assert.rejects(deployRuntimeApp({...f,source}),/runtime_app_bindings/);
+  assert.equal(f.state.uploads,0);assert.equal(f.state.activations,0);
 });
 test('app deploy rejects a plaintext dispatch credential before uploading',async()=>{
   const f=fixture({dispatchBinding:{name:'GITHUB_CATALOG_DISPATCH_TOKEN',type:'plain_text',text:'TEST_ONLY_DISPATCH_TOKEN'}});

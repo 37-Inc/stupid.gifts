@@ -100,7 +100,8 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
           return response({serving:options.releaseIdentity??null,catalogRevision:snapshot.catalogRevision,owner,pending,lastRefresh,lastBuildFailure,
             publicationState:livePending?'live_awaiting_bookkeeping':pending?'pending_not_confirmed_live':'no_pending_build',
             hostedSuccessor:await options.hostedStatus?.()??'not_observed',canStartAnotherPublisher:false,requests:await Promise.all((await store.recent()).map(withApplication)),
-            applicationEnabled:Boolean(options.applyCollection),applications:{collections:options.applyCollection?'runtime_data':'draft_only',products:options.applyCollection?'runtime_data':'draft_only',admissions:'existing_coordinator_queue'}});
+            applicationEnabled:Boolean(options.applyCollection),applications:{collections:options.applyCollection?'runtime_data':'draft_only',products:options.applyCollection?'runtime_data':'draft_only',
+              admissions:env.CONTENT_ADMIN_DISPATCH_ENABLED==='true'?'on_demand_existing_coordinator':'existing_coordinator_queue'}});
         }
         if(path==='/campaigns'){
           if(options.campaigns)return response(await options.campaigns());
