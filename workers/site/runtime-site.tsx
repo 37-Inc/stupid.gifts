@@ -18,7 +18,7 @@ import {createRelatedGiftSelector} from '../../static-site/lib/related-gifts.ts'
 import {SHOW_PRESETS,ACTIVE_SHOW_PRESET} from '../../static-site/lib/show-rehearsal.ts';
 import {buildGiftPageSchema} from '../../lib/gift-page-schema.ts';
 import {shortProductName} from '../../static-site/lib/product-presentation.ts';
-import {PHOTO_SHARD_SIZE} from '../../static-site/lib/photo-shard.ts';
+import {PHOTO_SHARD_SIZE,PHOTO_PLACEHOLDER} from '../../static-site/lib/photo-shard.ts';
 import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import {createStaticFeedPlan} from './feed.ts';
 
@@ -67,6 +67,21 @@ async function browseProducts(products:PublicCatalogProduct[],snapshot:CatalogSn
   for(let i=0;i<24;i++){const p=[0,1,4,8,13,19].includes(i)?anchors.shift()??rotation.shift():rotation.shift()??anchors.shift();if(p)opening.push(p);}
   return [...opening,...ranked.filter(p=>!used.has(p.id))];
 }
+/** A photo lapse changes a homepage slot, never a product or the saved edition. */
+function picturedOpening(ordered:PublicCatalogProduct[],slots:Readonly<Record<string,unknown>>){
+  const pictured=(p:PublicCatalogProduct)=>p.imageUrl!==PHOTO_PLACEHOLDER||Object.hasOwn(slots,p.id);
+  const opening=ordered.slice(0,24);
+  let next=opening.length;
+  for(let i=0;i<opening.length;i++){
+    if(pictured(opening[i]))continue;
+    while(next<ordered.length&&!pictured(ordered[next]))next++;
+    if(next===ordered.length)break;
+    opening[i]=ordered[next++];
+  }
+  if(next===opening.length)return ordered;
+  const used=new Set(opening.map(p=>p.id));
+  return [...opening,...ordered.filter(p=>!used.has(p.id))];
+}
 /** Only descriptors from accepted public data can address R2. No URL, arbitrary
  * object key, private journal or supplier endpoint is accepted from a caller. */
 export async function runtimePublicAsset(request:Request,env:RuntimeSiteEnv,view:RuntimeCatalogView,path:string,now=Date.now){
@@ -83,16 +98,7 @@ export async function runtimePublicAsset(request:Request,env:RuntimeSiteEnv,view
 async function prepare(view:RuntimeCatalogView,options:RuntimeSiteOptions,now:()=>number){
   const snapshot=view.data.snapshot,merchandising=readMerchandising(view.data.merchandising)??{},at=now();
   const products=selectedProducts(snapshot,at,merchandising),edition=collection(view,'homepage').edition??view.data.homepage;
-  const ranked=await browseProducts(products,snapshot,edition),cards=ranked.map(projectCard);
-  // Preserve the maintained static card-shard identity contract, without
-  // compiling the snapshot or depending on its build-only Node hashing module.
-  const version=await runtimeDigest(JSON.stringify({schemaVersion:1,initialBrowseCount:24,feedShardSize:24,randomPoolLimit:48,catalogRevision:snapshot.catalogRevision,cards})),base='/catalog/'+version;
-  const feedCount=Math.ceil(Math.max(0,cards.length-24)/24),virtual=new Map<string,{value:unknown;deadline:number}>();
-  const shard=(kind:'feed'|'random',items:typeof cards,next:string|null)=>({schemaVersion:1,status:items.length?'ready':'unavailable',catalogRevision:snapshot.catalogRevision,
-    version,kind,eligibleUntil:earliestCatalogExpiry(items),products:items,next});
-  for(let i=0;i<feedCount;i++){const items=cards.slice(24+i*24,48+i*24);virtual.set(`${base}/feed-${i+1}.json`,
-    {value:shard('feed',items,i+1<feedCount?`${base}/feed-${i+2}.json`:null),deadline:Math.min(...items.map(p=>catalogDeadline(p.eligibleUntil)))});}
-  const random=cards.slice(0,48);virtual.set(base+'/random.json',{value:shard('random',random,null),deadline:Math.min(...random.map(p=>catalogDeadline(p.eligibleUntil)))});
+  const virtual=new Map<string,{value:unknown;deadline:number}>();
   const photoVersion=await runtimeDigest(canonicalJson({revision:snapshot.catalogRevision,photos:snapshot.products.filter(p=>p.persistent&&p.eligibleUntil!==null).map(p=>[p.id,p.imageUrl,p.eligibleUntil])}));
   const photoBase='/catalog/'+photoVersion,index:{schemaVersion:1;status:'ready';version:string;products:Record<string,{shard:number;eligibleUntil:string}>}={schemaVersion:1,status:'ready',version:photoVersion,products:{}};
   const photoGroups=new Map<string,PublicCatalogProduct[]>();
@@ -104,6 +110,14 @@ async function prepare(view:RuntimeCatalogView,options:RuntimeSiteOptions,now:()
     virtual.set(`${photoBase}/photos-${photoShard}.json`,{value:{schemaVersion:1,status:'ready',version:photoVersion,eligibleUntil,
       images:Object.fromEntries(batch.map(p=>[p.id,{imageUrl:p.imageUrl,eligibleUntil}]))},deadline:Date.parse(eligibleUntil)});}
   virtual.set(photoBase+'/photos.json',{value:index,deadline:Math.min(...Object.values(index.products).map(p=>Date.parse(p.eligibleUntil)))});
+  const ranked=picturedOpening(await browseProducts(products,snapshot,edition),index.products),cards=ranked.map(projectCard);
+  const version=await runtimeDigest(JSON.stringify({schemaVersion:1,initialBrowseCount:24,feedShardSize:24,randomPoolLimit:48,catalogRevision:snapshot.catalogRevision,cards})),base='/catalog/'+version;
+  const feedCount=Math.ceil(Math.max(0,cards.length-24)/24);
+  const shard=(kind:'feed'|'random',items:typeof cards,next:string|null)=>({schemaVersion:1,status:items.length?'ready':'unavailable',catalogRevision:snapshot.catalogRevision,
+    version,kind,eligibleUntil:earliestCatalogExpiry(items),products:items,next});
+  for(let i=0;i<feedCount;i++){const items=cards.slice(24+i*24,48+i*24);virtual.set(`${base}/feed-${i+1}.json`,
+    {value:shard('feed',items,i+1<feedCount?`${base}/feed-${i+2}.json`:null),deadline:Math.min(...items.map(p=>catalogDeadline(p.eligibleUntil)))});}
+  const random=cards.slice(0,48);virtual.set(base+'/random.json',{value:shard('random',random,null),deadline:Math.min(...random.map(p=>catalogDeadline(p.eligibleUntil)))});
   const routes:SiteAssetManifest['routes']={'/':pageRoute('/'),'/h':pageRoute('/h',false),'/random-gift':pageRoute('/random-gift'),
     '/gift-guides':pageRoute('/gift-guides'),'/privacy':pageRoute('/privacy'),'/howie':pageRoute('/howie',false)};
   for(const p of snapshot.products){const base=persistentPublicProduct(p);routes['/gifts/'+p.slug]={...pageRoute('/gifts/'+p.slug),
