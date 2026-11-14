@@ -197,7 +197,8 @@ export async function unchangedPhotoNativeIds(db:CatalogD1,history:NativeHistory
       if(!row||!state||!member||member.sourceFactsHash!==row.source_facts_hash||member.embeddingTextHash!==row.embedding_text_hash
         ||!row.public_display_json)continue;
       const display=JSON.parse(String(row.public_display_json));
-      if(canonicalJson(semanticPublicFields(prior))!==canonicalJson(semanticPublicFields(display))
+      if(!display||typeof display!=='object'||Array.isArray(display)
+        ||canonicalJson(semanticPublicFields(prior))!==canonicalJson(semanticPublicFields(display))
         ||canonicalJson(semanticPublicFields(prior,'canonical-short-description-v2'))!==canonicalJson(semanticPublicFields(display,'canonical-short-description-v2')))continue;
       try{preservedPhotoVector(row,state,prior,member,revision);}
       catch(error){if(error instanceof Error&&error.message==='vector_original_unproven')continue;throw error;}

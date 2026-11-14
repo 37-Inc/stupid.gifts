@@ -92,6 +92,9 @@ test('renewed photos retain only the exact receipted original, otherwise use ord
   sql.prepare('INSERT INTO catalog_maintenance_products VALUES(?,?,?)').run(id,state.embedding_native_base64,state.embedding_provenance_json);
   const check=()=>unchangedPhotoNativeIds(db,[binding],new Set([publicId]),{products:[f.previous]},new Map([[publicId,f.product]]),[state],'next');
   assert.deepEqual([...await check()],[publicId]);
+  const previousDisplay=f.product.public_display_json;
+  for(const noDisplay of [null,'null']){f.product.public_display_json=noDisplay;assert.equal((await check()).size,0);}
+  f.product.public_display_json=previousDisplay;
   sql.prepare('INSERT INTO vector_sync_outbox VALUES(?,?)').run(publicId,'next');assert.equal((await check()).size,0);
   sql.exec('DELETE FROM vector_sync_outbox');sql.prepare("UPDATE catalog_vector_deliveries SET status='pending' WHERE delivery_id=?").run(delivery);assert.equal((await check()).size,0);
   sql.prepare("UPDATE catalog_vector_deliveries SET status='complete' WHERE delivery_id=?").run(delivery);
