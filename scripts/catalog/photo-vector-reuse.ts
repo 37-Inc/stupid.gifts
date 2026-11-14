@@ -10,6 +10,14 @@ import type {SemanticProduct} from './maintenance-state.ts';
 import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import type {CatalogSnapshot} from '../../lib/catalog/types.ts';
 type Row=Record<string,unknown>;
+/** One rule for both native and serving indexes. A supplier title can drift
+ * without changing either the permanent listing or its actual public overlay. */
+export function photoSearchInput(current:SemanticProduct,proofText:string,base:PublicCatalogProduct,display:PublicCatalogProduct|null){
+  const text=canonicalDescriptionEmbeddingInput(base);
+  return display?.persistent&&display.id===base.id&&display.publicId===base.publicId
+    &&proofText===text&&canonicalDescriptionEmbeddingInput(display.persistent)===text
+    &&canonicalDescriptionEmbeddingInput(display)===text?text:maintenanceEmbeddingText(current,proofText);
+}
 
 /** A real positive stock observation may restore an existing held gift. Its
  * previous accepted PUBLIC bytes then predate the immediately preceding
@@ -43,9 +51,7 @@ export function preservedPhotoVector(product:Row,state:Row,previous:PublicCatalo
   const current=JSON.parse(String(state.semantic_json)) as SemanticProduct,proof=JSON.parse(String(state.embedding_provenance_json));
   // A refreshed supplier title is not the cleared public title. The canonical
   // recipe may bind the unchanged listing, not this incidental supplier text.
-  const publicText=canonicalDescriptionEmbeddingInput(base);
-  const text=proof.text===publicText&&canonicalDescriptionEmbeddingInput(display)===publicText
-    ?publicText:maintenanceEmbeddingText(current,proof.text);
+  const text=photoSearchInput(current,proof.text,base,display);
   const bytes=Buffer.from(String(state.embedding_native_base64),'base64');
   if(current.id!==product.id||current.publicId!==member.publicId||current.sourceFactsHash!==member.sourceFactsHash
     ||proof.input!=='verified'||proof.model!=='text-embedding-3-small'||typeof proof.reference!=='string'||!proof.reference.trim()

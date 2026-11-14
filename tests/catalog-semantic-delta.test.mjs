@@ -69,6 +69,19 @@ test('photo-only fact refresh reuses the original serving identity and observati
   const before=structuredClone(x),current=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory);
   assert.deepEqual(current,original);assert.deepEqual(x,before);
 });
+test('both photo indexes keep the saved canonical input when only retailer wording changes',async()=>{
+  const x=await fixture(),proof=JSON.parse(x.state.embedding_provenance_json);
+  proof.text=canonicalDescriptionEmbeddingInput(x.product);proof.embeddingTextHash=sha256(proof.text);
+  x.state.embedding_provenance_json=JSON.stringify(proof);
+  const display={...x.product,imageUrl:'https://example.invalid/fresh.jpg',persistent:{...x.product}};
+  const sem=JSON.parse(x.state.semantic_json);sem.title='Different supplier headline';sem.punnyTitle=null;x.state.semantic_json=JSON.stringify(sem);
+  x.row.public_display_json=JSON.stringify(display);x.row.embedding_text_hash=null;
+  const capture=()=>({productSha256:hash(x.row),privateStateSha256:hash(x.state)});
+  const result=await deriveMaintenanceSearchVector(x.product,x.row,x.state,capture());
+  assert.equal(result.entry.inputSha256,proof.embeddingTextHash);assert.equal(result.entry.originalNativeSha256,proof.vectorBytesSha256);
+  display.title='Different public product';display.punnyTitle=null;x.row.public_display_json=JSON.stringify(display);
+  await assert.rejects(deriveMaintenanceSearchVector(x.product,x.row,x.state,capture()),/source_mismatch/);
+});
 test('supplier-only changes reuse verified semantic input without requiring a finite-photo overlay or a new observation',async()=>{
   for(const keepBinding of [false,true]){
     const x=await fixture(),original=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory);
