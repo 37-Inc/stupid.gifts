@@ -511,6 +511,7 @@ async function main(){
   }
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)main().catch(error=>{
-  const code=/^(?:catalog_(?:hosted|admin|operator_state|object_store)|run_workspace|routine|weekly|publication)_[a-z0-9_]{1,100}$/.test(error.message)?error.message:'catalog_hosted_coordinator_failed';
+  const safe=/^(?:catalog_(?:hosted|admin|operator_state|object_store)|run_workspace|routine|weekly|publication)_[a-z0-9_]{1,100}$/;
+  const code=[error.cause?.message,error.message].find(m=>typeof m==='string'&&(safe.test(m)||['editorial_storage_unconfirmed','editorial_dispatch_uncertain'].includes(m)))??'catalog_hosted_coordinator_failed';
   console.error(JSON.stringify({state:'attention',errorCode:code,pendingPreserved:true}));process.exitCode=1;
 });
