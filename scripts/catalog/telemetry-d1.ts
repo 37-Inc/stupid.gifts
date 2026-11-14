@@ -120,9 +120,10 @@ export function createD1CatalogTelemetryStore(options:{db:CatalogD1;owner:Mutati
           const statements=[assert(`EXISTS(SELECT 1 FROM catalog_runs r JOIN catalog_run_telemetry t ON t.run_id=r.id WHERE r.id=?
             AND ((r.status='running' AND t.finish_json IS NULL) OR
               (r.status IN('partial','failed') AND json_extract(t.finish_json,'$.status')=r.status)))`,[id])];
+          const prior=new Map((await rows('SELECT id,created_at FROM catalog_run_items WHERE id IN (SELECT value FROM json_each(?))',
+            [JSON.stringify(batch.map(item=>item.id))])).map(row=>[row.id,row.created_at]));
           for(const item of batch){
-            const prior=(await rows('SELECT created_at FROM catalog_run_items WHERE id=?',[item.id]))[0];
-            const created=prior?.created_at||now;const raw=canonicalJson({...item,created_at:created});
+            const created=prior.get(item.id)||now;const raw=canonicalJson({...item,created_at:created});
             statements.push(prepare(`INSERT INTO catalog_run_items(id,run_id,product_id,external_id,decision,requires_manual_review,created_at,source_record_json)
               VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,[item.id,id,item.product_id,item.external_id,item.decision,item.requires_manual_review?1:0,created,raw]),
             assert('EXISTS(SELECT 1 FROM catalog_run_items WHERE id=? AND run_id=? AND source_record_json=?)',[item.id,id,raw]));

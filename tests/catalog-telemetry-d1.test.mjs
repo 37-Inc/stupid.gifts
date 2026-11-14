@@ -46,6 +46,16 @@ test('confirmed atomic telemetry ACK avoids redundant post-commit receipt/owner 
   }finally{f.close();}
 });
 
+test('appending twenty observations costs the same read round trips as one',async()=>{
+  const f=await fixture();try{
+    await f.telemetry.startCatalogRun({id:RUN});
+    const append=n=>f.telemetry.insertCatalogRunItems(RUN,Array.from({length:n},()=>catalogRunItem(product,{decision:'selected'})));
+    const before=f.queries();await append(1);const after=f.queries();
+    await append(20);assert.equal(f.queries()-after,after-before);
+    assert.equal((await f.telemetry.loadCatalogRun(RUN)).items.length,21);
+  }finally{f.close();}
+});
+
 test('D1 telemetry preserves full run/items, immutable raw history, sequence, exact retry and shared maintenance cursor',async()=>{
   const f=await fixture();try{
     const start={id:RUN,mode:'weekly',trigger:'test-only',config:{maxNew:20},gitSha:'d'.repeat(40)};
