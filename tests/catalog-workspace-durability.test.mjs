@@ -106,6 +106,21 @@ test('legacy expired control can advance with old immutable pins; no expired bod
   await assert.rejects(restored.writeCheckpoint(next.sha256,{...next.checkpoint,pins:{publicationSummary:summary}}),/pin_rewrite/);
 });
 
+test('catalog-sized publication metadata survives both cold and warm runner recovery',async t=>{
+  const f=await fixture(t),w=await f.open({publicationControls:true});
+  const reviews=Array.from({length:10000},(_,i)=>({id:'B'+String(i).padStart(9,'0'),sourceSha256:HASH,appeal:'giftable'}));
+  assert.ok(encode(reviews).length>1024*1024);
+  const ref=await w.putPublicationControl('appeals',reviews);
+  await w.close();f.setNow(LATER);
+  // The first inspect restores R2 to disk; the following operator reopens that
+  // same verified cache. Both must use the control artifact's 8 MiB reader.
+  const directory=join(f.parent,'large-control-runner');
+  const cold=await f.open({directory,mode:'resume',publicationControls:true});
+  assert.deepEqual(await cold.readArtifact(ref),reviews);await cold.close();
+  const warm=await f.open({directory,mode:'resume',publicationControls:true});
+  assert.deepEqual(await warm.readArtifact(ref),reviews);
+});
+
 test('blob transfer batches metadata without changing any chunk bytes, hash, deadline or final ACK',async t=>{
   const f=await fixture(t),w=await f.open(),bytes=Buffer.alloc(8*1024*1024,7),count=32;
   const put=f.store.putImmutable,cas=f.store.compareAndSwap;let active=0,peak=0,acknowledged=0;

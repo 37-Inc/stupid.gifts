@@ -894,10 +894,10 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
   // The remote head anchors immutable local bytes. Reopening on the same
   // runner must not download the entire journal again; missing files still
   // restore from the store, and every reused byte is verified below.
-  const cached=async(name:string)=>{
+  const cached=async(name:string,max=MAX_JSON*2)=>{
     if(prefetched.has(name))return prefetched.get(name)!;
     if(prefetchErrors.has(name))throw prefetchErrors.get(name);
-    try{return{bytes:await readBytes(join(directory,name)),etag:''};}
+    try{return{bytes:await readBytes(join(directory,name),max),etag:''};}
     catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;return get(name);}
   };
   const put=async(name:string,bytes:Uint8Array)=>{
@@ -973,7 +973,7 @@ async function durableJournal(input:RunWorkspaceOptions,directory:string,create:
     await immutable(join(directory,'manifest.json'),manifest,false);
     for(const {name,record}of records)await immutable(join(directory,'events',name),record,false);
     await transferAll([...state.controls.values()],async({ref,kind})=>{
-      const artifact=validatePublicationControlArtifact(remoteJson(await cached(ref.reference),8*1024*1024) as DurablePublicationArtifact);
+      const artifact=validatePublicationControlArtifact(remoteJson(await cached(ref.reference,8*1024*1024),8*1024*1024) as DurablePublicationArtifact);
       if(artifact.kind!==kind||sha256(canonicalJson(artifact.value))!==ref.sha256)fail('publication_control_hash');
       await immutableBytes(join(directory,ref.reference),encoded(artifact),8*1024*1024,false);
     });
