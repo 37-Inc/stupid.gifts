@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import {canonicalJson,sha256} from './migration.ts';
-import {maintenanceEmbeddingText,maintenanceState} from './maintenance-state.ts';
+import {maintenanceState} from './maintenance-state.ts';
+import {photoSearchInput} from './photo-vector-reuse.ts';
 import {decodePgvectorSendBase64,encodePgvectorSendBase64} from './pgvector-binary.ts';
 import {persistentPublicProduct} from '../../lib/catalog/display.ts';
 import {DERIVED_SEARCH_PROFILE,normalizeSemanticPrefix,semanticProductInput,semanticPublicFields,
@@ -43,8 +44,8 @@ export async function deriveMaintenanceSearchVector(product:PublicCatalogProduct
   assertSource(product,row,state,inventory);
   if(state.embedding_present!==1||typeof state.embedding_native_base64!=='string')refuse();
   const native=decodePgvectorSendBase64(state.embedding_native_base64);
-  const proof=JSON.parse(String(state.embedding_provenance_json)),text=maintenanceEmbeddingText(
-    maintenanceState({...row,maintenance_semantic:state.semantic_json}),proof.text);
+  const proof=JSON.parse(String(state.embedding_provenance_json)),text=photoSearchInput(
+    maintenanceState({...row,maintenance_semantic:state.semantic_json}),proof.text,product,JSON.parse(String(row.public_display_json??'null')));
   if(proof.input!=='verified'||proof.model!==DERIVED_SEARCH_PROFILE.model||proof.text!==text
     ||proof.embeddingTextHash!==sha256(text)
     ||proof.vectorBytesSha256!==digest(Buffer.from(state.embedding_native_base64,'base64'))
