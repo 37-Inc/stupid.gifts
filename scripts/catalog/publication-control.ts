@@ -1,7 +1,7 @@
 import {canonicalJson,sha256} from './migration.ts';
 import {activatedPermanentSummary} from './activated-permanent-control.ts';
 import {catalogSuccessorBytes} from './approved-catalog-seal.ts';
-import {validateAutomationCohort} from '../../lib/catalog/automation-cohort.ts';
+import {isCatalogAsin,validateAutomationCohort} from '../../lib/catalog/automation-cohort.ts';
 import {validatePermanentCatalogSeal} from './permanent-catalog-seal.ts';
 
 export type PublicationControlKind='request'|'revision'|'summary'|'appeals'|'search-delta'|'publication-result';
@@ -49,7 +49,7 @@ export function validatePublicationControlArtifact(input:DurablePublicationArtif
     ||!['request','revision','summary','appeals','search-delta','publication-result'].includes(input.kind))fail();
   if(input.kind==='appeals'){
     if(!Array.isArray(input.value)||input.value.length>10000||input.value.some(v=>!exact(v,['id','sourceSha256','appeal'])
-      ||!/^B[A-Z0-9]{9}$/.test(v.id)||!hash(v.sourceSha256)||!['standout','giftable','ordinary','unreviewed'].includes(v.appeal)))fail();
+      ||!isCatalogAsin(v.id)||!hash(v.sourceSha256)||!['standout','giftable','ordinary','unreviewed'].includes(v.appeal)))fail();
     return input;
   }
   const v=input.value as Record<string,unknown>&{request?:Record<string,unknown>;revision?:Record<string,unknown>};

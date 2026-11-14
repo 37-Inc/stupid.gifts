@@ -7,6 +7,13 @@ import {preparePermanentCatalog,settlePermanentCatalog} from '../lib/catalog/fre
 import {approvedCohortOperationKey,prepareApprovedCohort} from '../lib/catalog/freeze-approved-cohort.ts';
 import {durableApprovedRevisionControl,hydrateDurableApprovedRevision} from '../scripts/catalog/approved-catalog-seal.ts';
 import {validatePublicationControlArtifact} from '../scripts/catalog/publication-control.ts';
+test('saved appeal controls accept the same ASINs as care, without weakening source binding',()=>{
+  const wrap=entry=>({schemaVersion:1,kind:'appeals',value:[entry]});
+  const valid={id:'B0G9M9XPSX',sourceSha256:'a'.repeat(64),appeal:'giftable'};
+  for(const id of [valid.id,'0762462876','123456789X'])assert.doesNotThrow(()=>validatePublicationControlArtifact(wrap({...valid,id})));
+  for(const patch of [{id:'1234'},{id:'not-an-asin'},{id:1234567890},{id:['0762462876']},{sourceSha256:'abc'},{appeal:'unknown'}])
+    assert.throws(()=>validatePublicationControlArtifact(wrap({...valid,...patch})),/publication_control_invalid/);
+});
 import {claimMutationOwnership} from '../lib/catalog/mutation-fence.ts';
 import {claimBuildRequest,beginBuildActivation,resolveBuildActivation,permanentPublicationDeadline} from '../lib/catalog/build-requests.ts';
 import {enqueuePublication,claimPublication,recordPublicationDispatch,completePublication,completeActivatedApprovedCatalogPublication} from '../lib/catalog/publication.ts';
