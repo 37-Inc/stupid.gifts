@@ -130,7 +130,10 @@ export async function prepareReviewedPhase({ key, journal, execute, options, sto
   const sources = store.getProductSourceVersions && options.dailyRefresh
     ? await store.getProductSourceVersions(options.selectedIds) : null;
   let identities;
-  const catalog = async () => identities ??= await store.getActiveCatalogIdentities({ includeInactive: true });
+  // A staff-picked ASIN only asks "does this identity already exist?" across
+  // all statuses. Visual discovery still needs the full catalog to compare gifts.
+  const catalog = async () => identities ??= options.admitAsins && !options.discoveryEditor && store.getExactCatalogIdentities
+    ? await store.getExactCatalogIdentities(options.admitAsins) : await store.getActiveCatalogIdentities({ includeInactive: true });
   const existing = new Set(options.dailyRefresh ? options.selectedIds : (await catalog()).map(p => p.id));
   const record = async (method, args) => {
     const intent = await evidence.intent(method, args);

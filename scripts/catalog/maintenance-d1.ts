@@ -88,7 +88,11 @@ const READ_METHODS = ['getActiveCatalogIdentities', 'getExistingEditorialWriteup
  * It uses the same canonical readers as maintenance, not a second product model. */
 export function createD1CatalogPreparationStore(options: PreparationOptions) {
   const store = createCatalogStore(options);
-  return Object.freeze(Object.fromEntries(READ_METHODS.map(name => [name, store[name]]))) as Pick<typeof store, typeof READ_METHODS[number]>;
+  const readers=Object.fromEntries(READ_METHODS.map(name => [name, store[name]])) as Pick<typeof store, typeof READ_METHODS[number]>;
+  return Object.freeze({...readers,async getExactCatalogIdentities(ids:string[]){
+    return (await options.db.prepare('SELECT id FROM products WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id')
+      .bind(JSON.stringify(idsInput(ids))).all<{id:string}>()).results;
+  }});
 }
 
 export function createD1CatalogMaintenanceStore(options: MaintenanceD1Options) {

@@ -49,10 +49,11 @@ function memory() {
 
 test('shared preparation restores evidence before use and saved exact additions never repeat providers or models', async () => {
   const saved=memory(),phases=[exactProductAdmissionPhase([id(1)])],events=[];
-  let executions=0,modelCalls=0;
+  let executions=0,modelCalls=0,lookups=0;
   const run=journal=>prepareCatalogProducts({phases,runId:'staff-exact',journal,
     evidence:{async restoreReceipt(){events.push('restore');},intent(){return {};},async amazon(){throw Error('test_only_unexpected_supplier');}},
-    store:{async getActiveCatalogIdentities(){return [];},async getProductSourceVersions(){return {}; }},
+    store:{async getActiveCatalogIdentities(){throw Error('full inventory not needed for one exact product');},
+      async getExactCatalogIdentities(ids){lookups++;assert.deepEqual(ids,[id(1)]);return [];},async getProductSourceVersions(){return {}; }},
     execute:async(options,_seed,_telemetry,store)=>{executions++;assert.equal(options.discoveryEditor,undefined);
       assert.equal(options.longEditorial,false);assert.equal(events.at(-1),'restore');
       await store.upsertProduct({...product},editorialSourceHash(product));return {inserted:1};},
@@ -60,7 +61,7 @@ test('shared preparation restores evidence before use and saved exact additions 
     progress:value=>{assert.equal(value.totalPhases,1);assert.ok(Number.isSafeInteger(value.elapsedMs));}});
   const journal=saved.journal();await journal.receipt(await saved.put({fixture:'original-observation'}));
   const first=await run(journal),second=await run(saved.journal());
-  assert.deepEqual(second,first);assert.equal(executions,1);assert.equal(modelCalls,0);
+  assert.deepEqual(second,first);assert.equal(executions,1);assert.equal(modelCalls,0);assert.equal(lookups,1);
   assert.deepEqual(events,['restore','restore']);
   assert.deepEqual(first[0].mutations[0].intent.expectedSourceById,{[id(1)]:null});
 });
@@ -207,6 +208,8 @@ test('the shared preparation reader needs no writer and cannot mutate the catalo
   const db={...f.db,prepare(sql){queries.push(sql);return f.db.prepare(sql);}};
   const reader = createD1CatalogPreparationStore({ db, runId: 'read-only', catalogRevision: 'read-only', preservePermanentListings: true });
   assert.deepEqual(await reader.getActiveCatalogIdentities({ includeInactive: true }), []);
+  assert.deepEqual(await reader.getExactCatalogIdentities([product.id]),[]);
+  assert.equal(queries.filter(sql=>sql.startsWith('SELECT id FROM products WHERE id IN')).length,1);
   assert.deepEqual(await reader.getProductSourceVersions([product.id]), { [product.id]: null });
   assert.deepEqual(await reader.getProductSourceVersions([product.id]), { [product.id]: null });
   assert.equal(queries.filter(sql=>sql.includes('WHERE p.id=?')).length,1,'One captured read, not repeated/native-vector downloads');
