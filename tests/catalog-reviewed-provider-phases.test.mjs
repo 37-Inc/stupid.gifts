@@ -212,7 +212,9 @@ test('the shared preparation reader needs no writer and cannot mutate the catalo
   assert.equal(queries.filter(sql=>sql.startsWith('SELECT id FROM products WHERE id IN')).length,1);
   assert.deepEqual(await reader.getProductSourceVersions([product.id]), { [product.id]: null });
   assert.deepEqual(await reader.getProductSourceVersions([product.id]), { [product.id]: null });
-  assert.equal(queries.filter(sql=>sql.includes('WHERE p.id=?')).length,1,'One captured read, not repeated/native-vector downloads');
+  const captures=queries.filter(sql=>sql.startsWith('WITH captured'));
+  assert.equal(captures.length,1,'One captured batch, not repeated/native-vector downloads');
+  assert.ok(captures.every(sql=>!sql.includes('embedding_native_base64')));
   assert.equal(queries.filter(sql=>sql.includes('catalog_mutation_scopes')).length,0);
   for (const method of ['upsertProduct', 'recordEditorialEvent', 'deactivateConfirmedMissing', 'markConfirmedMissingUnavailable'])
     assert.equal(reader[method], undefined);

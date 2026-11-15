@@ -105,6 +105,32 @@ yet a measured production-duration claim. Use the next normal due-work run;
 do not fetch an extra batch just to benchmark. Beads: `roadmap-lbbz1.36` and
 the existing unattended observation task `roadmap-lbbz1.16.1`.
 
+### November 15 apply/review efficiency
+
+Maintenance observes the existing operation receipt, fenced database clock,
+current product/private state and pending index IDs in one primary read for an
+upsert. The original per-product atomic transaction, full source/state CAS,
+immutable receipt and lost-response recovery are unchanged. Telemetry similarly
+combines receipt/clock checks rather than issuing separate preflight requests.
+Preparation/review read exact selected IDs in byte-bounded pages, preserving
+raw SQLite numbers and each product's full hash checks. No extra writer or
+parallel mutation lane is introduced.
+
+Identical local fixtures measured ten existing upserts at 40 → 10 preflight
+reads (same ten transactions and final state hash), and 300 review rows at
+300 → 5 reads. These are local request-count measurements, not production
+duration claims. The existing `.36.4` observation owns the next ordinary run's
+actual preparation/apply/review/publication timing; do not dispatch a new batch
+to benchmark it.
+
+Runtime-data publication records acknowledged derived-index upserts without
+waiting for provider visibility. `semantic_indexing_pending` is optional
+coverage, not listing failure or proof of visibility. Existing content-addressed
+metadata resolution discovers those exact vectors when they appear; keyword
+search remains usable meanwhile. Rejected/unknown writes and mismatched readback
+still reconcile normally. Native history, source and publication receipt checks
+remain mandatory. Legacy/frozen runs retain their original visibility behavior.
+
 On a saved runtime publication, the coordinator may read the last few
 hash-linked control events to choose the approved publish/recover command.
 This read cannot fetch products, acquire a writer, or establish acceptance.

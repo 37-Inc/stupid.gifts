@@ -64,7 +64,8 @@ export function validatePublicationControlArtifact(input:DurablePublicationArtif
       ||!Array.isArray(v.sourceIds)||!v.sourceIds.every(uuid)||!v.revision?.persistent)fail();
     validatePublicationControlArtifact({schemaVersion:1,kind:'request',value:v.request});
   }else if(input.kind==='search-delta'){
-    if(!exact(v,['catalogRevision','indexName','entries','verified','upserted'])||!Array.isArray(v.entries))fail();
+    if(!exact(v,['catalogRevision','indexName','entries','verified','upserted',...(v.pending===undefined?[]:['pending'])])||!Array.isArray(v.entries)
+      ||v.pending!==undefined&&(!Number.isSafeInteger(v.pending)||Number(v.pending)<1||Number(v.pending)>v.entries.length))fail();
   }else if(!exact(v,['state','owner','releaseId','receiptSha256','receipt'])||v.state!=='published'||v.owner!==null||!hash(v.receiptSha256))fail();
   metadata(v);if(Buffer.byteLength(canonicalJson(input))>8*1024*1024)fail();return input;
 }

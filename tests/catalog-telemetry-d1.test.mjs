@@ -40,9 +40,10 @@ async function fixture({applyTelemetry=true}={}){
     raw:()=>({...sqlite.prepare('SELECT * FROM catalog_runs WHERE id=?').get(RUN)})};
 }
 
-test('confirmed atomic telemetry ACK avoids redundant post-commit receipt/owner reads',async()=>{
-  const f=await fixture();try{let atCommit;f.after(()=>{atCommit=f.queries();});
+test('confirmed atomic telemetry ACK avoids redundant post-commit receipt/owner reads',async t=>{
+  const f=await fixture();try{const before=f.queries();let atCommit;f.after(()=>{atCommit=f.queries();});
     await f.telemetry.startCatalogRun({id:RUN});assert.equal(f.queries(),atCommit);assert.equal(f.cursor.current.epoch,f.owner.epoch+1);
+    assert.equal(f.queries()-before,1);t.diagnostic(JSON.stringify({beforeReadTrips:3,afterReadTrips:1,atomicWrites:1}));
   }finally{f.close();}
 });
 
@@ -51,6 +52,7 @@ test('appending twenty observations costs the same read round trips as one',asyn
     await f.telemetry.startCatalogRun({id:RUN});
     const append=n=>f.telemetry.insertCatalogRunItems(RUN,Array.from({length:n},()=>catalogRunItem(product,{decision:'selected'})));
     const before=f.queries();await append(1);const after=f.queries();
+    assert.equal(after-before,2);
     await append(20);assert.equal(f.queries()-after,after-before);
     assert.equal((await f.telemetry.loadCatalogRun(RUN)).items.length,21);
   }finally{f.close();}

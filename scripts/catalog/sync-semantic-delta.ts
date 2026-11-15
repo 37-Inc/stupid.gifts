@@ -109,7 +109,7 @@ export async function prepareMaintenanceSearchDelta(db:CatalogD1,revision:Approv
  * native mutable-ID outbox. No deletion, model call, source mutation or takeover.
  * Only an explicitly scoped/accounted sender is used by the routine driver. */
 export async function syncDerivedSearchVectors(input:{accountId:string;indexName:string;token:string;vectors:DerivedVector[];
-  fetch:typeof fetch;wait?:(ms:number)=>Promise<void>}) {
+  fetch:typeof fetch;wait?:(ms:number)=>Promise<void>;deferVisibility?:boolean}) {
   const {vectors}=input;
   if(!/^[a-f0-9]{32}$/.test(input.accountId)||!vectors.length||vectors.length>30
     ||!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(input.indexName)
@@ -162,6 +162,12 @@ export async function syncDerivedSearchVectors(input:{accountId:string;indexName
     const result=await request('upsert',JSON.stringify(vector)+'\n',true);
     if(typeof result?.mutationId!=='string')throw Error('semantic_delta_provider_failed');
   }
+  // Serving IDs bind the exact saved vector and current public copy. A genuine
+  // provider ACK schedules indexing; visibility is not listing acceptance. The
+  // resolver discovers these IDs from their metadata when they become visible,
+  // while keyword search works immediately. Unknown/rejected writes still fail
+  // and retry the SAME immutable payload, never another supplier/model call.
+  if(input.deferVisibility)return{verified:found.size,upserted:missing.length,...(missing.length?{pending:missing.length}:{})};
   for(let attempt=0;attempt<6;attempt++){
     if((await read()).size===vectors.length)return {verified:vectors.length,upserted:missing.length};
     if(attempt<5)await (input.wait??(ms=>new Promise(resolve=>setTimeout(resolve,ms))))(30000);
@@ -170,14 +176,15 @@ export async function syncDerivedSearchVectors(input:{accountId:string;indexName
 }
 
 export async function syncApprovedSearchDelta(input:{db:CatalogD1;owner:MutationOwner;revision:ApprovedCohortRevision;
-  catalog:unknown;accountId:string;token:string;fetch:typeof fetch}) {
+  catalog:unknown;accountId:string;token:string;fetch:typeof fetch;deferVisibility?:boolean}) {
   await input.db.batch([mutationAssertion(input.db,input.owner,['freezing'])]);
   const delta=await prepareMaintenanceSearchDelta(input.db,input.revision,input.catalog);
-  const result={verified:0,upserted:0};
+  const result={verified:0,upserted:0};let pending=0;
   for(let offset=0;offset<delta.vectors.length;offset+=30){
     const part=await syncDerivedSearchVectors({...input,indexName:delta.indexName,vectors:delta.vectors.slice(offset,offset+30)});
     result.verified+=part.verified;result.upserted+=part.upserted;
+    pending+=part.pending??0;
   }
   await input.db.batch([mutationAssertion(input.db,input.owner,['freezing'])]);
-  return {indexName:delta.indexName,entries:delta.entries,...result};
+  return {indexName:delta.indexName,entries:delta.entries,...result,...(pending?{pending}:{})};
 }
