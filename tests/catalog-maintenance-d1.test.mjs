@@ -102,12 +102,27 @@ test('transport refusal is retained after exact receipt readback, not mislabeled
   }finally{f.close();}
 });
 
-test('confirmed atomic maintenance ACK advances its cursor without duplicate receipt/owner round trips',async()=>{
+test('confirmed atomic maintenance ACK advances its cursor without duplicate receipt/owner round trips',async t=>{
   const f=await setup({products:[rawProduct(1)]});try{
-    let atCommit;f.hookAfter(()=>{atCommit=f.counts().queries;});
+    const before=f.counts();let atCommit;f.hookAfter(()=>{atCommit=f.counts().queries;});
     await f.store.updateAmazonAffiliateUrl(id(1),'https://www.amazon.com/dp/'+id(1)+'?tag=fixture-new-20');
     assert.equal(f.counts().queries,atCommit);assert.equal(f.epoch(),f.owner.epoch+1);
     assert.equal(f.sqlite.prepare('SELECT count(*) n FROM catalog_maintenance_operations').get().n,1);
+    assert.equal(f.counts().queries-before.queries,2);assert.equal(f.counts().batches-before.batches,1);
+    t.diagnostic(JSON.stringify({beforeReadTrips:4,afterReadTrips:2,atomicWrites:1}));
+  }finally{f.close();}
+});
+test('ten existing prepared upserts need one primary read and one atomic write each',async t=>{
+  const f=await setup({products:Array.from({length:10},(_,i)=>rawProduct(i+1))});
+  try{
+    const before=f.counts();
+    for(let n=1;n<=10;n++){const p=input(n,{embedding:undefined});await f.store.upsertProduct(p,editorialSourceHash(p));}
+    const after=f.counts();assert.equal(after.queries-before.queries,10);assert.equal(after.batches-before.batches,10);
+    const rows=f.sqlite.prepare('SELECT * FROM products ORDER BY id').all().map(r=>({...r}));
+    const operations=f.sqlite.prepare('SELECT * FROM catalog_maintenance_operations ORDER BY next_epoch').all().map(r=>({...r}));
+    assert.equal(rows.length,10);assert.equal(operations.length,10);
+    t.diagnostic(JSON.stringify({scope:'local existing-product apply only',reads:after.queries-before.queries,writes:after.batches-before.batches,
+      stateSha256:sha256(canonicalJson({rows,operations}))}));
   }finally{f.close();}
 });
 

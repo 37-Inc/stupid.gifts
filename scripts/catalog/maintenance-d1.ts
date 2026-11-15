@@ -15,6 +15,7 @@ import { maintenanceTimeOrder, refreshPhotoRights } from './maintenance-state.ts
 import type { Row, SemanticProduct } from './maintenance-state.ts';
 import { planProductFreshness } from './freshness-selection.ts';
 import type { FreshnessSelection } from './freshness-selection.ts';
+import {readProductRows} from './read-product-rows.ts';
 
 export interface MaintenanceIntent {
   /** Preparation is read-only; reject a stale product at its atomic commit. */
@@ -39,7 +40,7 @@ export interface MaintenanceD1Options {
   preservePermanentListings?: boolean;
 }
 type Loaded = { row: Row; product: SemanticProduct; version: number; present: boolean | null; native: string | null; provenance: Row;
-  privateState: unknown[] };
+  privateState: unknown[]; pending: number[] | null };
 type Receipt = { input_sha256: string; result_json: string; environment: string; index_name: string; generation: number; prior_epoch: number; next_epoch: number };
 const HASH = /^[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -125,14 +126,18 @@ function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
     const present = row.maintenance_version !== null ? row.maintenance_present === null ? null : row.maintenance_present === 1
       : explicit ? explicit.present : null;
     return { row: Object.fromEntries(Object.entries(row).filter(([key]) => !key.startsWith('maintenance_'))), product,
+      pending:typeof row.maintenance_pending==='string'?JSON.parse(row.maintenance_pending):null,
       version: Number(row.maintenance_version || 0), present, native: row.maintenance_native as string | null,
       privateState:[row.maintenance_version,row.maintenance_semantic,row.maintenance_present,row.maintenance_native,row.maintenance_provenance],
       provenance: row.maintenance_provenance ? JSON.parse(String(row.maintenance_provenance))
         : { input: 'unverified', archiveSha256: options.historical?.archiveSha256 || null } };
   };
-  const SELECT = `SELECT p.*,s.version maintenance_version,s.semantic_json maintenance_semantic,
+  const CURRENT = `p.*,s.version maintenance_version,s.semantic_json maintenance_semantic,
     s.embedding_present maintenance_present,s.embedding_native_base64 maintenance_native,
-    s.embedding_provenance_json maintenance_provenance FROM products p LEFT JOIN catalog_maintenance_products s ON s.product_id=p.id`;
+    s.embedding_provenance_json maintenance_provenance,
+    (SELECT json_group_array(sequence) FROM (SELECT sequence FROM vector_sync_outbox
+      WHERE public_id=p.public_id AND status='pending' ORDER BY sequence LIMIT 21)) maintenance_pending`;
+  const SELECT = `SELECT ${CURRENT} FROM products p LEFT JOIN catalog_maintenance_products s ON s.product_id=p.id`;
   const captured = new Map<string, Loaded | null>();
   const load = async (id: string): Promise<Loaded | null> => {
     if (!owner && captured.has(id)) return captured.get(id)!;
@@ -146,6 +151,13 @@ function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
   const CATALOG_SELECT = `SELECT p.*,s.version maintenance_version,s.semantic_json maintenance_semantic,
     s.embedding_present maintenance_present,NULL maintenance_native,NULL maintenance_provenance
     FROM products p LEFT JOIN catalog_maintenance_products s ON s.product_id=p.id`;
+  async function prime(ids:string[]){
+    if(owner)return; // Writes always load fresh rows and retain their full CAS.
+    const needed=ids.filter(id=>!captured.has(id));if(!needed.length)return;
+    const values=await readProductRows(db,needed,{semantic:true,allowMissing:true});
+    for(const id of needed)captured.set(id,null);
+    for(const row of values)captured.set(String(row.id),decode(row));
+  }
   const catalog = async () => {
     await checkOwner(); const values: Loaded[] = []; let after = ''; let bytes = 0; let page = 10;
     for (;;) {
@@ -223,8 +235,8 @@ function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
     }
     await checkOwner(); return values;
   };
-  const currentReceipt = async (operationId: string, inputHash: string): Promise<{ result: unknown } | null> => {
-    const receipt = (await all<Receipt>('SELECT * FROM catalog_maintenance_operations WHERE operation_id=?', [operationId]))[0];
+  const currentReceipt = async (operationId: string, inputHash: string, saved?:Receipt|null): Promise<{ result: unknown } | null> => {
+    const receipt = saved===undefined?(await all<Receipt>('SELECT * FROM catalog_maintenance_operations WHERE operation_id=?', [operationId]))[0]:saved;
     if (!receipt) return null;
     if (receipt.input_sha256 !== inputHash || receipt.environment !== owner.environment || receipt.index_name !== owner.indexName) throw new Error('maintenance_receipt_mismatch');
     const current = await readMutationOwner(db, owner);
@@ -235,22 +247,33 @@ function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
     return { result: JSON.parse(receipt.result_json) };
   };
   async function write<T>(method: string, rawArgs: unknown[], build: (args: unknown[], intent: MaintenanceIntent, now: string,
-    statements: D1Statement[], operationId: string, changes: Row[]) => Promise<T>): Promise<T> {
+    statements: D1Statement[], operationId: string, changes: Row[], initial?:Loaded|null) => Promise<T>): Promise<T> {
     if (!owner) throw new Error('maintenance_read_only');
     const args = copy(rawArgs); const intent = copy(await options.intent?.(method, copy(args)) || {});
     const inputHash = maintenanceDigest({ method, args, intent, runId, catalogRevision, environment: owner.environment, indexName: owner.indexName,
       ...(options.preservePermanentListings?{listingPolicy:'permanent-base-v1'}:{}) });
     const operationId = sha256(`${runId}:${inputHash}`);
-    const replay = await currentReceipt(operationId, inputHash); if (replay) return replay.result as T;
+    const fence=mutationFenceQuery(owner);
+    // One primary observation supplies the prior receipt and fenced clock.
+    // A stale owner can still recover its genuine already-committed receipt;
+    // without a receipt, a missing clock refuses the new mutation.
+    const upsert=method==='upsertProduct';
+    const [preflight]=upsert?await all<Row>(`SELECT ${CURRENT},CASE WHEN ${fence.sql} THEN ${NOW} END maintenance_clock,
+      CASE WHEN o.operation_id IS NOT NULL THEN json_object(${['input_sha256','result_json','environment','index_name','generation','prior_epoch','next_epoch']
+        .map(key=>`'${key}',o.${key}`).join(',')}) END maintenance_receipt
+      FROM (SELECT 1) LEFT JOIN products p ON p.id=? LEFT JOIN catalog_maintenance_products s ON s.product_id=p.id
+      LEFT JOIN catalog_maintenance_operations o ON o.operation_id=?`,[...fence.params,(args[0] as Row).id,operationId])
+      :await all<Row>(`SELECT o.*,CASE WHEN ${fence.sql} THEN ${NOW} END maintenance_clock
+        FROM (SELECT 1) LEFT JOIN catalog_maintenance_operations o ON o.operation_id=?`,[...fence.params,operationId]);
+    const prior=upsert?preflight?.maintenance_receipt?JSON.parse(String(preflight.maintenance_receipt)):null:preflight?.operation_id?preflight as Receipt:null;
+    const replay = await currentReceipt(operationId, inputHash,prior); if (replay) return replay.result as T;
     // Capture once AFTER the replay lookup; lost committed responses never create
     // a new write time or a new generated identity on retry.
-    const fence=mutationFenceQuery(owner);
-    const [clock]=await all<{now:string}>(`SELECT ${NOW} now WHERE ${fence.sql}`,fence.params);
-    if(!clock)throw new Error('maintenance_fenced');
-    const now=clock.now;
+    if(typeof preflight?.maintenance_clock!=='string')throw new Error('maintenance_fenced');
+    const now=preflight.maintenance_clock;
     explicitMaintenanceTime(now);
     const statements: D1Statement[] = [mutationAssertion(db, owner)]; const changes: Row[] = [];
-    const result = await build(args, intent, now, statements, operationId, changes);
+    const result = await build(args, intent, now, statements, operationId, changes,upsert?preflight?.id?decode(preflight):null:undefined);
     const next = { ...owner, epoch: owner.epoch + 1 };
     statements.push(prepare(`INSERT INTO catalog_maintenance_operations(operation_id,input_sha256,run_id,catalog_revision,
       environment,index_name,generation,prior_epoch,next_epoch,database_time,result_json,changes_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -351,7 +374,7 @@ function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
     const row: Row = { ...projection.row,embedding_text_hash:binding,timestamp_provenance_json:canonicalJson(timeProof),
       source_record_json: old?.row.source_record_json ?? canonicalJson({ kind:'maintenance_creation',schemaVersion:1,operationId,
         id:product.id,public_id:product.publicId,slug:product.slug,source:product.source,product:{...product,embedding:null} }) };
-    const pending = (await all<{sequence:number}>('SELECT sequence FROM vector_sync_outbox WHERE public_id=? AND status=\'pending\' ORDER BY sequence',[product.publicId])).map(value => value.sequence);
+    const pending = old?.pending??(await all<{sequence:number}>('SELECT sequence FROM vector_sync_outbox WHERE public_id=? AND status=\'pending\' ORDER BY sequence',[product.publicId])).map(value => value.sequence);
     if (pending.length>20) throw new Error('maintenance_pending_bound');
     statements.push(assertion(db,`(SELECT count(*) FROM vector_sync_outbox WHERE public_id=? AND status='pending')=?
       AND NOT EXISTS(SELECT 1 FROM vector_sync_outbox WHERE public_id=? AND status='pending' AND sequence NOT IN(SELECT value FROM json_each(?)))`,
@@ -442,7 +465,8 @@ function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
   const store = {
     getProductSourceVersions: (ids: string[]): Promise<Record<string, string | null>> => serialize(async () => {
       const result: Record<string, string | null> = {};
-      for (const id of idsInput(ids)) { const value = await load(id); result[id] = value ? maintenanceDigest({row:value.row,version:value.version}) : null; }
+      const wanted=idsInput(ids);await prime(wanted);
+      for (const id of wanted) { const value = await load(id); result[id] = value ? maintenanceDigest({row:value.row,version:value.version}) : null; }
       return result;
     }),
     upsertProduct: async (incoming: object, sourceFactsHash: string | null): Promise<{inserted:boolean;slug:string}> => {
@@ -468,8 +492,8 @@ function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
         originalNative = encodePgvectorSendBase64(values.embedding.map(value => Math.fround(value)));
       }
       return serialize(() => write('upsertProduct',[input,sourceFactsHash,...(originalNative ? [originalNative] : [])],
-      async (args,intent,now,statements,operationId,changes) => {
-        const p = args[0] as SemanticProduct; const old = await load(p.id);
+      async (args,intent,now,statements,operationId,changes,initial) => {
+        const p = args[0] as SemanticProduct; const old = initial===undefined?await load(p.id):initial;
         if (p.remotelyVerified === false && intent.verificationById?.[p.id]) throw new Error('maintenance_verification_proof');
         const merged = mergeCatalogMaintenanceUpsert(old?.product || null,p,{sourceFactsHash:args[1],databaseTime:now});
         const product = merged.product;
@@ -531,6 +555,7 @@ function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
           await checkOwner();const rows=[];
           // Only a coordinator's pinned plan may use this exact technical
           // batch. A changed/missing member fails, never substitutes a gift.
+          await prime(ids);
           for(const id of ids){
             const full=await load(id),p=full?.product;
             if(!full||!p||full.row.public_display_json===null||p.source!=='amazon'||!p.isActive||p.duplicateOfProductId)
@@ -560,7 +585,7 @@ function createCatalogStore(input: MaintenanceD1Options | PreparationOptions) {
         const selected=[...urgent,...(selection.photosOnly?[]:[...rechecks.slice(0,1),...featuredProducts.slice(0,featuredSlots),...others.slice(0,otherSlots),
           ...featuredProducts.slice(featuredSlots),...others.slice(otherSlots)])]
           .filter(p=>!seen.has(p.id)&&Boolean(seen.add(p.id))).slice(0,limit);
-        const rows=[];
+        const rows=[];await prime(selected.map(p=>p.id));
         for(const p of selected){const full=await load(p.id);if(!full)throw new Error('maintenance_current_state_drift');
           rows.push({...maintenanceRow(full.product),has_embedding:full.present});}
         await checkOwner();return rows;

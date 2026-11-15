@@ -10,6 +10,7 @@ import {accountedPublicationFetch,accountedPublicationReadFetch} from '../script
 import {canonicalDescriptionEmbeddingInput} from '../lib/catalog/presentation.ts';
 import {createDerivedSemanticSearch} from '../workers/site/derived-search.ts';
 import {semanticVectorMetadata} from '../lib/catalog/semantic-profile.ts';
+import {validatePublicationControlArtifact} from '../scripts/catalog/publication-control.ts';
 
 const digest=b=>createHash('sha256').update(b).digest('hex');
 const hash=v=>sha256(canonicalJson(v));
@@ -166,6 +167,29 @@ test('provider corruption and overlarge responses fail closed; pending visibilit
   await assert.rejects(syncDerivedSearchVectors({...options,fetch:async()=>new Response('x'.repeat(1024*1024+1))}),/too_large/);
   await assert.rejects(syncDerivedSearchVectors({...options,fetch:async()=>Response.json({success:false,errors:[{code:40007,message:'PRIVATE provider text'}]},{status:400})}),
     error=>error.message==='semantic_delta_provider_failed_get_by_ids_http_400_code_40007');
+});
+
+test('runtime publication does not wait for acknowledged optional serving coverage; current metadata resolves when visible',async()=>{
+  const x=await fixture(),{vector}=await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory);
+  const catalog={...x.f.catalog,entries:x.f.catalog.entries.filter(e=>e.publicId!==x.product.publicId)};
+  const resolver=createDerivedSemanticSearch(x.f.snapshot,catalog),calls=[];
+  const options={accountId:'a'.repeat(32),indexName:catalog.indexName,token:'FIXTURE_ONLY',vectors:[vector],deferVisibility:true,
+    wait:async()=>assert.fail('Optional visibility must not delay publication'),fetch:async(url)=>{
+      calls.push(url.split('/').at(-1));return Response.json({success:true,result:url.endsWith('/upsert')?{mutationId:'acknowledged'}:[]});}};
+  assert.deepEqual(await syncDerivedSearchVectors(options),{verified:0,upserted:1,pending:1});
+  assert.deepEqual(calls,['get_by_ids','upsert']);
+  assert.deepEqual(await resolver.resolve([]),[],'Unindexed gifts remain available through ordinary keyword retrieval');
+  const matches=await resolver.resolve([{id:vector.id,metadata:vector.metadata,score:.9}]);
+  assert.equal(matches[0].product.id,x.product.id,'Existing metadata fallback adopts coverage without another catalog publication');
+  const changed=structuredClone(x.f.snapshot);changed.products[0].title='A different product';
+  assert.deepEqual(await createDerivedSemanticSearch(changed,catalog).resolve([{id:vector.id,metadata:vector.metadata,score:.9}]),[]);
+  await assert.rejects(syncDerivedSearchVectors({...options,fetch:async(url)=>Response.json({success:true,result:url.endsWith('/upsert')?{}:[]})}),/provider_failed/);
+  await assert.rejects(syncDerivedSearchVectors({...options,fetch:async(url)=>Response.json({success:true,result:url.endsWith('/upsert')?{mutationId:''}:[]})}),/provider_failed/);
+  await assert.rejects(syncDerivedSearchVectors({...options,fetch:async(url)=>{if(url.endsWith('/upsert'))throw Error('lost ACK');return Response.json({success:true,result:[]});}}),/lost ACK/);
+  const value={catalogRevision:'fixture-revision',indexName:catalog.indexName,entries:[(await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory)).entry],verified:0,upserted:1,pending:1};
+  const control={schemaVersion:1,kind:'search-delta',value};
+  assert.deepEqual(validatePublicationControlArtifact(control),control,'Acknowledgement/visibility counts survive an exact durable checkpoint');
+  assert.throws(()=>validatePublicationControlArtifact({...control,value:{...value,pending:2}}),/control_invalid/);
 });
 
 for(const total of [22,64])test(`exact automation delivers all ${total} saved vectors using provider-sized lookups and reuses them on retry`,async()=>{

@@ -7,6 +7,7 @@ import {automationRuntime,CATALOG_SCOPE} from './automation-runtime.mjs';
 import {readHomepageEdition} from '../../lib/catalog/homepage-edition.ts';
 import defaultEdition from '../../content/homepage-edition.json' with {type:'json'};
 import {PHOTO_EXPIRY_SQL} from './maintenance-d1.ts';
+import {readProductRows} from './read-product-rows.ts';
 import {planRoutineAutomation} from './automation-plan.ts';
 import {loadAutomationMerchandising,loadAutomationDiscoveryInputs} from './automation-inputs.mjs';
 import {routineMerchandising} from './campaign-operator.mjs';
@@ -347,8 +348,9 @@ async function review(entry,config,directory){
     // admission decisions, not a second unrelated truncation of approved work.
     if(!config.cadence.automation&&latest.size>10+(pacificCatalogCalendar(config.cadence.day+'T12:00:00Z').monday?20:0))refuse('review_bound');
     const changes=[],summary=[];
-    for(const [id,{op,change}]of latest){const rows=(await db.prepare('SELECT * FROM products WHERE id=?').bind(id).all()).results,p=rows[0];
-      if(rows.length!==1||p.catalog_revision!==config.catalogRevision||sha256(canonicalJson(p))!==change.afterSha256)refuse('changed_product');
+    const products=await readProductRows(db,[...latest.keys()]);
+    for(const p of products){const {op,change}=latest.get(p.id);
+      if(p.catalog_revision!==config.catalogRevision||sha256(canonicalJson(p))!==change.afterSha256)refuse('changed_product');
       const display=JSON.parse(p.public_display_json??'null');
       if(display?.price!==undefined&&display.price!==0)refuse('public_price');
       changes.push({publicId:p.public_id,operationId:op.operation_id,inputSha256:op.input_sha256,productSha256:sha256(canonicalJson(p)),displaySha256:sha256(p.public_display_json??'null')});

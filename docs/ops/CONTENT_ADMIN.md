@@ -70,6 +70,16 @@ When every phase is already prepared, applying the saved result no longer
 requires resolving Amazon/OpenAI credentials again; Cloudflare access remains
 necessary for the actual commit and readback.
 
+The short commit uses the same batched exact reads and atomic receipts as daily
+care; it does not refresh unrelated products or build the app. Optional derived
+search indexing no longer waits for visibility after a genuine provider ACK.
+The accepted listing is keyword-searchable while that coverage catches up using
+the existing metadata resolver, without another model call or publication.
+This is not a second catalog or permission to skip source/native-history checks.
+Publication remains serialized with the one catalog writer; a busy writer can
+still queue a prepared addition. Measure real end-to-end latency separately
+from local request-count improvements.
+
 Article policy is unchanged: ordinary discovery/admission creates a product page
 with factual short copy. `--long-editorial` is an explicitly requested optional
 mode, not a ranking, commission or traffic threshold; generated articles still

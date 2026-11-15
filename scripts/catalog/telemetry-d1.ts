@@ -1,5 +1,5 @@
 import type { CatalogD1, D1Statement } from '../../lib/catalog/storage/d1.ts';
-import { mutationAssertion, mutationAdvance, readMutationOwner } from '../../lib/catalog/mutation-fence.ts';
+import { mutationAssertion, mutationAdvance, readMutationOwner,mutationFenceQuery } from '../../lib/catalog/mutation-fence.ts';
 import type { MutationOwner } from '../../lib/catalog/mutation-fence.ts';
 import { canonicalJson, canonicalTimestamp, sha256 } from './migration.ts';
 import { CATALOG_TELEMETRY_VERSION, redactTelemetryText, safeCatalogConfig, sanitizeTelemetryValue } from '../ops/catalog-telemetry.mjs';
@@ -52,8 +52,8 @@ export function createD1CatalogTelemetryStore(options:{db:CatalogD1;owner:Mutati
     if(Buffer.byteLength(bytes)>96*1024)throw new Error('telemetry_bounds');
     const hash=sha256(bytes);const operationId=sha256(`telemetry:${runId}:${hash}`);
     await options.beforeMutation?.({operationId,inputSha256:hash,owner:{...owner}});
-    const recover=async()=>{
-      const receipt=(await rows('SELECT * FROM catalog_maintenance_operations WHERE operation_id=?',[operationId]))[0];
+    const recover=async(saved?:Row|null)=>{
+      const receipt=saved===undefined?(await rows('SELECT * FROM catalog_maintenance_operations WHERE operation_id=?',[operationId]))[0]:saved;
       if(!receipt)return false;
       if(receipt.input_sha256!==hash||receipt.environment!==owner.environment||receipt.index_name!==owner.indexName)throw new Error('telemetry_receipt_mismatch');
       const actual=await readMutationOwner(db,owner);
@@ -61,9 +61,12 @@ export function createD1CatalogTelemetryStore(options:{db:CatalogD1;owner:Mutati
       if(!same(actual,owner)||actual!.epoch<Number(receipt.next_epoch)||(!ownCommit&&actual!.epoch!==owner.epoch))throw new Error('telemetry_fenced');
       cursor.current=Object.freeze(actual!);return true;
     };
-    if(await recover())return;
-    try{await mutationAssertion(db,owner).all();}catch{throw new Error('telemetry_fenced');}
-    const now=String((await rows(`SELECT ${NOW} now`))[0].now);canonicalTimestamp(now);
+    const fence=mutationFenceQuery(owner);
+    const [preflight]=await rows(`SELECT o.*,CASE WHEN ${fence.sql} THEN ${NOW} END telemetry_clock
+      FROM (SELECT 1) LEFT JOIN catalog_maintenance_operations o ON o.operation_id=?`,[...fence.params,operationId]);
+    if(await recover(preflight?.operation_id?preflight:null))return;
+    if(typeof preflight?.telemetry_clock!=='string')throw new Error('telemetry_fenced');
+    const now=preflight.telemetry_clock;canonicalTimestamp(now);
     const next={...owner,epoch:owner.epoch+1};
     const statements=[mutationAssertion(db,owner),...await build(now,operationId),
       prepare(`INSERT INTO catalog_maintenance_operations(operation_id,input_sha256,run_id,catalog_revision,environment,index_name,

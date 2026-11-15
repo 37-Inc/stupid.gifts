@@ -938,7 +938,8 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       if(derived&&!cp.pins.searchDelta){
         const catalog=await reviewed(derived.path,derived.sha256,repo,8*1024*1024,true);
         const result=await syncApprovedSearchDelta({db,owner:cp.owner!,revision,catalog,
-          accountId:config.accountId,token,fetch:generalSend});
+          accountId:config.accountId,token,fetch:generalSend,deferVisibility:Boolean(config.publication.runtimeCatalog)});
+        if(result.pending)console.info(JSON.stringify({state:'semantic_indexing_pending',products:result.pending,catalogBlocked:false}));
         const value={catalogRevision:revision.snapshot.catalogRevision,...result};
         const pin=config.publication.runtimeCatalog?await ws.putPublicationControl('search-delta',value):await putOrdered(ws,value,now());
         await write({pins:{...cp.pins,searchDelta:pin}});
