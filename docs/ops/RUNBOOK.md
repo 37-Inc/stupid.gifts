@@ -34,6 +34,12 @@ for shadow, canary, explicit activation and single-writer recovery, and
   product journal, exact native bytes, source check and owner fence remains.
   Pending groups resume as groups, never individual re-dispatches. Deletes and
   frozen historical runs retain their original path.
+  Native upsert transactions store each member's immutable product/source proof
+  once, then compare current rows against those saved values inside the same
+  transaction. This avoids duplicate large request parameters; it does not
+  increase the eight-member or 512 KiB transport bounds. Large members still
+  shrink the group, and failed source checks roll back the inserted intents.
+  One existing exact-ID readback covers the group; no second pairwise split.
 - Migration `0020` adds a source-change counter maintained by database triggers.
   A full inventory proof is reused in the same process only while that counter,
   owner and inventory digest match. Any source write forces another scan; an
