@@ -131,6 +131,9 @@ type ProjectionSeal=Pick<ApprovedCatalogSeal,'envelopeJson'|'snapshotSha256'|'pr
 /** Original projection bytes are reconstructed only in memory at their original
  * generatedAt, under the exact current owner. No expired body is re-pinned. */
 export async function readApprovedPrior(db:CatalogD1,owner:MutationOwner,seal:ProjectionSeal,context:SnapshotReadContext){
+  return (await readApprovedProjection(db,owner,seal,context)).snapshot;
+}
+async function readApprovedProjection(db:CatalogD1,owner:MutationOwner,seal:ProjectionSeal,context:SnapshotReadContext){
   const envelope=JSON.parse(seal.envelopeJson) as SealedSnapshotEnvelope;
   if(sha256(seal.envelopeJson+'\n')!==context.envelopeSha256||seal.snapshotSha256!==context.snapshotSha256
     ||seal.projectionReceipt.projection_sha256!==context.projectionSha256
@@ -149,7 +152,7 @@ export async function readApprovedPrior(db:CatalogD1,owner:MutationOwner,seal:Pr
       ||context.priorPublication?.releaseId!==publication.releaseId||context.priorPublication.receiptSha256!==publication.receiptSha256)
       throw new Error('cohort_prior_changed');
   }
-  return snapshot;
+  return {snapshot,rows};
 }
 export function approvedRequestControl(request:ApprovedCohortRequest){
   const {previous,...rest}=request;
@@ -193,10 +196,10 @@ export function durableApprovedRevisionControl(revision:ApprovedCohortRevision){
 }
 export async function hydrateDurableApprovedRevision(db:CatalogD1,owner:MutationOwner,control:ReturnType<typeof durableApprovedRevisionControl>){
   const request=await hydrateApprovedRequest(db,owner,control.request),p=control.projection;
-  const snapshot=await readApprovedPrior(db,owner,p,{...request.context,envelopeSha256:sha256(p.envelopeJson+'\n'),
+  const projection=await readApprovedProjection(db,owner,p,{...request.context,envelopeSha256:sha256(p.envelopeJson+'\n'),
     snapshotSha256:p.snapshotSha256,projectionSha256:p.projectionReceipt.projection_sha256,
     sourceExportSha256:p.projectionReceipt.source_export_sha256});
-  const rows=await readOwnedProjection(db,owner,snapshot.catalogRevision,snapshot.products.map(p=>p.publicId).sort(),{approvedRecovery:true}) as ApprovedCohortRevision['packet']['rows'];
+  const snapshot=projection.snapshot,rows=projection.rows.sort((a,b)=>String(a.public_id).localeCompare(String(b.public_id))) as ApprovedCohortRevision['packet']['rows'];
   const sourceRows=await readApprovedRevisionSource(db,owner,control.sourceIds,request.approval.changes,request.ownerBaseReview,request);
   const revision={...control.revision,request,snapshot,packet:{rows,receipt:p.projectionReceipt},sourceRows};
   if(control.schemaVersion!==2||control.kind!=='approved-revision-control'||sha256(canonicalJson(sourceRows))!==control.sourceRowsSha256

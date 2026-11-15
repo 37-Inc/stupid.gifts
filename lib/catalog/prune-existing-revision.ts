@@ -176,7 +176,13 @@ export async function sealCapturedRevision(db: CatalogD1, owner: MutationOwner, 
   await db.batch([...start, db.prepare(`INSERT INTO catalog_revisions(revision,created_at,source_export_sha256,status)
     VALUES(?,?,?,'importing') ON CONFLICT(revision) DO NOTHING`).bind(revision, generatedAt, sourceDigest)]);
   const receipt = (await db.prepare('SELECT * FROM catalog_projection_receipts WHERE catalog_revision=?').bind(revision).all()).results[0];
-  const partial = await readOwnedProjection(db,owner,revision,packet.rows.map(row=>String(row.public_id)).sort());
+  // A fresh revision has nothing to compare. On recovery, validate every staged
+  // row as before; the complete readback after insertion is unconditional.
+  const fence=mutationFenceQuery(owner,['freezing']);
+  const target=(await db.prepare(`SELECT EXISTS(SELECT 1 FROM catalog_public_products WHERE catalog_revision=?) populated WHERE ${fence.sql}`)
+    .bind(revision,...fence.params).all<{populated:number}>()).results;
+  if(target.length!==1)throw new Error('prune_owner_mismatch');
+  const partial = target[0].populated===0?[]:await readOwnedProjection(db,owner,revision,packet.rows.map(row=>String(row.public_id)).sort());
   const expected = new Map(packet.rows.map(row => [row.public_id, row]));
   if (partial.some(row => canonicalJson(row) !== canonicalJson(expected.get(String(row.public_id))))) throw new Error('prune_projection_changed');
   const present = new Set(partial.map(row => row.public_id)); let missing = packet.rows.filter(row => !present.has(row.public_id));
