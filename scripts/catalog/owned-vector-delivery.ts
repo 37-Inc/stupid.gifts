@@ -1561,9 +1561,11 @@ export async function readNativeHistory(options:{db:CatalogD1;owner:MutationOwne
         changedIds:reuseIds(plan).filter(id=>!binding.ids.includes(id)),historicalOnly:true,adapters,signal});continue;
     }
     if(![PLAN_KIND,REUSE_KIND].includes(request.kind))throw new Error('vector_history_changed');
-    const receipts=(await db.prepare('SELECT * FROM publication_receipts WHERE release_id=?').bind(binding.source.releaseId).all<Row>({signal})).results;
-    const builds=(await db.prepare("SELECT * FROM catalog_build_requests WHERE release_id=? AND state='resolved' LIMIT 2").bind(binding.source.releaseId).all<Row>({signal})).results;
-    const outbox=(await db.prepare("SELECT * FROM publication_outbox WHERE release_id=? AND state='verified' LIMIT 2").bind(binding.source.releaseId).all<Row>({signal})).results;
+    const [receipts,builds,outbox]=(await db.batch([
+      db.prepare('SELECT * FROM publication_receipts WHERE release_id=?').bind(binding.source.releaseId),
+      db.prepare("SELECT * FROM catalog_build_requests WHERE release_id=? AND state='resolved' LIMIT 2").bind(binding.source.releaseId),
+      db.prepare("SELECT * FROM publication_outbox WHERE release_id=? AND state='verified' LIMIT 2").bind(binding.source.releaseId),
+    ],{signal}) as Array<{results:Row[]}>).map(r=>r.results);
     const receipt=receipts[0],build=builds[0],publication=outbox[0],intent=receipt&&JSON.parse(String(receipt.manifest_json));
     const buildRequest=build&&JSON.parse(String(build.request_json));
     if(receipts.length!==1||builds.length!==1||outbox.length!==1||sha256(canonicalJson(receipt))!==binding.source.receiptSha256
@@ -1585,8 +1587,10 @@ export async function readNativeHistory(options:{db:CatalogD1;owner:MutationOwne
     const checks=()=>[mutationAssertion(db,owner,[owner.phase]),exact('catalog_vector_deliveries',saved),exact('publication_receipts',receipt),
       exact('catalog_build_requests',build),exact('publication_outbox',publication),...(runtime?[exact('catalog_runtime_publications',runtime)]:[])];
     await db.batch(checks(),{signal});
-    if(!options.acceptedOnly)await readPlanVectors(db,historical,rows,plan,adapters,undefined,signal,30000,{selected:binding.ids,owner});
-    await db.batch(checks(),{signal});
+    if(!options.acceptedOnly){
+      await readPlanVectors(db,historical,rows,plan,adapters,undefined,signal,30000,{selected:binding.ids,owner});
+      await db.batch(checks(),{signal});
+    }
   }
   return history.flatMap(group=>group.ids);
 }

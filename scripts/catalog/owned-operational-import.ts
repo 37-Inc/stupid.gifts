@@ -204,13 +204,12 @@ export function normalizeOwnedImportSequences(plan:OwnedOperationalImportPlan,pl
 
 /** Source triggers invalidate both row captures and inventory proofs. Missing
  * migration retains ordinary reads; no cache survives this process. */
-export async function readOwnedSourceVersion(db:CatalogD1,owner:MutationOwner,signal?:AbortSignal){
+export async function readOwnedSourceVersion(db:CatalogD1,owner:MutationOwner,signal?:AbortSignal,fence=pendingVectorReadFence(owner)){
   const schema=await db.prepare(`SELECT count(*) n FROM sqlite_master WHERE (name='catalog_source_version' AND type='table')
     OR (type='trigger' AND name IN('catalog_source_products_insert','catalog_source_products_update','catalog_source_products_delete',
       'catalog_source_private_insert','catalog_source_private_update','catalog_source_private_delete',
       'catalog_source_operations_insert','catalog_source_operations_update','catalog_source_operations_delete'))`).all<{n:number}>({signal});
   if(schema.results[0]?.n!==10)return null;
-  const fence=pendingVectorReadFence(owner);
   const row=(await db.prepare(`SELECT version,json(CASE WHEN ${fence.sql} THEN 'true' ELSE 'mutation_fenced' END) owned
     FROM catalog_source_version WHERE singleton=1`).bind(...fence.params).all<{version:number}>({signal})).results;
   if(row.length!==1||!Number.isSafeInteger(row[0].version)||row[0].version<0)refuse('source_version');

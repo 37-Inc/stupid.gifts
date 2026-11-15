@@ -1141,7 +1141,8 @@ test('3383 private identities/four ready capture → native promotion → atomic
   assert.equal((await settleApprovedCohort(f.db,queued.owner,prepared.revision,()=>readOwnedApprovedCohortVectors(f.db,queued.owner,prepared.revision,f.adapters))).state,'existing');
   const usage=await rest.workspace().budget();assert.ok(usage.httpRequests>before.httpRequests);assert.equal(usage.unconfirmedRequests,0);
   assert.equal(usage.httpRequests,rest.wire.requests);assert.equal(usage.sqlStatements,rest.wire.statements);
-  assert.ok(rest.wire.currentPages>=43*6);assert.ok(rest.wire.maxRequest<=512*1024);assert.ok(rest.wire.maxResponse<=512*1024);
+  // One cold capture per primary client; a reopened client needs its own proof.
+  assert.ok(rest.wire.currentPages>=43&&rest.wire.currentPages<=43*2);assert.ok(rest.wire.maxRequest<=512*1024);assert.ok(rest.wire.maxResponse<=512*1024);
   t.diagnostic(JSON.stringify({scope:'fixture capture/promotion/queue/replay ONLY; not whole weekly/provider capacity',...rest.wire,...usage}));
   const unowned=await reconstructD1Snapshot(f.db,createSealedSnapshotEnvelope(f.previous),f.context);
   assert.equal(unowned.status,'held'); // No silent unowned paging.
@@ -1205,8 +1206,11 @@ test('empty capture still checks owner/header; overlapping prior target and late
     snapshot:{...prepared.revision.snapshot,catalogRevision:empty.previous.catalogRevision}}),/owner_mismatch/);
   const f=await setup(t);await addHeld(f,180);const rest=await boundedRest(t,f),next=await f.freeze();
   const ready=await prepareApprovedCohort(f.db,next.owner,next.request),owner=await f.promote(ready);
-  rest.after(batch=>{if(batch.some(q=>q.sql.includes('SELECT count(*) FROM json_each(?) e CROSS JOIN products p'))){rest.after(null);f.advance(7*3600000);}});
+  let advanced=false;
+  rest.after(batch=>{if(batch.some(q=>q.sql.includes('FROM catalog_source_version WHERE singleton=1')||q.sql.includes('SELECT count(*) FROM json_each(?) e CROSS JOIN products p'))){
+    rest.after(null);advanced=true;f.advance(7*3600000);}});
   await assert.rejects(settleCapturedRevision(f.db,owner,ready.revision,()=>readOwnedApprovedCohortVectors(f.db,owner,ready.revision,f.adapters)));
+  assert.equal(advanced,true);
   assert.equal(f.sql.prepare('SELECT count(*) n FROM catalog_build_requests').get().n,0);
   assert.equal(f.sql.prepare('SELECT status FROM catalog_revisions WHERE revision=?').get('approved-revision').status,'importing');
 });
