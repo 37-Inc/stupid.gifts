@@ -160,7 +160,7 @@ export async function syncDerivedSearchVectors(input:{accountId:string;indexName
   // delivery. Existing immutable matches are not written again on resume.
   for(const vector of missing){
     const result=await request('upsert',JSON.stringify(vector)+'\n',true);
-    if(typeof result?.mutationId!=='string')throw Error('semantic_delta_provider_failed');
+    if(typeof result?.mutationId!=='string'||!/^[a-zA-Z0-9._:-]{1,200}$/.test(result.mutationId))throw Error('semantic_delta_provider_failed');
   }
   // Serving IDs bind the exact saved vector and current public copy. A genuine
   // provider ACK schedules indexing; visibility is not listing acceptance. The

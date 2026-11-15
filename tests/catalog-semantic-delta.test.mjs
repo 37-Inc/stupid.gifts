@@ -184,6 +184,7 @@ test('runtime publication does not wait for acknowledged optional serving covera
   const changed=structuredClone(x.f.snapshot);changed.products[0].title='A different product';
   assert.deepEqual(await createDerivedSemanticSearch(changed,catalog).resolve([{id:vector.id,metadata:vector.metadata,score:.9}]),[]);
   await assert.rejects(syncDerivedSearchVectors({...options,fetch:async(url)=>Response.json({success:true,result:url.endsWith('/upsert')?{}:[]})}),/provider_failed/);
+  await assert.rejects(syncDerivedSearchVectors({...options,fetch:async(url)=>Response.json({success:true,result:url.endsWith('/upsert')?{mutationId:''}:[]})}),/provider_failed/);
   await assert.rejects(syncDerivedSearchVectors({...options,fetch:async(url)=>{if(url.endsWith('/upsert'))throw Error('lost ACK');return Response.json({success:true,result:[]});}}),/lost ACK/);
   const value={catalogRevision:'fixture-revision',indexName:catalog.indexName,entries:[(await deriveMaintenanceSearchVector(x.product,x.row,x.state,x.inventory)).entry],verified:0,upserted:1,pending:1};
   const control={schemaVersion:1,kind:'search-delta',value};
