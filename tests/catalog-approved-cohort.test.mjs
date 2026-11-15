@@ -67,16 +67,17 @@ test('unchanged projection rows reject corrupted copied content before sealing',
   assert.equal(f.sql.prepare('SELECT count(*) n FROM catalog_projection_receipts').get().n,1);
   assert.equal(f.sql.prepare('SELECT count(*) n FROM catalog_build_requests').get().n,0);
 });
-async function batchFixture(t,count=4){
-  const f=await setup(t,{initial:count}),claim=await f.freeze();
+async function batchFixture(t,count=4,padding=0){
+  const f=await setup(t,{initial:count,sourcePadding:padding});
+  const claim=await f.freeze();
   const prepared=await prepareOwnedApprovedCohortPlan({db:f.db,...claim,adapters:f.adapters});
-  let sends=0,unknown=false,visible=true;
+  let sends=0,lookups=0,unknown=false,visible=true;
   const adapters={...f.adapters,async dispatchBatch(items){sends++;for(const p of items)f.index.set(p.publicId,structuredClone(p.vector));
     if(unknown)throw Error('lost ack');return{reference:'batch-reference'};},
-    async readbacks(ids){return ids.map(id=>visible?structuredClone(f.index.get(id)):null);},
+    async readbacks(ids){lookups++;return ids.map(id=>visible?structuredClone(f.index.get(id)):null);},
     async resolve({reference}){return reference?{state:'settled',reference}:{state:'pending'};}};
   const options={db:f.db,owner:prepared.owner,revision:prepared.revision,publicIds:prepared.remainingIds,adapters,originals:Object.fromEntries(f.originals)};
-  return{f,options,sends:()=>sends,unknown:()=>{unknown=true;},hide:()=>{visible=false;},show:()=>{visible=true;}};
+  return{f,options,sends:()=>sends,lookups:()=>lookups,unknown:()=>{unknown=true;},hide:()=>{visible=false;},show:()=>{visible=true;}};
 }
 test('eight-product native batch stays inside existing D1 wire bounds',async t=>{
   const b=await batchFixture(t,8),wire=new WeakMap(),metrics={maxBytes:0,maxStatements:0},original=b.f.db;
@@ -90,17 +91,54 @@ test('eight-product native batch stays inside existing D1 wire bounds',async t=>
       metrics.maxBytes=Math.max(metrics.maxBytes,bytes);metrics.maxStatements=Math.max(metrics.maxStatements,statements.length);
       assert.ok(bytes<=512*1024,`D1 wire bytes: ${bytes}`);return original.batch(statements);}};
   const first=await deliverOwnedApprovedCohortBatch({...b.options,db});assert.equal(first.state,'pending');
-  assert.equal(loads,first.publicIds.length+1,'inspect at most one row beyond the next dispatch');
+  assert.equal(loads,8,'each saved original is loaded once');
   const next=await deliverOwnedApprovedCohortBatch({...b.options,db,owner:first.owner});assert.equal(next.state,'complete');
-  assert.equal(b.sends(),1);assert.ok(metrics.maxBytes>0);assert.ok(first.publicIds.length<8);
+  assert.equal(b.sends(),1);assert.ok(metrics.maxBytes>0);assert.equal(first.publicIds.length,8);
   assert.deepEqual(next.publicIds,first.publicIds);
-  const remaining=b.options.publicIds.slice(next.publicIds.length);
-  const rest=await deliverOwnedApprovedCohortBatch({...b.options,db,owner:next.owner,publicIds:remaining});
-  const done=await deliverOwnedApprovedCohortBatch({...b.options,db,owner:rest.owner,publicIds:remaining});
-  assert.equal(loads,9,'all eight originals plus just the one boundary lookahead');
-  assert.equal(done.state,'complete');assert.equal(b.sends(),2);
-  assert.equal((await readOwnedApprovedCohortVectors(db,done.owner,b.options.revision,b.options.adapters)).settled,true);
+  assert.equal(loads,8);assert.equal(next.state,'complete');assert.equal(b.sends(),1);assert.equal(b.lookups(),1);
+  assert.equal((await readOwnedApprovedCohortVectors(db,next.owner,b.options.revision,b.options.adapters)).settled,true);
   t.diagnostic(JSON.stringify(metrics));
+});
+test('single-item native publication wire measurement preserves the same acceptance checks',async t=>{
+  const b=await batchFixture(t,1),wire=new WeakMap(),original=b.f.db;let transactionBytes=0,transactions=0,maxBytes=0;
+  const db={...original,prepare(sql){const s=original.prepare(sql),bind=s.bind;wire.set(s,{sql,params:[]});
+    s.bind=function(...params){wire.set(s,{sql,params});return bind.apply(this,params);};return s;},
+    async batch(statements){const bytes=Buffer.byteLength(JSON.stringify({batch:statements.map(s=>wire.get(s))}));
+      transactionBytes+=bytes;transactions++;maxBytes=Math.max(maxBytes,bytes);assert.ok(bytes<=512*1024);return original.batch(statements);}};
+  const sent=await deliverOwnedApprovedCohortBatch({...b.options,db});
+  const done=await deliverOwnedApprovedCohortBatch({...b.options,db,owner:sent.owner});
+  assert.equal(done.state,'complete');assert.equal(b.sends(),1);assert.equal(b.f.sql.prepare('SELECT external_pending n FROM catalog_mutation_scopes').get().n,0);
+  t.diagnostic(JSON.stringify({scope:'local single-item native transactions only',transactionBytes,transactions,maxBytes}));
+});
+test('batched intent rolls back every saved member if a product changes during preparation',async t=>{
+  const b=await batchFixture(t),first=Object.values(b.options.originals)[0],load=first.load;
+  first.load=async(...args)=>{
+    const vector=await load(...args);
+    b.f.sql.prepare('UPDATE products SET title=? WHERE public_id=?').run('changed between capture and commit',vector.publicId);
+    return vector;
+  };
+  await assert.rejects(deliverOwnedApprovedCohortBatch(b.options),/vector_intent_unconfirmed/);
+  assert.equal(b.sends(),0);
+  assert.equal(b.f.sql.prepare("SELECT count(*) n FROM catalog_vector_deliveries WHERE generation=? AND json_extract(request_json,'$.kind')='prune'").get(b.options.owner.generation).n,0);
+  assert.equal(b.f.sql.prepare('SELECT external_pending n FROM catalog_mutation_scopes').get().n,0);
+});
+test('large native intent bodies still shrink into bounded groups and resume the exact saved membership',async t=>{
+  const b=await batchFixture(t,8,12000),wire=new WeakMap(),original=b.f.db;let maxBytes=0;
+  const db={...original,prepare(sql){const s=original.prepare(sql),bind=s.bind;wire.set(s,{sql,params:[]});
+    s.bind=function(...params){wire.set(s,{sql,params});return bind.apply(this,params);};return s;},
+    async batch(statements){const bytes=Buffer.byteLength(JSON.stringify({batch:statements.map(s=>wire.get(s))}));
+      maxBytes=Math.max(maxBytes,bytes);assert.ok(bytes<=512*1024);return original.batch(statements);}};
+  let owner=b.options.owner,offset=0;
+  while(offset<b.options.publicIds.length){
+    const publicIds=b.options.publicIds.slice(offset),sent=await deliverOwnedApprovedCohortBatch({...b.options,db,owner,publicIds});
+    assert.equal(sent.state,'pending');assert.ok(sent.publicIds.length<8);
+    const done=await deliverOwnedApprovedCohortBatch({...b.options,db,owner:sent.owner,publicIds});
+    assert.equal(done.state,'complete');assert.deepEqual(done.publicIds,sent.publicIds);
+    owner=done.owner;offset+=done.publicIds.length;
+  }
+  assert.equal(offset,8);assert.ok(b.sends()>1);
+  assert.equal((await readOwnedApprovedCohortVectors(db,owner,b.options.revision,b.options.adapters)).settled,true);
+  t.diagnostic(JSON.stringify({maxBytes,dispatches:b.sends()}));
 });
 test('native batch uses one real dispatch for four gifts, survives completion ACK loss and retains existing full proof',async t=>{
   const b=await batchFixture(t),first=await deliverOwnedApprovedCohortBatch(b.options);
@@ -165,7 +203,7 @@ function product(n, overrides={}) {
 const rights = p => Object.fromEntries(Object.entries({title:p.title,description:p.wittyDescription,imageUrl:p.imageUrl,
   affiliateUrl:p.affiliateUrl,wittyDescription:p.wittyDescription,editorialWriteup:p.editorialWriteup,humorTags:JSON.stringify(p.humorTags)})
   .map(([field,value])=>[field,{basis:'owned',reference:`test-only-owned/${p.id}/${field}`,value}]));
-async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListings=false,earlyExpiry=[],stockHeld=[]}={}) {
+async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListings=false,earlyExpiry=[],stockHeld=[],sourcePadding=0}={}) {
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());sql.exec('PRAGMA foreign_keys=ON');
   for(const name of (await readdir(new URL('../migrations/d1/',import.meta.url))).filter(name=>/^\d{4}.*\.sql$/.test(name)).sort())
     sql.exec(await readFile(new URL(`../migrations/d1/${name}`,import.meta.url),'utf8'));
@@ -204,7 +242,7 @@ async function setup(t,{initial=2,permanent=0,extraHeld=0,preservePermanentListi
     const first=await deliverOwnedOutboxEvent(options);cursor.current=first.owner;
     if(first.state==='pending'){const second=await deliverOwnedOutboxEvent({...options,owner:cursor.current});cursor.current=second.owner;assert.equal(second.state,'complete');}
     else assert.equal(first.state,'complete');}}
-  for(let n=1;n<=initial;n++)await upsert(product(n));
+  for(let n=1;n<=initial;n++)await upsert(product(n,sourcePadding?{sourceFacts:{fixture:n,padding:'x'.repeat(sourcePadding)}}:{}));
   await upsert(product(initial+1,{isActive:false,embedding:null}));
   await drain();
   for(let n=100;n<100+permanent;n++){

@@ -13,7 +13,10 @@ const byteLength = (value: string) => encoder.encode(value).byteLength;
 
 /** Exact original CAS and outer REST escaping bounds. A single-row fragment
  * remains in vector intent transactions; whole snapshots use the owner fence. */
-export function pruningCurrentQueries(rows: Row[]): Array<{ sql: string; params: unknown[]; count: number }> {
+export function pruningCurrentQueries(rows: Row[],deliveryId?:string): Array<{ sql: string; params: unknown[]; count: number }> {
+  // A native intent's request_json is immutable. Check its exact saved source
+  // in the same transaction instead of rebinding that large body on every CAS.
+  if(deliveryId!==undefined&&(!/^[a-f0-9]{64}$/.test(deliveryId)||rows.length!==1))throw Error('read_bounds');
   const chunks: Row[][] = []; let bytes = 0;
   for (const row of rows) {
     const size = byteLength(JSON.stringify(row));
@@ -31,10 +34,12 @@ export function pruningCurrentQueries(rows: Row[]): Array<{ sql: string; params:
         WHERE o.operation_id=json_extract(json_extract(e.value,'$.${field}'),'$.operation_id')
         AND ${['input_sha256','run_id','catalog_revision','environment','index_name','generation','prior_epoch','next_epoch','database_time','result_json','changes_json']
           .map(key => `o.${key} IS json_extract(json_extract(e.value,'$.${field}'),'$.${key}')`).join(' AND ')}))` : '').join('');
-    return { sql: `SELECT count(*) FROM json_each(?) e CROSS JOIN products p
+    const source=deliveryId===undefined?'?':`(SELECT json_array(json_extract(request_json,'$.pruneCurrent'))
+      FROM catalog_vector_deliveries WHERE delivery_id=?)`;
+    return { sql: `SELECT count(*) FROM json_each(${source}) e CROSS JOIN products p
       ON p.public_id=json_extract(e.value,'$.public_id') WHERE ${comparisons.join(' AND ')}${operationCas}${columns.length
         ? ` AND (json_extract(e.value,'$.approved_product_json') IS NULL OR (${columns.map(key=>`p.${key} IS json_extract(json_extract(e.value,'$.approved_product_json'),'$.${key}')`).join(' AND ')}))` : ''}`,
-    params: [JSON.stringify(chunk)], count: chunk.length };
+    params: [deliveryId??JSON.stringify(chunk)], count: chunk.length };
   }
   const output: Array<ReturnType<typeof query>> = [];
   function bounded(chunk: Row[]) {
