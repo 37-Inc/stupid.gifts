@@ -43,7 +43,7 @@ export async function readRuntimeAcceptance(db:CatalogD1,input:RuntimeCommit,fin
 /** The ONE atomic runtime head transition, shared by legacy sealed publication
  * and reviewed public deltas. No ownership claim, provider, build or index call.
  * A lost batch ACK is settled by exact readback, never a blind write replay. */
-export async function commitRuntimePublication(db:CatalogD1,input:RuntimeCommit,gate:MutationQuery,beforeCommit:D1Statement[]=[]){
+export async function commitRuntimePublication(db:CatalogD1,input:RuntimeCommit,gate:MutationQuery,acceptanceStatements:D1Statement[]=[]){
   const {owner,receipt}=input,intent=JSON.parse(receipt.manifest_json),bytes=encodePublicationIntent(intent);
   const requestBytes=encodeBuildRequest(input.request),token=sha256('runtime:'+bytes),at=receipt.completed_at;
   if(!['writing','freezing'].includes(owner.phase)||bytes!==receipt.manifest_json||intent.releaseId!==receipt.release_id
@@ -63,11 +63,13 @@ export async function commitRuntimePublication(db:CatalogD1,input:RuntimeCommit,
       WHERE h.singleton=1 AND p.release_id=? AND p.data_sha256=?)`,[input.previousReleaseId,input.previousDataSha256]),
     assert(`EXISTS(SELECT 1 FROM catalog_build_requests WHERE request_id=? AND request_json=? AND state='pending' AND attempts=0)
       AND NOT EXISTS(SELECT 1 FROM publication_outbox WHERE release_id=?)`,[input.requestId,requestBytes,receipt.release_id]),
-    ...beforeCommit,
     db.prepare(`INSERT INTO publication_outbox(intent_id,release_id,catalog_revision,intent_json,state,attempts,dispatch_reference,completed_token,created_at,updated_at)
       VALUES(?,?,?,?,'verified',1,?,?,?,?)`).bind(sha256(bytes),receipt.release_id,receipt.catalog_revision,bytes,'runtime:'+input.dataSha256,token,at,at),
     db.prepare('INSERT INTO publication_receipts(release_id,catalog_revision,code_sha,completed_at,manifest_json) VALUES(?,?,?,?,?)')
       .bind(receipt.release_id,receipt.catalog_revision,receipt.code_sha,at,bytes),
+    // The referenced receipt is already present INSIDE this same transaction.
+    // Ordinary foreign keys suffice; any later failure rolls everything back.
+    ...acceptanceStatements,
     db.prepare(`INSERT INTO catalog_runtime_publications(release_id,catalog_revision,data_sha256,source_snapshot_sha256,
       public_snapshot_sha256,handoff_sha256,request_id,owner_json,previous_release_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`)
       .bind(receipt.release_id,receipt.catalog_revision,input.dataSha256,input.sourceSnapshotSha256,input.publicSnapshotSha256,

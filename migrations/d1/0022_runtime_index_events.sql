@@ -3,7 +3,7 @@
 -- Reuse the existing immutable native payload; do not change legacy row shapes.
 CREATE TABLE catalog_runtime_index_events (
   sequence INTEGER PRIMARY KEY NOT NULL REFERENCES catalog_maintenance_vector_payloads(sequence),
-  release_id TEXT NOT NULL REFERENCES publication_receipts(release_id) DEFERRABLE INITIALLY DEFERRED,
+  release_id TEXT NOT NULL REFERENCES publication_receipts(release_id),
   operation_id TEXT NOT NULL REFERENCES catalog_maintenance_operations(operation_id),
   descriptor_json TEXT CHECK(descriptor_json IS NULL OR json_valid(descriptor_json)),
   delivery_json TEXT NOT NULL DEFAULT '{"native":[],"serving":[]}' CHECK(json_valid(delivery_json)),

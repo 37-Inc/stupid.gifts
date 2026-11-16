@@ -73,6 +73,7 @@ test('changed identity, duplicate changes, reused slugs and finite-only new list
 
 async function fixture(t,count=3000,transform=s=>s){
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
+  sql.exec('PRAGMA foreign_keys=ON');
   for(const name of (await readdir(new URL('../migrations/d1/',import.meta.url))).filter(n=>/^00\d\d_.*\.sql$/.test(n)).sort())
     sql.exec(await readFile(new URL('../migrations/d1/'+name,import.meta.url),'utf8'));
   sql.function('strftime',{varargs:true},()=>next);
