@@ -11,7 +11,8 @@ import type { CatalogBuildRequest } from './build-requests.ts';
 import type { PublishedCatalogBinding } from './publication.ts';
 import { mutationAdvance, mutationAssertion, mutationFenceQuery, unabandonedImportsQuery } from './mutation-fence.ts';
 import type { MutationOwner, MutationScope } from './mutation-fence.ts';
-import { checkCurrent, assertPruningCurrent, readOwnedProjection, readPruningSource } from '../../scripts/catalog/export-d1-snapshot.ts';
+import { checkCurrent, assertPruningCurrent, readPruningSource } from '../../scripts/catalog/export-d1-snapshot.ts';
+import {stageOwnedPublicProjection,verifyOwnedPublicProjection as storedProjection} from '../../scripts/catalog/stage-public-projection.ts';
 import type { SnapshotReadContext } from '../../scripts/catalog/export-d1-snapshot.ts';
 import { canonicalJson, sha256 } from '../../scripts/catalog/migration.ts';
 import { suppressNearDuplicateProducts } from '../db/product-scoring.ts';
@@ -96,11 +97,6 @@ function held(value: { id: string; publicId: string; slug: string }, reason: Saf
   return { id: value.id, publicId: value.publicId, slug: value.slug, path: `/gifts/${value.slug}`,
     title: 'Gift currently unavailable', description: 'This gift is not currently available in the curated catalog. Browse other gifts instead.', reason };
 }
-async function storedProjection(db: CatalogD1, owner: MutationOwner, packet: ProjectionPacket): Promise<void> {
-  const rows = await readOwnedProjection(db,owner,packet.receipt.catalog_revision,packet.rows.map(row=>String(row.public_id)).sort());
-  rows.sort((a,b) => String(a.public_id).localeCompare(String(b.public_id)));
-  if (canonicalJson(rows) !== canonicalJson(packet.rows)) throw new Error('prune_projection_changed');
-}
 /** Executable no-Amazon daily path. Caller acquires shared freezing ownership
  * using pruneOperationKey first. Retried claims use persisted capturedAt and the
  * same request; source drift refuses rather than silently producing a new seal.
@@ -176,51 +172,7 @@ export async function sealCapturedRevision(db: CatalogD1, owner: MutationOwner, 
   await db.batch([...start, db.prepare(`INSERT INTO catalog_revisions(revision,created_at,source_export_sha256,status)
     VALUES(?,?,?,'importing') ON CONFLICT(revision) DO NOTHING`).bind(revision, generatedAt, sourceDigest)]);
   const receipt = (await db.prepare('SELECT * FROM catalog_projection_receipts WHERE catalog_revision=?').bind(revision).all()).results[0];
-  // A fresh revision has nothing to compare. On recovery, validate every staged
-  // row as before; the complete readback after insertion is unconditional.
-  const fence=mutationFenceQuery(owner,['freezing']);
-  const target=(await db.prepare(`SELECT EXISTS(SELECT 1 FROM catalog_public_products WHERE catalog_revision=?) populated WHERE ${fence.sql}`)
-    .bind(revision,...fence.params).all<{populated:number}>()).results;
-  if(target.length!==1)throw new Error('prune_owner_mismatch');
-  const partial = target[0].populated===0?[]:await readOwnedProjection(db,owner,revision,packet.rows.map(row=>String(row.public_id)).sort());
-  const expected = new Map(packet.rows.map(row => [row.public_id, row]));
-  if (partial.some(row => canonicalJson(row) !== canonicalJson(expected.get(String(row.public_id))))) throw new Error('prune_projection_changed');
-  const present = new Set(partial.map(row => row.public_id)); let missing = packet.rows.filter(row => !present.has(row.public_id));
-  if (receipt && missing.length) throw new Error('prune_projection_changed');
-  // Reuse only byte-identical prior rows. The final complete projection readback
-  // below remains authoritative, including after a lost copy acknowledgement.
-  const prior = new Map(priorProjection.map(row=>[row.public_id,row]));
-  const copied = missing.filter(row=>{
-    const before=prior.get(row.public_id);
-    return before?.catalog_revision===request.previous.catalogRevision && Object.keys(before).length===Object.keys(row).length
-      && Object.keys(row).every(key=>key==='catalog_revision'||row[key]===before[key]);
-  }).map(row=>row.public_id);
-  if(copied.length){
-    await db.batch([mutationAssertion(db,owner,['freezing']),db.prepare(`INSERT INTO catalog_public_products
-      (catalog_revision,public_id,product_id,slug,title,description,tags,source_facts_hash,eligible_until,public_display_json,display_sha256)
-      SELECT ?,public_id,product_id,slug,title,description,tags,source_facts_hash,eligible_until,public_display_json,display_sha256
-      FROM catalog_public_products WHERE catalog_revision=? AND public_id IN (SELECT value FROM json_each(?))`)
-      .bind(revision,request.previous.catalogRevision,JSON.stringify(copied))]);
-    const reused=new Set(copied);missing=missing.filter(row=>!reused.has(row.public_id));
-  }
-  // Chunks are restartable while visibility remains held behind the final seal.
-  const gate = mutationFenceQuery(owner, ['freezing']);
-  const guard = {sql:`SELECT json(CASE WHEN ${gate.sql} THEN 'true' ELSE 'mutation_fenced' END)`,params:gate.params};
-  for (let offset = 0; offset < missing.length;) {
-    let queries: ReturnType<typeof projectionQueries> = []; let inserted = 0;
-    for (let count = 1; count <= Math.min(35,missing.length-offset); count++) {
-      // One-row INSERTs repeatedly flush FTS5. Group at most nine eleven-field
-      // rows (99 binds), keeping the same 35-row transaction/restart boundary.
-      const next = projectionQueries({...packet,rows:missing.slice(offset,offset+count)},9).slice(0,-1);
-      if (next.length >= 50 || Buffer.byteLength(JSON.stringify({batch:[guard,...next]})) > 512*1024) break;
-      queries = next; inserted = count;
-    }
-    if (!queries.length) throw new Error('prune_projection_bound');
-    await db.batch([mutationAssertion(db, owner, ['freezing']), ...queries.map(query =>
-      db.prepare(query.sql).bind(...query.params))]);
-    offset += inserted;
-  }
-  await storedProjection(db, owner, packet);
+  await stageOwnedPublicProjection({db,owner,packet,previousRevision:request.previous.catalogRevision,previousRows:priorProjection,sealed:Boolean(receipt)});
   let nextOwner = owner;
   if (receipt) {
     if (canonicalJson(receipt) !== canonicalJson(packet.receipt)) throw new Error('prune_receipt_changed');
