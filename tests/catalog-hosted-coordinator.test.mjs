@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {PassThrough} from 'node:stream';
 import {once} from 'node:events';
-import {coordinateHostedCatalog,hostedRunRecord,hostedInvocationDay,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader,hostedAdmissionAsins,assertUnpreparedHostedAdmission,reportHostedCleanupFailure} from '../scripts/catalog/hosted-coordinator.mjs';
+import {prepareHostedCatalog,coordinateHostedCatalog,hostedRunRecord,hostedInvocationDay,hostedCommandEnvironment,validateHostedProposal,checkHostedProviderShadow,hostedOperatorFailure,hostedPublicationProgress,hostedProgressReader,hostedAdmissionAsins,assertUnpreparedHostedAdmission,reportHostedCleanupFailure} from '../scripts/catalog/hosted-coordinator.mjs';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {CATALOG_SCOPE} from '../scripts/catalog/automation-runtime.mjs';
 import {hostedRunKey} from '../scripts/catalog/hosted-run-record.mjs';
@@ -92,11 +92,12 @@ function fixture(){
     savedAdmission:async()=>{events.push('saved-evidence-restored');},
     assertUnprepared:async()=>{events.push('verified-unprepared');},
     checkout:async source=>{checkedOut.push(source);f.executingSource=source;return '/operators/'+source;},
-    inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,config:f.config,configSha256:HASH,approvalPin:f.approvalPin,publication:f.publication}),
+    inspect:async()=>({prepared:f.prepared,started:f.phase!==null,phase:f.phase,owner:f.owner,providerPrepared:f.providerPrepared,config:f.config,configSha256:HASH,approvalPin:f.approvalPin,publication:f.publication}),
     accepted:async()=>f.phase==='finalized'?f.accepted:null,
     registerCleanup:async()=>{events.push('cleanup-register');},cleanup:async()=>{},
     invoke:async(directory,args)=>{
       calls.push(args);let command=args[0];events.push(command);
+      if(command==='stage'){f.prepared=true;f.phase='phases_running';return{state:'prepared',reason:'provider_preparation_complete'};}
       if(command==='recover')command=args[1]===HASH?(f.phase==='phases_complete'?'review':'resume'):'publish';
       if(command==='prepare'){assert.ok(events.indexOf('pending')<events.indexOf('prepare'));f.prepared=true;
         return{source:directory.split('/').at(-1),configSha256:HASH,runId:f.config.runId};}
@@ -108,6 +109,52 @@ function fixture(){
   f.run=(options={},overrides={})=>coordinateHostedCatalog({mode:'full',source:SOURCE,day:DAY,runtime,...options},{...f.deps,...overrides});
   return f;
 }
+
+test('provider preparation uses the same immutable intent without taking the publisher pointer',async()=>{
+  const f=fixture();f.config.publication.runtimeCatalog={mode:'public-delta'};
+  const options={mode:'full',source:SOURCE,day:DAY,runtime:f.runtime};
+  const first=await prepareHostedCatalog(options,f.deps);
+  assert.equal(first.state,'prepared');assert.equal(first.reused,false);assert.equal(f.pointer(),null);
+  assert.deepEqual(f.calls,[['stage','--run','scheduled-'+DAY]]);
+  assert.equal(f.events.includes('pending'),false);assert.equal(f.events.includes('clear'),false);
+  const record=JSON.parse(f.files.get(f.runtime.care+'/runs/scheduled-'+DAY+'/hosted-run.json'));
+  const authority=await routineHostedPending(f.runtime,SOURCE,record.runKey,{preparation:true});assert.deepEqual(authority,record);
+  assert.equal((await prepareHostedCatalog(options,f.deps)).reused,true);assert.equal(f.calls.length,1);
+  const ready=JSON.parse(f.files.get(f.runtime.care+'/runs/'+record.runKey+'/provider-prepared.json'));
+  assert.deepEqual(ready,{schemaVersion:1,source:SOURCE,configSha256:HASH,runId:f.config.runId});
+});
+test('modern publisher waits for the preparation handoff without touching its workspace or repeating providers',async()=>{
+  const f=fixture();f.prepared=true;f.phase='phases_running';f.config.publication.runtimeCatalog={mode:'public-delta'};
+  const pending=await f.run();assert.equal(pending.errorCode,'catalog_preparation_required');assert.deepEqual(f.calls,[]);
+  const pointer=Buffer.from(f.pointer());
+  // A later photo tick resumes this ORIGINAL full preparation, not a new photo batch.
+  const prepared=await prepareHostedCatalog({mode:'photos',source:NEW_SOURCE,day:'2026-11-07',runtime:f.runtime},f.deps);
+  assert.equal(prepared.state,'prepared');assert.equal(prepared.runKey,'scheduled-'+DAY);
+  assert.deepEqual(f.checkedOut.at(-1),SOURCE);assert.deepEqual(f.pointer(),pointer);
+  assert.deepEqual(f.calls,[['stage','--run','scheduled-'+DAY]]);
+  f.providerPrepared=true;const accepted=await f.run({mode:'photos',source:NEW_SOURCE});assert.equal(accepted.state,'accepted');
+  assert.deepEqual(f.calls.map(a=>a[0]),['stage','recover','recover','recover']);
+  assert.ok(f.calls.slice(1).every(a=>a[1]===HASH||a[1]===f.proposalSha),'original-source recovery keeps the exact config/review authority');
+});
+test('preparation never reopens owned or frozen legacy work and rejects a mismatched ready marker',async()=>{
+  const f=fixture();f.config.publication.runtimeCatalog={mode:'public-delta'};
+  const options={mode:'full',source:SOURCE,day:DAY,runtime:f.runtime};
+  await prepareHostedCatalog(options,f.deps);f.owner={phase:'writing'};
+  assert.equal((await prepareHostedCatalog(options,f.deps)).reason,'original_publisher_resume_required');assert.equal(f.calls.length,1);
+  f.owner=null;const file=f.runtime.care+'/runs/scheduled-'+DAY+'/provider-prepared.json';
+  f.files.set(file,bytes({schemaVersion:1,source:NEW_SOURCE,configSha256:HASH,runId:f.config.runId}));
+  await assert.rejects(prepareHostedCatalog(options,f.deps),/preparation_identity/);
+  assert.equal((await prepareHostedCatalog({...options,admitSavedRun:'old-run'},f.deps)).reason,'original_saved_admission');
+});
+test('workflow has one catalog writer, owner-free preparation and post-publication indexing without product credentials',async()=>{
+  const yaml=await readFile(new URL('../.github/workflows/catalog-manual.yml',import.meta.url),'utf8');
+  assert.equal((yaml.match(/group: catalog-production/g)??[]).length,1);
+  const prep=yaml.split('  prepare-catalog:')[1].split('  catalog:')[0];
+  assert.match(prep,/hosted-coordinator\.mjs stage/);assert.doesNotMatch(prep,/group: catalog-production/);
+  const indexes=yaml.split('  indexes:')[1].split('  cleanup:')[0];
+  assert.match(indexes,/needs: catalog/);assert.match(indexes,/hosted-index-delivery\.mjs/);
+  assert.doesNotMatch(indexes,/AMAZON|OPENAI|catalog-production/);assert.doesNotMatch(yaml,/\n\s+schedule:/);
+});
 
 test('one existing operator performs prepare/start/review/exact-SHA publish; pointer clears only after acceptance',async()=>{
   const f=fixture(),result=await f.run();assert.equal(result.state,'accepted');

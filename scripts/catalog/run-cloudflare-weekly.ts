@@ -293,6 +293,10 @@ export interface WeeklyDriverOptions {
   /** Separately reviewed continuation of one retained, failed upload. */
   reviewedUploadRetry?:{path:string;sha256:string};
   cadenceOnly?:boolean;
+  /** Owner-free provider preparation; never apply a product or publish. */
+  prepareOnly?:boolean;
+  /** Modern publisher may consume saved work, never start provider phases. */
+  publicationOnly?:boolean;
   /** Runtime storage adapter only; not serialized into historical manifests. */
   durable?:RunWorkspaceOptions['durable'];
 }
@@ -641,6 +645,7 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           await (await import('./staff-preparation.mjs')).importStaffPreparation({runtime:automationRuntime(),repository:repo,pin,ws,journal,runId:config.runId,now});
         }
         const needsProvider=needsApplication&&(await Promise.all(phases.map((_,index)=>journal.read(`phase-${index}-prepared`)))).some(value=>!value);
+        if(options.publicationOnly&&needsProvider)return{state:'pending',phase:cp.phase,errorCode:'catalog_preparation_required',budget:await ws.budget()};
         const needsModel=needsProvider&&Boolean(config.cadence!.automation?.discovery||config.cadence!.admitAsins);
         const preparationIdentity={schemaVersion:1,kind:'product-preparation',runId:config.runId,configSha256:options.configSha256};
         if(cp.pins.productPreparation&&canonicalJson(await ws.readArtifact(cp.pins.productPreparation))!==canonicalJson(preparationIdentity))
@@ -678,6 +683,10 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           try{if(environment)await scopedProviders(environment,prepare);else await prepare();}
           catch(error){return{state:'attention',phase:cp.phase,errorCode:safeCode(error),
             ...(catalogD1FailureDetail(error)?{diagnostic:catalogD1FailureDetail(error)}:{}),budget:await ws.budget()};}
+        }
+        if(options.prepareOnly){
+          if(cp.owner)throw Error('catalog_preparation_owner_present');
+          return{state:'prepared',phase:cp.phase,reason:'provider_preparation_complete',runId:config.runId,budget:await ws.budget()};
         }
         let owner=cp.owner;
         if(owner)owner=await reconcileReviewedPhaseOwner({db,owner,actual:await readMutationOwner(db,scope),journal,runId:config.runId,catalogRevision:config.catalogRevision});

@@ -103,7 +103,7 @@ export function validatePublicationConfig(input:PublicationConfig):Readonly<Publ
     ||new Date(`${input.compatibilityDate}T00:00:00.000Z`).toISOString().slice(0,10)!==input.compatibilityDate)
     throw new Error('publication_configuration_invalid');
   if(Object.hasOwn(input,'homepage')&&!readHomepageEdition(input.homepage))throw new Error('publication_homepage_invalid');
-  if(input.runtimeCatalog&&(!exact(input.runtimeCatalog,'homepageRevision,previousDataSha256,previousReleaseId,schemaVersion'+(input.runtimeCatalog.mode===undefined?'':',mode'))
+  if(input.runtimeCatalog&&(!exact(input.runtimeCatalog,'homepageRevision,'+(input.runtimeCatalog.mode===undefined?'':'mode,')+'previousDataSha256,previousReleaseId,schemaVersion')
     ||input.runtimeCatalog.mode!==undefined&&input.runtimeCatalog.mode!=='public-delta'
     ||input.runtimeCatalog.schemaVersion!==1||!KEY.test(input.runtimeCatalog.previousReleaseId)||!HASH.test(input.runtimeCatalog.previousDataSha256)
     ||!Number.isSafeInteger(input.runtimeCatalog.homepageRevision)||input.runtimeCatalog.homepageRevision<0

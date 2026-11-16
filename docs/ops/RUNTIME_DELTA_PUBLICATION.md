@@ -76,7 +76,7 @@ requires a genuine positive observation. Expiry falls back to cleared content.
   marks that original delete outbox row delivered. Public membership already
   excludes the product. Provider Retry-After defers only index delivery.
 
-## Hosted integration / cutover still required
+## Hosted integration
 
 - Generalize the existing owner-free saved preparation for morning/photo care,
   not only staff additions. Keep original due dates, run identities, selections,
@@ -84,10 +84,11 @@ requires a genuine positive observation. Expiry falls back to cleared content.
 - In the existing workflow put preparation before, and index work after, the
   short `catalog-production` publication job. Staff requests use the same commit
   code and do not queue behind a daily job's supplier/model/index work.
-- Commit prepared daily work in bounded existing technical batches. Give ready
-  staff admissions a turn before the next daily batch through this SAME
-  publisher. Do not hold its owner for an entire day's preparation/index work,
-  create a matrix job per product, or introduce parallel catalog writers.
+- Apply each finite saved cohort using existing restartable technical batches.
+  Give ready staff admissions the next turn before NEW daily publication, then
+  check them again afterward. Finish an already-owned cohort; do not add a
+  multi-release preemption queue or per-product workflow matrix. Preparation
+  and indexing never hold the catalog writer.
 - A prepared product may commit over a newer accepted public predecessor if its
   own exact source fingerprint still matches. Once publication has staged an
   immutable intent, resume THAT intent/owner/head or reconcile its real receipt;
@@ -140,7 +141,15 @@ external Retry-After without taking a catalog owner. Composed tests cover a
 lost native ACK, no duplicate write, current-field semantic resolution, cold
 expired workspace recovery, cross-scope rejection and original photo deadlines.
 
-STILL REQUIRED: composed driver/cutover tests, provider preparation outside the
-GitHub publication queue, the after-publication workflow step, bounded daily
-application turns for ready staff requests, CI/review/merge and actual safe
-production cutover/QA. No migration, mode or publication has been activated yet.
+The existing workflow now performs owner-free provider preparation before its
+single `catalog-production` job, with an exact source/config/run handoff. The
+publisher refuses to begin provider work. A lost runner resumes the ORIGINAL
+preparation, not another day/cohort. Index delivery follows publication using
+the existing immutable saved payloads; it has no supplier/model credentials or
+catalog owner. Optional pending delivery reports separately from acceptance.
+
+Composed driver coverage verifies preparation makes no product writes, the
+publisher refuses missing preparation, saved work publishes without another
+provider request or native wait, and finalized retries cannot replay anything.
+STILL REQUIRED: CI/review/merge and actual safe production cutover/QA. No
+migration, mode or publication has been activated yet.

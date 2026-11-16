@@ -36,6 +36,49 @@ permissions:
   contents: read
 
 jobs:
+  prepare-catalog:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (inputs.mode == 'full' || inputs.mode == 'photos' || inputs.mode == 'canary' || inputs.mode == 'admit')
+    outputs:
+      publish: ${{ steps.stage.outputs.publish }}
+    concurrency:
+      group: catalog-provider-preparation
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    environment: Production
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.23.1'
+          cache: npm
+      - run: env -i HOME=/home/runner PATH="$PATH" CI=true npm ci --ignore-scripts --no-audit --no-fund
+      - name: Save original provider preparation outside the publisher queue
+        id: stage
+        env:
+          CATALOG_MODE: ${{ inputs.mode }}
+          CATALOG_SCHEDULED_AT: ${{ inputs.scheduled_at || '' }}
+          CATALOG_CANARY_ASIN: ${{ inputs.canary_asin }}
+          CATALOG_ADMIT_ASINS: ${{ inputs.admit_asins }}
+          CATALOG_ADMIT_SAVED_RUN: ${{ inputs.admit_saved_run }}
+          CATALOG_PHOTO_ASINS: ${{ inputs.photo_asins }}
+          STUPID_GIFTS_WEBSITE_CAMPAIGNS: ${{ secrets.STUPID_GIFTS_WEBSITE_CAMPAIGNS }}
+          STUPID_GIFTS_OPERATOR_MODE: hosted
+          STUPID_GIFTS_CLOUDFLARE_API_TOKEN: ${{ secrets.STUPID_GIFTS_CLOUDFLARE_API_TOKEN }}
+          STUPID_GIFTS_AMAZON_CREDENTIAL_ID: ${{ secrets.STUPID_GIFTS_AMAZON_CREDENTIAL_ID }}
+          STUPID_GIFTS_AMAZON_CREDENTIAL_SECRET: ${{ secrets.STUPID_GIFTS_AMAZON_CREDENTIAL_SECRET }}
+          STUPID_GIFTS_OPENAI_API_KEY: ${{ secrets.STUPID_GIFTS_OPENAI_API_KEY }}
+          STUPID_GIFTS_R2_ACCESS_KEY_ID: ${{ secrets.STUPID_GIFTS_R2_ACCESS_KEY_ID }}
+          STUPID_GIFTS_R2_SECRET_ACCESS_KEY: ${{ secrets.STUPID_GIFTS_R2_SECRET_ACCESS_KEY }}
+        run: >-
+          node --import tsx scripts/catalog/hosted-coordinator.mjs stage
+          "$CATALOG_MODE" "$CATALOG_CANARY_ASIN" "$CATALOG_ADMIT_ASINS" "$CATALOG_ADMIT_SAVED_RUN" "$CATALOG_PHOTO_ASINS"
   prepare-admin:
     if: github.ref == 'refs/heads/main' && inputs.mode == 'admin'
     concurrency:
@@ -65,10 +108,11 @@ jobs:
           STUPID_GIFTS_R2_SECRET_ACCESS_KEY: ${{ secrets.STUPID_GIFTS_R2_SECRET_ACCESS_KEY }}
         run: node --import tsx scripts/catalog/hosted-coordinator.mjs prepare-admin
   catalog:
-    needs: prepare-admin
+    needs: [prepare-admin, prepare-catalog]
     if: >-
       !cancelled() && github.ref == 'refs/heads/main' &&
-      (needs.prepare-admin.result == 'success' || (inputs.mode != 'admin' && needs.prepare-admin.result == 'skipped'))
+      (needs.prepare-admin.result == 'success' || (inputs.mode != 'admin' && needs.prepare-admin.result == 'skipped')) &&
+      (needs.prepare-catalog.result == 'skipped' || (needs.prepare-catalog.result == 'success' && needs.prepare-catalog.outputs.publish == 'true'))
     concurrency:
       group: catalog-production
       queue: max
@@ -115,6 +159,36 @@ jobs:
         run: |
           umask 077
           node --import tsx scripts/catalog/hosted-coordinator.mjs "$CATALOG_MODE" "$CATALOG_CANARY_ASIN" "$CATALOG_ADMIT_ASINS" "$CATALOG_ADMIT_SAVED_RUN" "$CATALOG_PHOTO_ASINS"
+
+  indexes:
+    name: Stupid Gifts — Derived index delivery
+    needs: catalog
+    if: >-
+      github.ref == 'refs/heads/main' && needs.catalog.result == 'success' &&
+      (inputs.mode == 'full' || inputs.mode == 'photos' || inputs.mode == 'canary' || inputs.mode == 'admit' || inputs.mode == 'admin')
+    concurrency:
+      group: catalog-index-delivery
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    environment: Production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.23.1'
+          cache: npm
+      - run: env -i HOME=/home/runner PATH="$PATH" CI=true npm ci --ignore-scripts --no-audit --no-fund
+      - name: Deliver saved embeddings without a catalog writer or supplier/model credentials
+        env:
+          STUPID_GIFTS_OPERATOR_MODE: hosted
+          STUPID_GIFTS_CLOUDFLARE_API_TOKEN: ${{ secrets.STUPID_GIFTS_CLOUDFLARE_API_TOKEN }}
+          STUPID_GIFTS_R2_ACCESS_KEY_ID: ${{ secrets.STUPID_GIFTS_R2_ACCESS_KEY_ID }}
+          STUPID_GIFTS_R2_SECRET_ACCESS_KEY: ${{ secrets.STUPID_GIFTS_R2_SECRET_ACCESS_KEY }}
+        run: node --import tsx scripts/catalog/hosted-index-delivery.mjs
 
   cleanup:
     name: Stupid Gifts — Expired cleanup

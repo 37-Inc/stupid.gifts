@@ -40,6 +40,9 @@ import {createPermanentCatalogSeal} from '../scripts/catalog/permanent-catalog-s
 import {earliestDisplayExpiry} from '../lib/catalog/display.ts';
 import {createPhotoRelease} from '../static-site/lib/photos.ts';
 import {executionAdoptionDigest} from '../scripts/catalog/execution-adoption.ts';
+import {exportRuntimeCatalog} from '../scripts/catalog/export-runtime-catalog.ts';
+import {encodePublicationIntent} from '../lib/catalog/publication.ts';
+import {runtimeDeltaSealBytes} from '../scripts/catalog/runtime-delta-seal.ts';
 
 // Real composed stores/fence/evidence/driver/publisher/workspace over SQLite.
 // Default cases mock external Amazon/OpenAI/CF and Next compilation. Capacity
@@ -421,7 +424,37 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
       return{oldOptions,budget,manifestBytes,seal};
     },
     loseWrite(){dropWrite=true;},tamper(fn){queryTamper=fn;},
-    async run(command,approval){route=fetch;return runCloudflareWeekly({...options,command,...(approval?{approval}:{})},dependencies);},
+    async run(command,approval,flags={}){route=fetch;return runCloudflareWeekly({...options,command,...(approval?{approval}:{}),...flags},dependencies);},
+    async enableRuntimeDelta(){
+      const objects=new Map();let serial=0;
+      const store={async get(key){return objects.get(key)??null;},async putImmutable(key,bytes){
+        const old=objects.get(key);if(old)assert.deepEqual(old.bytes,bytes);else objects.set(key,{bytes:Buffer.from(bytes),etag:'"'+(++serial)+'"'});return objects.get(key);},
+        async compareAndSwap(key,etag,bytes){assert.equal(objects.get(key)?.etag??null,etag);const value={bytes:Buffer.from(bytes),etag:'"'+(++serial)+'"'};objects.set(key,value);return value;},
+        async remove(){throw Error('fixture removal forbidden');}};
+      const exported=await exportRuntimeCatalog({snapshot:previous,releaseId:'runtime-prior',sourceCodeSha:codeSha,store,now:()=>Date.parse(clock),registerFinite:async()=>{}});
+      const receipt={release_id:'runtime-prior',catalog_revision:previous.catalogRevision,code_sha:codeSha,completed_at:clock,
+        manifest_json:encodePublicationIntent({releaseId:'runtime-prior',codeSha,catalogRevision:previous.catalogRevision,
+          catalogSnapshotSha256:exported.sourceSnapshotSha256,manifestSha256:exported.dataSha256,vectorSyncWatermark:0,priorReleaseId:priorReleaseId,nextExpiry:null})};
+      sql.prepare('INSERT INTO publication_receipts(release_id,catalog_revision,code_sha,completed_at,manifest_json) VALUES(?,?,?,?,?)')
+        .run(receipt.release_id,receipt.catalog_revision,receipt.code_sha,receipt.completed_at,receipt.manifest_json);
+      sql.prepare(`INSERT INTO catalog_runtime_publications(release_id,catalog_revision,data_sha256,source_snapshot_sha256,public_snapshot_sha256,owner_json,created_at)
+        VALUES(?,?,?,?,?,'{}',?)`).run(receipt.release_id,receipt.catalog_revision,exported.dataSha256,exported.sourceSnapshotSha256,exported.publicSnapshotSha256,clock);
+      sql.prepare('INSERT INTO catalog_runtime_head VALUES(1,?,1,1)').run(receipt.release_id);
+      const history=Buffer.from(canonicalJson({kind:'test-only original native history',publication:priorReceipt})),nativeHistorySha256=sha256(history);
+      await store.putImmutable('catalog-history/'+nativeHistorySha256+'.json',history);
+      const seal={schemaVersion:1,kind:'runtime-delta-seal',envelopeJson:JSON.stringify(createSealedSnapshotEnvelope(previous)),snapshotSha256:packet.receipt.snapshot_sha256,
+        publication:{releaseId:receipt.release_id,receiptSha256:sha256(canonicalJson(receipt))},dataSha256:exported.dataSha256,publicSnapshotSha256:exported.publicSnapshotSha256,
+        projectionReceipt:packet.receipt,nativeHistorySha256,indexDelivery:'asynchronous',previousPublication:{releaseId:priorReleaseId,receiptSha256:sha256(canonicalJson(priorReceipt))},
+        generation:Number(sql.prepare('SELECT generation FROM catalog_mutation_scopes').get().generation),scope,
+        request:{schemaVersion:1,environment:scope.environment,sourceRevision:previous.catalogRevision,sourceDigest:packet.receipt.snapshot_sha256,
+          codeSha,priorReleaseId:priorReleaseId,capturedAt:previous.generatedAt,cutoff:new Date(Date.parse(clock)+3600000).toISOString()}};
+      runtimeDeltaSealBytes(seal);await put(config.inputs.previous.path,seal);config.inputs.previous.sha256=sha256(await fs.readFile(config.inputs.previous.path));
+      const nextContext={...context,priorPublication:seal.publication,publicationReceiptWatermark:sql.prepare('SELECT max(rowid) n FROM publication_receipts').get().n};
+      await put(config.inputs.context.path,nextContext);config.inputs.context.sha256=sha256(await fs.readFile(config.inputs.context.path));
+      config.publication.runtimeCatalog={schemaVersion:1,mode:'public-delta',previousReleaseId:receipt.release_id,previousDataSha256:exported.dataSha256,homepageRevision:0};
+      config.publication.prior={directory:null,manifestSha256:exported.dataSha256,releaseId:receipt.release_id,versionReference:PRIOR_VERSION};
+      options.durable=store;workspaceOptions.durable=store;return{store,objects,seal};
+    },
     async approve(){
       const changes=sql.prepare('SELECT * FROM products WHERE catalog_revision=? ORDER BY public_id').all(config.catalogRevision).map(row=>{
         const op=sql.prepare(`SELECT * FROM catalog_maintenance_operations WHERE run_id=? AND EXISTS(
@@ -433,6 +466,32 @@ async function setup(t,{noPrior=false,at=NOW,permanent=0,held=0,discovered=0,rea
       const file=path.join(directory,`${config.runId}-explicit-reviewed-postphase.json`);await put(file,approval);return{path:file,sha256:sha256(await fs.readFile(file))};
     }};
 }
+
+test('COMPOSED runtime driver prepares owner-free then publishes the same saved cohort without providers or index waits',async t=>{
+  const f=await setup(t,{permanent:2,held:1}),runtime=await f.enableRuntimeDelta();
+  f.config.publication.releaseId=f.config.runId;
+  f.config.cadence={day:'2026-10-20',featuredIds:[],runKey:f.config.runId,automation:{schemaVersion:1,refreshIds:[ID],discovery:false}};
+  f.config.backfillLimit=0;delete f.config.credentials.openai;await f.configure();
+  const originalRows=canonicalJson(f.sql.prepare('SELECT * FROM products ORDER BY id').all());
+  const guarded=await f.run('start',undefined,{publicationOnly:true});assert.equal(guarded.errorCode,'catalog_preparation_required');
+  assert.equal(f.calls.getItems+f.calls.search+f.calls.chat+f.calls.embedding,0,'publisher cannot begin product preparation');
+  const staged=await f.run('resume',undefined,{prepareOnly:true});assert.equal(staged.state,'prepared',JSON.stringify(staged));
+  assert.equal(await readMutationOwner(f.local,{environment:f.config.environment,indexName:f.config.vectorIndex.name}),null);
+  assert.equal(canonicalJson(f.sql.prepare('SELECT * FROM products ORDER BY id').all()),originalRows,'preparation changes no product rows');
+  const paid=structuredClone(f.calls);assert.equal((await f.run('resume',undefined,{prepareOnly:true})).state,'prepared');
+  assert.equal(f.calls.getItems,paid.getItems);assert.equal(f.calls.chat+f.calls.embedding,0);
+  const applied=await f.run('resume',undefined,{publicationOnly:true});assert.equal(applied.reason,'awaiting_reviewed_approval',JSON.stringify(applied));
+  assert.equal(f.calls.getItems,paid.getItems);const approval=await f.approve();
+  const result=await f.run('resume',approval,{publicationOnly:true});assert.equal(result.state,'finalized',JSON.stringify(result));
+  assert.equal(result.catalogSeal.kind,'runtime-delta-seal');assert.equal(result.catalogSeal.nativeHistorySha256,runtime.seal.nativeHistorySha256);
+  assert.equal(f.calls.upsert+f.calls.delete+f.calls.build+f.calls.upload+f.calls.activate,0);
+  assert.equal(f.sql.prepare('SELECT release_id FROM catalog_runtime_head').get().release_id,f.config.publication.releaseId);
+  assert.equal(f.sql.prepare('SELECT state FROM catalog_build_requests WHERE release_id=?').get(f.config.publication.releaseId).state,'resolved');
+  assert.equal(await readMutationOwner(f.local,{environment:f.config.environment,indexName:f.config.vectorIndex.name}),null);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM products').get().n,3);
+  const before=structuredClone(f.calls);assert.equal((await f.run('resume',undefined,{publicationOnly:true})).state,'finalized');
+  assert.deepEqual(f.calls,before,'finalized readback cannot replay any provider work');
+});
 
 test('acknowledged native indexing waits resume the same publication without repeating provider phases',async t=>{
   const f=await setup(t);
