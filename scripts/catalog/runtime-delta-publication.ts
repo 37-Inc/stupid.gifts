@@ -11,7 +11,7 @@ import {encodeBuildRequest} from '../../lib/catalog/build-requests.ts';
 import {encodePublicationIntent} from '../../lib/catalog/publication.ts';
 import {earliestDisplayExpiry} from '../../lib/catalog/display.ts';
 import type {CatalogObjectStore} from './r2-object-store.ts';
-import {readOwnedProjection} from './export-d1-snapshot.ts';
+import {readOwnedProjection,createSealedSnapshotEnvelope} from './export-d1-snapshot.ts';
 import {exportRuntimeCatalog} from './export-runtime-catalog.ts';
 import {readReviewedRuntimeDelta,runtimeDeltaSourceFence} from './runtime-delta-source.ts';
 import {assembleRuntimeCatalogDelta} from './runtime-catalog-delta.ts';
@@ -19,16 +19,13 @@ import {stageOwnedPublicProjection} from './stage-public-projection.ts';
 import {commitRuntimePublication,readRuntimeAcceptance} from './commit-runtime-publication.ts';
 import type {RuntimeCommit} from './commit-runtime-publication.ts';
 import {canonicalJson,sha256} from './migration.ts';
-
-/** Flat, body-free successor. It does NOT assert synchronous native promotion.
- * The original native seal remains independently retained by its exact hash. */
-export interface RuntimeDeltaSeal {
-  schemaVersion:1;kind:'runtime-delta-seal';publication:{releaseId:string;receiptSha256:string};
-  dataSha256:string;sourceSnapshotSha256:string;publicSnapshotSha256:string;
-  projectionReceipt:Awaited<ReturnType<typeof createProjectionPacket>>['receipt'];
-  nativeHistorySha256:string;indexDelivery:'asynchronous';
-}
-interface DeltaHandoff {schemaVersion:1;kind:'runtime-delta-handoff';commit:RuntimeCommit;sourceVersion:number;seal:RuntimeDeltaSeal}
+import {runtimeDeltaSealBytes} from './runtime-delta-seal.ts';
+import type {RuntimeDeltaSeal} from './runtime-delta-seal.ts';
+import type {RuntimePublicationControl} from './run-workspace.ts';
+import {activatedPermanentSummary} from './activated-permanent-control.ts';
+export type {RuntimeDeltaSeal} from './runtime-delta-seal.ts';
+interface DeltaHandoff {schemaVersion:1;kind:'runtime-delta-handoff';commit:RuntimeCommit;sourceVersion:number;seal:RuntimeDeltaSeal;
+  indexPublicIds:string[];summary:Record<string,unknown>;retainOriginalFailedTelemetry:false}
 const HASH=/^[a-f0-9]{64}$/;
 const byteHash=(value:Uint8Array)=>createHash('sha256').update(value).digest('hex');
 const bytes=(value:unknown)=>Buffer.from(canonicalJson(value));
@@ -58,7 +55,10 @@ export async function readAcceptedPublicCatalog(input:{db:CatalogD1;store:Catalo
     ||sha256(JSON.stringify(data.snapshot)+'\n')!==public_snapshot_sha256)throw Error('runtime_predecessor_changed');
   const projection=(await db.prepare('SELECT * FROM catalog_projection_receipts WHERE catalog_revision=?')
     .bind(data.snapshot.catalogRevision).all<Record<string,unknown>>()).results;
-  const previousRows=await readOwnedProjection(db,owner,data.snapshot.catalogRevision,[...data.productOrder].sort(),{phase:'writing'});
+  // Short receipts project only permanent cleared data. Legacy receipts bind
+  // their original full DTO/order; retain that reader for the first cutover.
+  const projectedIds=source_snapshot_sha256===public_snapshot_sha256?data.snapshot.products.map(p=>p.publicId):data.productOrder;
+  const previousRows=await readOwnedProjection(db,owner,data.snapshot.catalogRevision,[...projectedIds].sort(),{phase:'writing'});
   if(projection.length!==1||projection[0].snapshot_sha256!==source_snapshot_sha256
     ||projection[0].product_count!==previousRows.length||sha256(JSON.stringify(previousRows))!==projection[0].projection_sha256)
     throw Error('runtime_predecessor_projection_changed');
@@ -92,38 +92,47 @@ export async function readAcceptedPublicCatalog(input:{db:CatalogD1;store:Catalo
 export async function prepareRuntimeDeltaPublication(input:{db:CatalogD1;store:CatalogObjectStore;owner:MutationOwner;
   approval:ApprovedCohortEnvelope;approvalSha256:string;previous:{releaseId:string;dataSha256:string;receiptSha256:string};
   releaseId:string;codeSha:string;runReference:string;nativeHistorySha256:string;now:Date;
-  homepage?:SiteAssetManifest['homepage'];merchandising?:SiteAssetManifest['merchandising']}){
+  homepage?:SiteAssetManifest['homepage'];merchandising?:SiteAssetManifest['merchandising'];summary?:Record<string,unknown>}){
   if(input.owner.phase!=='writing'||!HASH.test(input.nativeHistorySha256))throw Error('runtime_delta_owner_invalid');
   await object(input.store,'catalog-history/'+input.nativeHistorySha256+'.json',input.nativeHistorySha256);
   const previous=await readAcceptedPublicCatalog({...input,...input.previous});
   const proof=await readReviewedRuntimeDelta({...input,previous:previous.snapshot});
   const assembled=assembleRuntimeCatalogDelta(previous.snapshot,proof.changes,{catalogRevision:input.approval.catalogRevision,generatedAt:input.now.toISOString()});
   const facts={...previous.factsByPublicId,...proof.factsByPublicId};
-  const packet=await createProjectionPacket(assembled.snapshot,facts,input.approvalSha256,input.now);
-  await stageOwnedPublicProjection({db:input.db,owner:input.owner,packet,previousRevision:previous.snapshot.catalogRevision,previousRows:previous.previousRows});
   const exported=await exportRuntimeCatalog({snapshot:assembled.snapshot,releaseId:input.releaseId,sourceCodeSha:input.codeSha,
     assets:previous.data.assets,disclosures:previous.data.disclosures,semanticCatalog:previous.data.semanticCatalog,
     homepage:input.homepage??previous.data.homepage,merchandising:input.merchandising??previous.data.merchandising,
     store:input.store,now:()=>input.now.getTime(),registerFinite:async ref=>{await input.db.batch([
       mutationAssertion(input.db,input.owner,['writing']),input.db.prepare(`INSERT INTO catalog_runtime_retention(object_key,sha256,not_after,release_id)
         VALUES(?,?,?,?) ON CONFLICT(object_key) DO NOTHING`).bind(ref.key,ref.sha256,ref.notAfter,input.releaseId)]);}});
-  if(exported.sourceSnapshotSha256!==packet.receipt.snapshot_sha256)throw Error('runtime_delta_snapshot_changed');
+  // Projection identity is the permanent PUBLIC base, never expiring supplier
+  // overlays or private rows. A retry can reuse staged rows after a photo's
+  // deadline without re-pinning its bytes or inventing a fresh observation.
+  const packet=await createProjectionPacket(exported.data.snapshot,facts,input.approvalSha256,input.now);
+  if(exported.publicSnapshotSha256!==packet.receipt.snapshot_sha256)throw Error('runtime_delta_snapshot_changed');
+  await stageOwnedPublicProjection({db:input.db,owner:input.owner,packet,previousRevision:previous.snapshot.catalogRevision,previousRows:previous.previousRows});
   const request={schemaVersion:1 as const,environment:input.owner.environment,sourceRevision:assembled.snapshot.catalogRevision,
     sourceDigest:packet.receipt.snapshot_sha256,codeSha:input.codeSha,priorReleaseId:input.previous.releaseId,
     capturedAt:input.now.toISOString(),cutoff:new Date(input.now.getTime()+24*3600000).toISOString()};
   const requestBytes=encodeBuildRequest(request),requestId=sha256(requestBytes);
   const receipt={release_id:input.releaseId,catalog_revision:request.sourceRevision,code_sha:input.codeSha,completed_at:input.now.toISOString(),
     manifest_json:encodePublicationIntent({releaseId:input.releaseId,catalogRevision:request.sourceRevision,codeSha:input.codeSha,
-      catalogSnapshotSha256:exported.sourceSnapshotSha256,manifestSha256:exported.dataSha256,
+      catalogSnapshotSha256:packet.receipt.snapshot_sha256,manifestSha256:exported.dataSha256,
       vectorSyncWatermark:0,priorReleaseId:input.previous.releaseId,nextExpiry:earliestDisplayExpiry(assembled.snapshot.products)})};
   const seal:RuntimeDeltaSeal={schemaVersion:1,kind:'runtime-delta-seal',publication:{releaseId:input.releaseId,receiptSha256:sha256(canonicalJson(receipt))},
-    dataSha256:exported.dataSha256,sourceSnapshotSha256:exported.sourceSnapshotSha256,publicSnapshotSha256:exported.publicSnapshotSha256,
-    projectionReceipt:packet.receipt,nativeHistorySha256:input.nativeHistorySha256,indexDelivery:'asynchronous'};
+    envelopeJson:JSON.stringify(createSealedSnapshotEnvelope(exported.data.snapshot)),snapshotSha256:packet.receipt.snapshot_sha256,
+    dataSha256:exported.dataSha256,publicSnapshotSha256:exported.publicSnapshotSha256,
+    projectionReceipt:packet.receipt,nativeHistorySha256:input.nativeHistorySha256,indexDelivery:'asynchronous',generation:input.owner.generation,
+    previousPublication:{releaseId:input.previous.releaseId,receiptSha256:input.previous.receiptSha256},
+    scope:{environment:input.owner.environment,indexName:input.owner.indexName},request};
+  runtimeDeltaSealBytes(seal);
   // Handoff identity excludes its own digest; the exact stored bytes bind all
   // other commit fields. The digest is filled only after reading those bytes.
   const handoff:DeltaHandoff={schemaVersion:1,kind:'runtime-delta-handoff',sourceVersion:proof.sourceVersion,seal,
+    summary:activatedPermanentSummary(input.summary??{counts:{},warnings:[],timingsMs:{},usage:null}),retainOriginalFailedTelemetry:false,
+    indexPublicIds:input.approval.changes.map(c=>c.publicId),
     commit:{owner:input.owner,receipt,requestId,runReference:input.runReference,request,dataSha256:exported.dataSha256,
-      sourceSnapshotSha256:exported.sourceSnapshotSha256,publicSnapshotSha256:exported.publicSnapshotSha256,handoffSha256:'',
+      sourceSnapshotSha256:packet.receipt.snapshot_sha256,publicSnapshotSha256:exported.publicSnapshotSha256,handoffSha256:'',
       previousReleaseId:input.previous.releaseId,previousDataSha256:input.previous.dataSha256}};
   const handoffBytes=bytes(handoff),handoffSha256=byteHash(handoffBytes);
   await input.store.putImmutable('runtime-handoffs/'+handoffSha256+'.json',handoffBytes);
@@ -145,8 +154,11 @@ export async function prepareRuntimeDeltaPublication(input:{db:CatalogD1;store:C
 export async function commitPreparedRuntimeDelta(input:{db:CatalogD1;store:CatalogObjectStore;handoffSha256:string}){
   if(!HASH.test(input.handoffSha256))throw Error('runtime_delta_handoff_invalid');
   const handoff=await object(input.store,'runtime-handoffs/'+input.handoffSha256+'.json',input.handoffSha256) as DeltaHandoff;
+  runtimeDeltaSealBytes(handoff.seal);
   if(handoff.schemaVersion!==1||handoff.kind!=='runtime-delta-handoff'||handoff.commit.handoffSha256!==''
     ||handoff.seal.kind!=='runtime-delta-seal'||handoff.seal.indexDelivery!=='asynchronous'
+    ||!Array.isArray(handoff.indexPublicIds)||new Set(handoff.indexPublicIds).size!==handoff.indexPublicIds.length
+    ||handoff.indexPublicIds.some(id=>typeof id!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id))
     ||handoff.seal.publication.receiptSha256!==sha256(canonicalJson(handoff.commit.receipt))
     ||handoff.seal.projectionReceipt.snapshot_sha256!==handoff.commit.sourceSnapshotSha256)throw Error('runtime_delta_handoff_invalid');
   const commit={...handoff.commit,handoffSha256:input.handoffSha256};
@@ -155,6 +167,24 @@ export async function commitPreparedRuntimeDelta(input:{db:CatalogD1;store:Catal
   const r=handoff.seal.projectionReceipt;
   const receipt=await commitRuntimePublication(input.db,commit,runtimeDeltaSourceFence(handoff.sourceVersion),[
     input.db.prepare(`INSERT INTO catalog_projection_receipts(catalog_revision,snapshot_sha256,projection_sha256,source_export_sha256,product_count,created_at)
-      VALUES(?,?,?,?,?,?)`).bind(r.catalog_revision,r.snapshot_sha256,r.projection_sha256,r.source_export_sha256,r.product_count,r.created_at)]);
+      VALUES(?,?,?,?,?,?)`).bind(r.catalog_revision,r.snapshot_sha256,r.projection_sha256,r.source_export_sha256,r.product_count,r.created_at),
+    input.db.prepare(`INSERT INTO catalog_runtime_index_events(sequence,release_id,operation_id)
+      SELECT e.sequence,?,m.operation_id FROM vector_sync_outbox e LEFT JOIN catalog_maintenance_vector_payloads m ON m.sequence=e.sequence
+      WHERE e.source_revision=? AND e.status='pending' AND e.public_id IN(SELECT value FROM json_each(?))`)
+      .bind(commit.receipt.release_id,commit.receipt.catalog_revision,JSON.stringify(handoff.indexPublicIds))]);
   return{receipt,seal:handoff.seal};
+}
+
+/** Accepted short publication can finish its ORIGINAL telemetry handoff even
+ * after supplier bodies expire. Only that run's exact finalization owner may
+ * coexist with the genuine accepted receipt; another writer is never adopted. */
+export async function readAcceptedRuntimeDeltaHandoff(db:CatalogD1,control:RuntimePublicationControl,handoff:DeltaHandoff){
+  if(sha256(canonicalJson(handoff))!==control.handoffSha256||handoff.kind!=='runtime-delta-handoff')throw Error('runtime_delta_handoff_invalid');
+  runtimeDeltaSealBytes(handoff.seal);activatedPermanentSummary(handoff.summary);
+  const commit={...handoff.commit,handoffSha256:control.handoffSha256};
+  if(commit.receipt.release_id!==control.releaseId||commit.dataSha256!==control.dataSha256||commit.sourceSnapshotSha256!==control.sourceSnapshotSha256
+    ||commit.publicSnapshotSha256!==control.publicSnapshotSha256||commit.requestId!==control.requestId||commit.runReference!==control.runReference
+    ||commit.previousReleaseId!==control.previousReleaseId||handoff.seal.publication.receiptSha256!==sha256(canonicalJson(commit.receipt)))
+    throw Error('runtime_delta_handoff_invalid');
+  return await readRuntimeAcceptance(db,commit,sha256('finalize:'+control.configSha256))?handoff:null;
 }

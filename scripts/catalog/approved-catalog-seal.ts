@@ -13,6 +13,8 @@ import {earliestDisplayExpiry} from '../../lib/catalog/display.ts';
 import {canonicalJson,sha256} from './migration.ts';
 import {createSealedSnapshotEnvelope,readOwnedProjection,readApprovedRevisionSource} from './export-d1-snapshot.ts';
 import type {SealedSnapshotEnvelope,SnapshotReadContext} from './export-d1-snapshot.ts';
+import type {RuntimeDeltaSeal} from './runtime-delta-seal.ts';
+import {runtimeDeltaSealBytes} from './runtime-delta-seal.ts';
 
 /** Body-free daily handoff. Actual receipt/projection readback is mandatory on
  * consumption; constructing technical metadata is never proof of publication. */
@@ -26,7 +28,9 @@ export interface ApprovedCatalogSeal {
 }
 /** Durable control is NOT arbitrary JSON storage. Exact technical schemas only;
  * product bodies, grants, vectors and provider responses cannot enter it. */
-export function catalogSuccessorBytes(seal:ApprovedCatalogSeal){
+export type CatalogSuccessor=ApprovedCatalogSeal|RuntimeDeltaSeal;
+export function catalogSuccessorBytes(seal:CatalogSuccessor){
+  if(seal.kind==='runtime-delta-seal')return runtimeDeltaSealBytes(seal);
   const exact=(v:unknown,keys:string[])=>!!v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).sort().join(',')===keys.sort().join(',');
   const hash=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v),id=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(v);
   const label=(v:unknown)=>typeof v==='string'&&/^[a-zA-Z0-9._:-]{1,200}$/.test(v),slug=(v:unknown)=>typeof v==='string'&&/^[a-z0-9][a-z0-9-]{0,199}$/.test(v);

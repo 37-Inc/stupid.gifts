@@ -82,7 +82,7 @@ export interface PublicationConfig {
   /** Public build inputs only; omission preserves historical hashes/default-off. */
   publicAnalytics?:{enabled:boolean;posthogKey:string;posthogHost:string};
   /** Data publication: no application build, version upload or activation. */
-  runtimeCatalog?:{schemaVersion:1;previousReleaseId:string;previousDataSha256:string;homepageRevision:number};
+  runtimeCatalog?:{schemaVersion:1;previousReleaseId:string;previousDataSha256:string;homepageRevision:number;mode?:'public-delta'};
 }
 const KEY=/^[a-zA-Z0-9._-]{1,200}$/;
 const HASH=/^[a-f0-9]{64}$/;
@@ -103,7 +103,8 @@ export function validatePublicationConfig(input:PublicationConfig):Readonly<Publ
     ||new Date(`${input.compatibilityDate}T00:00:00.000Z`).toISOString().slice(0,10)!==input.compatibilityDate)
     throw new Error('publication_configuration_invalid');
   if(Object.hasOwn(input,'homepage')&&!readHomepageEdition(input.homepage))throw new Error('publication_homepage_invalid');
-  if(input.runtimeCatalog&&(!exact(input.runtimeCatalog,'homepageRevision,previousDataSha256,previousReleaseId,schemaVersion')
+  if(input.runtimeCatalog&&(!exact(input.runtimeCatalog,'homepageRevision,previousDataSha256,previousReleaseId,schemaVersion'+(input.runtimeCatalog.mode===undefined?'':',mode'))
+    ||input.runtimeCatalog.mode!==undefined&&input.runtimeCatalog.mode!=='public-delta'
     ||input.runtimeCatalog.schemaVersion!==1||!KEY.test(input.runtimeCatalog.previousReleaseId)||!HASH.test(input.runtimeCatalog.previousDataSha256)
     ||!Number.isSafeInteger(input.runtimeCatalog.homepageRevision)||input.runtimeCatalog.homepageRevision<0
     ||input.runtimeCatalog.previousReleaseId!==input.prior?.releaseId||input.acceptedCatalog))throw Error('publication_runtime_invalid');

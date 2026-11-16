@@ -213,6 +213,7 @@ export async function routineServingPrior(token,seal,send=fetch){
 /** Detect a previously interrupted product write before reserving a merchant batch. */
 export async function assertNoUnsealedMaintenance(db,seal,scope=SCOPE){
   const generation=seal.kind==='approved-catalog-seal'?seal.persistent?.generation
+    :seal.kind==='runtime-delta-seal'?seal.generation
     :seal.kind==='permanent-catalog-seal'?seal.control?.installationOwner?.generation+1:NaN;
   if(!Number.isSafeInteger(generation)||generation<1)refuse('prior_generation');
   const rows=(await db.prepare(`SELECT 1 FROM catalog_maintenance_operations
@@ -237,7 +238,7 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,a
   if(await optional(directory+'/prepare-intent.json'))refuse('preparation_interrupted');
   const priorBytes=await priorSuccess();if(RUNTIME.hosted&&!priorBytes)refuse('hosted_catalog_bootstrap');
   const prior=priorBytes?JSON.parse(priorBytes.toString('utf8')):INITIAL,seal=await json(prior.control.path,prior.control.sha256);
-  if(!['permanent-catalog-seal','approved-catalog-seal'].includes(seal.kind))refuse('prior_kind');
+  if(!['permanent-catalog-seal','approved-catalog-seal','runtime-delta-seal'].includes(seal.kind))refuse('prior_kind');
   const token=await RUNTIME.token(),plan=await currentD1Plan(token),limits=routineLimits(plan),capacity=await observeHeadroom(token,undefined,null,fetch,plan);
   const db=await createCatalogD1ReadOnlyRest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,
     ...(bundled?{requestLimit:'observe'}:{}),
@@ -283,7 +284,10 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,a
   if(runtimeTable){const head=(await db.prepare(`SELECT p.release_id,p.data_sha256 FROM catalog_runtime_head h JOIN catalog_runtime_publications p ON p.release_id=h.release_id WHERE h.singleton=1 AND h.enabled=1`).all()).results[0];
     if(head){if(head.release_id!==seal.publication.releaseId)refuse('runtime_catalog_successor_changed');
       const latest=(await db.prepare("SELECT coalesce(max(revision),0) n FROM content_admin_requests WHERE resource='/collections/homepage'").all()).results[0].n;
-      runtimeCatalog={schemaVersion:1,previousReleaseId:head.release_id,previousDataSha256:head.data_sha256,homepageRevision:latest};}}
+      const delta=(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='catalog_runtime_index_events'").all()).results.length===1;
+      if(seal.kind==='runtime-delta-seal'&&!delta)refuse('runtime_delta_schema_required');
+      runtimeCatalog={schemaVersion:1,previousReleaseId:head.release_id,previousDataSha256:head.data_sha256,homepageRevision:latest,
+        ...(delta&&['approved-catalog-seal','runtime-delta-seal'].includes(seal.kind)?{mode:'public-delta'}:{})};}}
   let homepageEdition=await routineHomepageEdition(calendar.day,prior.control.path,canaryId?file=>
     file===path.dirname(prior.control.path)+'/homepage-edition.json'?optional(file):null:optional);
   if(runtimeCatalog){const {currentHomepageEdition}=await import('./homepage-editor.mjs');
@@ -379,7 +383,11 @@ export async function remember(result,entry,config,directory){
   if(config.publication.homepage)await put(directory+'/homepage-edition.json',config.publication.homepage);
   await put(directory+'/success.json',{next,result:weeklyCommandSummary(result),source:config.codeSha,operatorSource:SOURCE,helperSha256:self});
   const pointer=CARE+'/last-success.json',oldBytes=await priorSuccess(),old=oldBytes?JSON.parse(oldBytes.toString('utf8')):null;
-  if(old&&old.control.sha256!==config.inputs.previous.sha256&&old.control.sha256!==hash)refuse('successor_pointer_changed');
+  if(old&&old.control.sha256!==config.inputs.previous.sha256&&old.control.sha256!==hash){
+    if(result.catalogSeal.kind!=='runtime-delta-seal')refuse('successor_pointer_changed');
+    const actual=await json(old.control.path,old.control.sha256);
+    if(canonicalJson(actual.publication)!==canonicalJson(result.catalogSeal.previousPublication))refuse('successor_pointer_changed');
+  }
   if(old?.control.sha256===hash)return;
   await RUNTIME.state.pointer('last-success',pointer,next,oldBytes);
   }finally{await w.close();}

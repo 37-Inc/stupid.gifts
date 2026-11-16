@@ -23,15 +23,19 @@ This is unfinished implementation, **not an activated production mode**.
    this read with migration0020's existing source counter and original owner.
    Require the same counter and all nine invalidation triggers in the final
    transaction. Source drift rechecks the same saved proposal; never refetch.
-3. Assemble the public delta. Copy unchanged public projection rows in SQL,
-   transfer actual differences, and independently read back the complete public
-   projection. This is small public data, not archived supplier/native bodies.
-4. Export the accepted public data with original finite-overlay deadlines.
-   Existing retained data/collections remain on the same runtime reader.
+3. Assemble/export public data with original finite-overlay deadlines. Project
+   only its permanent cleared base: receipt identity must not change when an
+   optional supplier photo expires. Existing data/collections keep the same
+   runtime reader. No new native payload store or supplier observation.
+4. Copy unchanged permanent public projection rows in SQL, transfer actual
+   differences, and independently read back the full public projection. This
+   is small public data, not archived supplier/native bodies.
 5. Atomically check owner, source counter and expected public predecessor;
    record the real projection/publication receipt, runtime data head, resolved
    data-build request and idle owner. A body-free handoff survives a lost ACK.
-   Finish the existing hosted successor CAS before releasing the publish queue.
+   Register the original outbox sequence/operation IDs in additive migration
+   `0022_runtime_index_events` in this SAME transaction. Finish the existing
+   hosted successor CAS before releasing the publish queue.
 
 `stageOwnedPublicProjection` is shared with legacy sealing: do not maintain a
 second staging implementation. Staging alone never creates acceptance.
@@ -44,13 +48,17 @@ requires a genuine positive observation. Expiry falls back to cleared content.
   Reuse the EXISTING immutable `catalog_maintenance_vector_payloads` row: it
   already retains the exact original native bytes across later source changes.
   Do not add another payload store or copy those vectors to R2. A companion
-  index-event record binds its hash to the original outbox event, accepted
-  publication/version and serving projection. Do not alter legacy outbox row
+  index-event record binds the original immutable payload/operation to the real
+  accepted publication. Delivery records its exact payload hash and immutable
+  serving projection. Do not alter legacy outbox row
   shapes or rewrite their hashed historical receipts.
 - New delivery uses immutable content-addressed IDs in BOTH existing indexes:
   original1536 bytes plus the1024 serving projection. Keep historical stable-ID
   vectors and every original native receipt untouched. Do not change index,
   model, credentials or dimensions, and do not fabricate a legacy native seal.
+  Newly projected serving entries require the exact canonical-short-copy-v2
+  input; a mismatch is not reinterpreted as a legacy context recipe. Existing
+  legacy entries retain their original recipes and resolve independently.
 - An after-publication job in the SAME workflow drains this outbox outside the
   catalog commit queue. It writes index delivery/accounting only, not products,
   publication heads or supplier observations. No separate scheduler/publisher.
@@ -63,6 +71,10 @@ requires a genuine positive observation. Expiry falls back to cleared content.
 - New runtime receipt/successor metadata must explicitly distinguish this
   asynchronous index contract from legacy guaranteed native-promotion receipts.
   Never label pending delivery as verified or fake a legacy delivery ID.
+- Unlisting does not delete retained native history. The companion can record
+  `delete_history_retained`; it never invents a successful external deletion or
+  marks that original delete outbox row delivered. Public membership already
+  excludes the product. Provider Retry-After defers only index delivery.
 
 ## Hosted integration / cutover still required
 
@@ -117,6 +129,18 @@ lost acknowledgement without rereading source bodies or refetching anything.
 The composed 3,000-existing-plus-one-new test uses 49 read queries, five bounded
 write batches, one SQL copy and one transferred public row. It verifies the
 actual runtime reader and original photo deadlines, not just staging. These are
-local request counts, not a production wall-time benchmark. Hosted successor,
-asynchronous index delivery and workflow integration remain unfinished; do not
-activate this publisher or call the rollout complete on these fixtures alone.
+local request counts, not a production wall-time benchmark.
+
+The shared driver now has an opt-in `runtimeCatalog.mode: public-delta` branch
+and body-free successor/recovery reader. New preparation selects that mode only
+when migration0022 exists and the accepted predecessor is supported; frozen
+configurations keep the original path. The post-publication index drainer uses
+the existing saved embeddings, immutable IDs, exact readback, durable ACKs and
+external Retry-After without taking a catalog owner. Composed tests cover a
+lost native ACK, no duplicate write, current-field semantic resolution, cold
+expired workspace recovery, cross-scope rejection and original photo deadlines.
+
+STILL REQUIRED: composed driver/cutover tests, provider preparation outside the
+GitHub publication queue, the after-publication workflow step, bounded daily
+application turns for ready staff requests, CI/review/merge and actual safe
+production cutover/QA. No migration, mode or publication has been activated yet.

@@ -1,11 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { RunWorkspace } from './run-workspace.ts';
 import {semanticEntryFromMetadata,DERIVED_SEARCH_PROFILE} from '../../lib/catalog/semantic-profile.ts';
+import {isImmutableNativeVector} from './immutable-native-vector.ts';
 
 export interface PublicationFetchScope {
   accountId:string;workerName:string;indexName:string;databaseId:string;identityOrigin:string;
   /** Explicit serving projection: content-addressed reads/upserts, never deletes. */
   derivedIndexName?:string;
+  /** Explicit post-publication immutable history lane, never legacy UUID replacement. */
+  immutableNative?:boolean;
 }
 const UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const owned=new WeakSet<typeof fetch>();
@@ -90,10 +93,12 @@ function accountedFetch(ws:Pick<RunWorkspace,'reserveBudget'|'settleBudget'>,sen
     }
     if(method==='POST'&&url.origin==='https://api.cloudflare.com'&&typeof init.body==='string'&&Buffer.byteLength(init.body)<=128*1024){
       try{const body=JSON.parse(init.body);
-        native=url.pathname===`${vector}/get_by_ids`&&Buffer.byteLength(init.body)<=4096&&ids(body);
+        native=url.pathname===`${vector}/get_by_ids`&&Buffer.byteLength(init.body)<=4096
+          &&(ids(body)||scope.immutableNative===true&&derivedIds(body));
         if(derived&&url.pathname===`${derived}/get_by_ids`&&Buffer.byteLength(init.body)<=4096&&derivedIds(body))native=true;
         mutation=mutation||!readOnly&&(url.pathname===`${vector}/delete_by_ids`&&ids(body)
           ||url.pathname===`${vector}/upsert`&&mutationBody(body,'upsert')
+          ||url.pathname===`${vector}/upsert`&&scope.immutableNative===true&&isImmutableNativeVector(body)
           ||!!derived&&url.pathname===`${derived}/upsert`&&derivedVector(body)
           ||url.pathname===`${worker}/deployments`&&mutationBody(body,'deploy'));
       }catch{}

@@ -20,16 +20,19 @@ import { decodePgvectorSendBase64 } from './pgvector-binary.ts';
 import { openRunWorkspace, readRunWorkspace, WORKSPACE_BLOB_LIMITS } from './run-workspace.ts';
 import type { ArtifactRef, RetentionPolicy, RunWorkspace, RunWorkspaceOptions, WorkspaceCheckpoint, PublicationFinishBudget } from './run-workspace.ts';
 import { executePublication, validatePublicationConfig } from './publish-release.ts';
-import {publishRuntimeCatalog,readAcceptedRuntimeHandoff} from './publish-runtime-catalog.ts';
+import {publishRuntimeCatalog,readAcceptedRuntimeHandoff,applyReviewedRuntimeHomepage} from './publish-runtime-catalog.ts';
+import {prepareRuntimeDeltaPublication,commitPreparedRuntimeDelta} from './runtime-delta-publication.ts';
 import { accountedPublicationReadFetch, accountedPublicationFetch, isAccountedPublicationFetch } from './publication-read-fetch.ts';
 import { accountedPublicationUploadCommand, isAccountedPublicationUploadCommand } from './publication-upload-command.ts';
 import { approvedRequestControl, hydrateApprovedRequest, approvedRevisionControl, hydrateApprovedRevision,
   durableApprovedRevisionControl,hydrateDurableApprovedRevision,
-  approvedArtifactObservedAt, readApprovedPrior, createPublishedApprovedCatalogSeal, createPublishedApprovedCatalogSealFromControl } from './approved-catalog-seal.ts';
+  approvedArtifactObservedAt, readApprovedPrior, createPublishedApprovedCatalogSeal, createPublishedApprovedCatalogSealFromControl,catalogSuccessorBytes } from './approved-catalog-seal.ts';
 import {isPersistentCatalogSeal,reconstructPermanentSnapshot} from './permanent-catalog-seal.ts';
 import {recoverProjectionSeal} from './recover-projection-seal.ts';
 import type {PermanentCatalogSeal} from './permanent-catalog-seal.ts';
 import type { ApprovedCatalogSeal } from './approved-catalog-seal.ts';
+import type {CatalogSuccessor} from './approved-catalog-seal.ts';
+import {encodeBuildRequest} from '../../lib/catalog/build-requests.ts';
 import type { PublicationConfig } from './publish-release.ts';
 import { claimMutationOwnership, releaseMutationOwnership, readMutationOwner } from '../../lib/catalog/mutation-fence.ts';
 import type { MutationOwner } from '../../lib/catalog/mutation-fence.ts';
@@ -503,7 +506,12 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
     if(permanentFinalization)return await settleActivatedPermanentWeekly({db,ws,config,configSha256:options.configSha256,token,
       publication,reviewedUploadRetry,finish});
     if(saved?.checkpoint.control?.runtimeCatalog&&options.durable){
-      const runtimeControl=saved.checkpoint.control.runtimeCatalog,handoff=await readAcceptedRuntimeHandoff(db,options.durable,runtimeControl);
+      const runtimeControl=saved.checkpoint.control.runtimeCatalog;let handoff=await readAcceptedRuntimeHandoff(db,options.durable,runtimeControl);
+      if(!handoff&&config.publication.runtimeCatalog?.mode==='public-delta'){
+        await commitPreparedRuntimeDelta({db,store:options.durable,handoffSha256:runtimeControl.handoffSha256});
+        handoff=await readAcceptedRuntimeHandoff(db,options.durable,runtimeControl);
+        if(!handoff)throw Error('runtime_delta_acceptance_missing');
+      }
       if(handoff){
         const receiptSha256=sha256(canonicalJson(handoff.receipt)),releaseId=runtimeControl.releaseId;
         const save=async(phase:'published'|'finalized',owner:MutationOwner|null)=>{
@@ -798,6 +806,44 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         }
         return{state:'attention',phase:cp.phase,errorCode,budget:await ws.budget()};
       }
+    }
+    if(cp.phase==='phases_complete'&&config.publication.runtimeCatalog?.mode==='public-delta'){
+      if(!cp.pins.approval){
+        if(!options.approval)return{state:'pending',phase:cp.phase,reason:'awaiting_reviewed_approval',budget:await ws.budget()};
+        const approval=await reviewed(options.approval.path,options.approval.sha256,repo);
+        if(approval.runId!==config.runId||approval.catalogRevision!==config.catalogRevision)throw Error('weekly_approval_run');
+        if(config.cadence?.automation)validateAutomationCohort(await ws.readArtifact(cp.pins.automationAuthority) as unknown as AutomationCohortAuthority,approval);
+        const pin=await ws.putArtifact(approval,{kind:'publication',observedAt:now()});await write({pins:{...cp.pins,approval:pin}});
+      }else if(options.approval&&sha256(canonicalJson(await reviewed(options.approval.path,options.approval.sha256,repo)))!==cp.pins.approval.sha256)
+        throw Error('weekly_approval_rewrite');
+      if(!options.durable||!cp.owner||cp.owner.phase!=='writing')throw Error('runtime_delta_owner_invalid');
+      const prior=await readOrdered<CatalogSuccessor>(ws,cp.pins.previous);catalogSuccessorBytes(prior);
+      const history=prior.kind==='runtime-delta-seal'?null:catalogSuccessorBytes(prior);
+      const nativeHistorySha256=prior.kind==='runtime-delta-seal'?prior.nativeHistorySha256:sha256(history!.toString('utf8'));
+      if(history)await options.durable.putImmutable('catalog-history/'+nativeHistorySha256+'.json',history);
+      // Rebase saved PREPARATION onto the current accepted public head, before
+      // staging any publication intent. Point-source CAS still protects every
+      // prepared product; unrelated newly published gifts are inherited intact.
+      const head=(await db.prepare(`SELECT r.*,p.data_sha256 FROM catalog_runtime_head h JOIN catalog_runtime_publications p
+        ON p.release_id=h.release_id JOIN publication_receipts r ON r.release_id=p.release_id WHERE h.singleton=1 AND h.enabled=1`).all<Record<string,unknown>>()).results;
+      if(head.length!==1)throw Error('runtime_predecessor_changed');const {data_sha256,...previousReceipt}=head[0];
+      if(!config.cadence?.photosOnly)await applyReviewedRuntimeHomepage({db,homepage:config.publication.homepage,
+        expectedRevision:config.publication.runtimeCatalog.homepageRevision,baseCatalogRevision:String(previousReceipt.catalog_revision),runReference:config.runId,at:now()});
+      const prepared=await prepareRuntimeDeltaPublication({db,store:options.durable,owner:cp.owner,
+        approval:await ws.readArtifact(cp.pins.approval) as unknown as ApprovedCohortRequest['approval'],approvalSha256:cp.pins.approval.sha256,
+        previous:{releaseId:String(previousReceipt.release_id),receiptSha256:sha256(canonicalJson(previousReceipt)),dataSha256:String(data_sha256)},
+        nativeHistorySha256,releaseId:config.publication.releaseId,codeSha:config.codeSha,runReference:config.runId,now:new Date(now()),
+        homepage:config.publication.homepage,merchandising:config.publication.merchandising,
+        summary:await ws.readArtifact(cp.pins.publicationSummary??cp.phaseComplete!) as Record<string,unknown>});
+      const s=prepared.seal,runtime={schemaVersion:1 as const,configSha256:options.configSha256,requestId:sha256(encodeBuildRequest(s.request)),
+        runReference:config.runId,releaseId:s.publication.releaseId,dataSha256:s.dataSha256,sourceSnapshotSha256:s.snapshotSha256,
+        publicSnapshotSha256:s.publicSnapshotSha256,previousReleaseId:s.request.priorReleaseId!,handoffSha256:prepared.handoffSha256,stage:'prepared' as const};
+      await write({phase:'publishing',control:{runtimeCatalog:runtime}});
+      const accepted=await commitPreparedRuntimeDelta({db,store:options.durable,handoffSha256:prepared.handoffSha256});
+      await ws.recordCatalogSuccessor(accepted.seal);
+      const result={state:'published',owner:null,releaseId:s.publication.releaseId,receiptSha256:s.publication.receiptSha256,receipt:accepted.receipt};
+      const published=await ws.putPublicationControl('publication-result',result);
+      await write({phase:'published',owner:null,pins:{...cp.pins,published},control:{runtimeCatalog:{...runtime,stage:'published',receiptSha256:s.publication.receiptSha256}}});
     }
     const adapters=createVectorizeRestAdapters({...scope,accountId:config.accountId,token,fetch:generalSend});
     if(cp.phase==='phases_complete'||cp.phase==='draining'){

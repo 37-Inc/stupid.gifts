@@ -15,7 +15,7 @@ export interface RuntimeCommit {
 
 /** Exact durable acceptance, including the original owner and real data build.
  * Reading a receipt alone, a successful upload or staging is not acceptance. */
-export async function readRuntimeAcceptance(db:CatalogD1,input:RuntimeCommit):Promise<Receipt|null>{
+export async function readRuntimeAcceptance(db:CatalogD1,input:RuntimeCommit,finalizationKey?:string):Promise<Receipt|null>{
   const {receipt,owner}=input;
   const rows=(await db.prepare(`SELECT r.*,p.data_sha256,p.source_snapshot_sha256,p.public_snapshot_sha256,
     p.handoff_sha256,p.request_id,p.owner_json,p.previous_release_id FROM publication_receipts r
@@ -26,13 +26,17 @@ export async function readRuntimeAcceptance(db:CatalogD1,input:RuntimeCommit):Pr
     owner_json:canonicalJson(owner),previous_release_id:input.previousReleaseId};
   if(rows.length!==1||canonicalJson(rows[0])!==canonicalJson(expected))throw Error('runtime_receipt_changed');
   const proof=(await db.prepare(`SELECT h.release_id,b.state,b.request_json,b.run_reference,b.release_id build_release,
-    b.dispatch_reference,b.version_reference,s.phase,s.external_pending,s.generation,s.mutation_epoch
+    b.dispatch_reference,b.version_reference,s.phase,s.external_pending,s.generation,s.mutation_epoch,s.owner_reference,s.operation_key
     FROM catalog_runtime_head h JOIN catalog_build_requests b ON b.request_id=? JOIN catalog_mutation_scopes s
     ON s.environment=? AND s.index_name=? WHERE h.singleton=1`).bind(input.requestId,owner.environment,owner.indexName).all<Record<string,unknown>>()).results[0];
+  const originalIdle=proof?.phase==='idle'&&proof.generation===owner.generation&&proof.mutation_epoch===owner.epoch;
+  const ownFinalization=finalizationKey&&proof?.generation===owner.generation+1
+    &&[owner.epoch,owner.epoch+1].includes(Number(proof.mutation_epoch))
+    &&(proof.phase==='idle'||proof.phase==='writing'&&proof.owner_reference===input.runReference+':finalize'&&proof.operation_key===finalizationKey);
   if(!proof||proof.release_id!==receipt.release_id||proof.state!=='resolved'||proof.build_release!==receipt.release_id
     ||proof.request_json!==encodeBuildRequest(input.request)||proof.run_reference!==input.runReference
-    ||proof.dispatch_reference!=='runtime:'+input.dataSha256||proof.version_reference!==null||proof.phase!=='idle'
-    ||proof.external_pending!==0||proof.generation!==owner.generation||proof.mutation_epoch!==owner.epoch)throw Error('runtime_acceptance_changed');
+    ||proof.dispatch_reference!=='runtime:'+input.dataSha256||proof.version_reference!==null
+    ||proof.external_pending!==0||!originalIdle&&!ownFinalization)throw Error('runtime_acceptance_changed');
   return receipt;
 }
 

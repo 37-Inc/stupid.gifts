@@ -20,6 +20,18 @@ import {createApprovedCatalogSeal,catalogSuccessorBytes} from './approved-catalo
 import {createContentRequestStore,ContentAdminError} from '../../lib/catalog/content-admin.ts';
 import {applyRuntimeCollection} from '../../lib/catalog/runtime-collections.ts';
 import {commitRuntimePublication,readRuntimeAcceptance} from './commit-runtime-publication.ts';
+import {readAcceptedRuntimeDeltaHandoff} from './runtime-delta-publication.ts';
+
+/** Shared optional editor CAS: a newer manual edition always wins. */
+export async function applyReviewedRuntimeHomepage(input:{db:CatalogD1;homepage:PublicationConfig['homepage'];expectedRevision:number;
+  baseCatalogRevision:string;runReference:string;at:string}){
+  if(!input.homepage)return;
+  try{const saved=await createContentRequestStore(input.db).save({requestId:'homepage-'+sha256(input.runReference).slice(0,32),
+    resource:'/collections/homepage',action:'collection',actor:'daily-homepage-editor',reason:'Reviewed saved daily edition',
+    baseCatalogRevision:input.baseCatalogRevision,expectedRevision:input.expectedRevision,payload:{edition:input.homepage}},input.at);
+    await applyRuntimeCollection(input.db,saved.request);
+  }catch(error){if(!(error instanceof ContentAdminError&&error.status===409))console.warn(JSON.stringify({notice:'runtime_homepage_not_applied',catalogBlocked:false}));}
+}
 
 /** One atomic data-head transition, under the ORIGINAL catalog mutation fence.
  * No Worker dispatch, lease or activation is invented for a data publication. */
@@ -35,13 +47,8 @@ export async function publishRuntimeCatalog(input:{db:CatalogD1;owner:MutationOw
     if(!prior||sha256(prior.bytes)!==policy.previousDataSha256)throw Error('runtime_predecessor_changed');
     const data=readRuntimeCatalogData(JSON.parse(Buffer.from(prior.bytes).toString('utf8')));
     if(data.releaseId!==policy.previousReleaseId)throw Error('runtime_predecessor_changed');
-    if(input.editHomepage&&config.homepage){try{
-      const saved=await createContentRequestStore(db).save({requestId:'homepage-'+sha256(input.runReference).slice(0,32),resource:'/collections/homepage',
-        action:'collection',actor:'daily-homepage-editor',reason:'Reviewed saved daily edition',baseCatalogRevision:data.snapshot.catalogRevision,
-        expectedRevision:policy.homepageRevision,payload:{edition:config.homepage}},now().toISOString());
-      // A newer manual edition wins. Optional editorial can never block care.
-      await applyRuntimeCollection(db,saved.request);
-    }catch(error){if(!(error instanceof ContentAdminError&&error.status===409))console.warn(JSON.stringify({notice:'runtime_homepage_not_applied',catalogBlocked:false}));}}
+    if(input.editHomepage)await applyReviewedRuntimeHomepage({db,homepage:config.homepage,expectedRevision:policy.homepageRevision,
+      baseCatalogRevision:data.snapshot.catalogRevision,runReference:input.runReference,at:now().toISOString()});
     let semanticCatalog;
     if(config.semanticSearch?.derivedCatalog){const ref=config.semanticSearch.derivedCatalog,bytes=await readFile(ref.path);
       semanticCatalog=await verifyPublicationSemanticCatalog({semanticCatalog:JSON.parse(bytes.toString('utf8'))},config);}
@@ -103,7 +110,9 @@ export async function readAcceptedRuntimeHandoff(db:CatalogD1,store:CatalogObjec
   if(rows.length!==1||handoff_sha256!==control.handoffSha256||data_sha256!==control.dataSha256||request_id!==control.requestId)throw Error('runtime_receipt_changed');
   const object=await store.get('runtime-handoffs/'+control.handoffSha256+'.json');
   if(!object||sha256(object.bytes)!==control.handoffSha256)throw Error('runtime_handoff_changed');
-  const handoff=JSON.parse(Buffer.from(object.bytes).toString('utf8'));catalogSuccessorBytes(handoff.seal);
+  const handoff=JSON.parse(Buffer.from(object.bytes).toString('utf8'));
+  if(handoff.kind==='runtime-delta-handoff')return readAcceptedRuntimeDeltaHandoff(db,control,handoff);
+  catalogSuccessorBytes(handoff.seal);
   if(canonicalJson(handoff.receipt)!==canonicalJson(receipt)||canonicalJson(handoff.owner)!==owner_json
     ||handoff.seal.publication.receiptSha256!==sha256(canonicalJson(receipt)))throw Error('runtime_handoff_changed');
   const b=(await db.prepare('SELECT state,release_id,version_reference,dispatch_reference FROM catalog_build_requests WHERE request_id=?').bind(control.requestId).all<Record<string,unknown>>()).results[0];

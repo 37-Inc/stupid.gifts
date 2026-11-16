@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {readFile,readdir} from 'node:fs/promises';
+import {readFile,readdir,mkdtemp,rm,realpath} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {assembleRuntimeCatalogDelta} from '../scripts/catalog/runtime-catalog-delta.ts';
 import {stageOwnedPublicProjection} from '../scripts/catalog/stage-public-projection.ts';
 import {createProjectionPacket,projectionQueries} from '../lib/catalog/d1.ts';
@@ -16,6 +18,15 @@ import {prepareRuntimeDeltaPublication,commitPreparedRuntimeDelta} from '../scri
 import {encodePublicationIntent} from '../lib/catalog/publication.ts';
 import {createRuntimeCatalogReader} from '../workers/site/runtime-data.ts';
 import {commitRuntimePublication} from '../scripts/catalog/commit-runtime-publication.ts';
+import {canonicalDescriptionEmbeddingInput} from '../lib/catalog/presentation.ts';
+import {derivedFixture} from './helpers/derived-search-fixture.mjs';
+import {drainRuntimeIndexEvents,runtimeIndexDescriptor} from '../scripts/catalog/runtime-index-events.ts';
+import {accountedPublicationFetch} from '../scripts/catalog/publication-read-fetch.ts';
+import {createDerivedSemanticSearch} from '../workers/site/derived-search.ts';
+import {openRunWorkspace} from '../scripts/catalog/run-workspace.ts';
+import {runtimeDeltaSealBytes} from '../scripts/catalog/runtime-delta-seal.ts';
+import {readAcceptedRuntimeHandoff} from '../scripts/catalog/publish-runtime-catalog.ts';
+import {encodeBuildRequest} from '../lib/catalog/build-requests.ts';
 
 const at='2026-11-15T12:00:00.000Z',next='2026-11-15T13:00:00.000Z';
 const uuid=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
@@ -107,7 +118,7 @@ test('3000 accepted public rows copy in SQL; only one added row transfers, with 
   t.diagnostic(JSON.stringify({fixturePublicProducts:3001,...f.stats(),privateOrIndexReads:0}));
 });
 
-async function sourceFixture(t,count=20,transform){
+async function sourceFixture(t,count=20,transform,embedding=false){
   const f=await fixture(t,count,transform);f.allowSourceReads();const n=count+79;
   const id=product(n).id,p={id,title:'Instant emergency underpants',source:'amazon',price:0,currency:'USD',
     wittyDescription:'A small compressed cloth package that expands into emergency underpants.',
@@ -115,12 +126,14 @@ async function sourceFixture(t,count=20,transform){
     availabilityStatus:'IN_STOCK',remotelyVerified:true,isActive:true,qualityScore:.7777777777777778,humorTags:[],
     editorialStatus:'short_ready',editorialQualityScore:.95};
   const factsHash=editorialSourceHash(p);p.editorialSourceHash=factsHash;
+  if(embedding){p.embedding=Array.from({length:1536},(_,i)=>Math.fround((i%17-8)/100));p.embedding[0]=-0;}
   const rights=Object.fromEntries(Object.entries({title:p.title,description:p.wittyDescription,imageUrl:p.imageUrl,affiliateUrl:p.affiliateUrl})
     .map(([field,value])=>[field,{basis:'owned',reference:'test-only-reviewed',value}]));
   const cursor={current:f.owner};
   const store=createD1CatalogMaintenanceStore({db:f.db,owner:f.owner,ownerCursor:cursor,runId:'point-source',catalogRevision:'staged-source',
     preservePermanentListings:true,newPublicId:()=>uuid(n),intent:()=>({rightsById:{[id]:{...rights,persistent:rights}},verificationById:{[id]:{
-      reference:'test-only-observation',observedAt:at,sourceFactsHash:factsHash}}})});
+      reference:'test-only-observation',observedAt:at,sourceFactsHash:factsHash}},...(embedding?{embeddingById:{[id]:{
+        reference:'objects/'+'e'.repeat(64)+'.json',model:'text-embedding-3-small',text:canonicalDescriptionEmbeddingInput(p),sourceFactsHash:factsHash}}}:{})})});
   await store.upsertProduct(p,factsHash);
   const row={...f.sql.prepare('SELECT * FROM products WHERE id=?').get(id)},op={...f.sql.prepare('SELECT * FROM catalog_maintenance_operations ORDER BY next_epoch DESC LIMIT 1').get()};
   const approval={schemaVersion:1,runId:'point-source',catalogRevision:'staged-source',changes:[{
@@ -139,11 +152,12 @@ test('short publication checks the exact normal maintenance receipt/rights/copy,
   assert.equal(f.sql.prepare('SELECT count(*) n FROM publication_receipts').get().n,0);
 });
 
-async function publicationFixture(t,count=20,transform){
-  const f=await sourceFixture(t,count,transform),objects=new Map();
+async function publicationFixture(t,count=20,transform,embedding=false){
+  const f=await sourceFixture(t,count,transform,embedding),objects=new Map();
   const store={async get(key){return objects.has(key)?{bytes:objects.get(key),etag:'"fixture"'}:null;},async putImmutable(key,value){
     const old=objects.get(key);if(old)assert.deepEqual(old,value);else objects.set(key,new Uint8Array(value));return{bytes:value,etag:'"fixture"'};}};
   const exported=await exportRuntimeCatalog({snapshot:f.args.previous,releaseId:'previous-live',sourceCodeSha:'a'.repeat(40),store,
+    ...(embedding?{semanticCatalog:(await derivedFixture()).catalog}:{}),
     now:()=>Date.parse(next),registerFinite:async()=>{}});
   const receipt={release_id:'previous-live',catalog_revision:f.args.previous.catalogRevision,code_sha:'a'.repeat(40),completed_at:at,
     manifest_json:encodePublicationIntent({releaseId:'previous-live',catalogRevision:f.args.previous.catalogRevision,codeSha:'a'.repeat(40),
@@ -240,6 +254,103 @@ test('the shared atomic commit retains the legacy freezing-owner fence',async t=
     f.db.prepare(`INSERT INTO catalog_projection_receipts(catalog_revision,snapshot_sha256,projection_sha256,source_export_sha256,product_count,created_at)
       VALUES(?,?,?,?,?,?)`).bind(r.catalog_revision,r.snapshot_sha256,r.projection_sha256,r.source_export_sha256,r.product_count,r.created_at)]);
   assert.equal(receipt.release_id,'delta-live');assert.equal(await readMutationOwner(f.db,owner),null);
+});
+test('COMPOSED acceptance registers existing immutable embeddings; post-publication delivery survives a lost ACK without a second native write or a catalog owner',async t=>{
+  const f=await publicationFixture(t,20,undefined,true),stored=new Map(),calls=[],settlements=[],writes=[],nativeIndexName='fixture-native',servingIndexName='synthetic-derived-index';
+  const originalNative={historical:true};stored.set(nativeIndexName+':'+uuid(1),originalNative);
+  let lost=false;
+  const vectorJson=v=>`{"id":${JSON.stringify(v.id)},"values":[${v.values.map(n=>Object.is(n,-0)?'-0':JSON.stringify(n)).join(',')}],"metadata":${JSON.stringify(v.metadata)}}`;
+  const send=accountedPublicationFetch({async reserveBudget(){},async settleBudget(id,value){settlements.push(value);}},async(url,init)=>{
+    const match=new URL(url).pathname.match(/\/indexes\/([^/]+)\/(get_by_ids|upsert)$/);assert.ok(match);const [,index,action]=match;
+    calls.push({index,action});const body=JSON.parse(init.body);
+    if(action==='get_by_ids'){const rows=body.ids.flatMap(id=>stored.has(index+':'+id)?[stored.get(index+':'+id)]:[]);
+      return new Response('{"success":true,"result":['+rows.map(vectorJson).join(',')+']}');}
+    assert.match(body.id,/^[a-f0-9]{64}$/);stored.set(index+':'+body.id,body);writes.push({index,id:body.id});
+    if(index===nativeIndexName&&!lost){lost=true;throw Error('test-only-lost-native-ACK');}
+    return new Response(JSON.stringify({success:true,result:{mutationId:'11111111-1111-4111-8111-111111111111'}}));
+  },{accountId:'a'.repeat(32),databaseId:uuid(1),workerName:'fixture-worker',indexName:nativeIndexName,derivedIndexName:servingIndexName,
+    immutableNative:true,identityOrigin:'https://fixture.invalid'});
+  const input={db:f.db,store:f.store,accountId:'a'.repeat(32),nativeIndexName,servingIndexName,token:'TEST_ONLY_TOKEN',fetch:send,now:()=>new Date(next)};
+  assert.equal((await drainRuntimeIndexEvents(input)).outcomes.length,0);assert.equal(calls.length,0,'No index dispatch before acceptance');
+  const staged=await prepareRuntimeDeltaPublication(f.input);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM catalog_runtime_index_events').get().n,0);
+  await commitPreparedRuntimeDelta({...f.input,handoffSha256:staged.handoffSha256});
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM catalog_runtime_index_events').get().n,1);
+  const before=f.sql.prepare('SELECT version FROM catalog_source_version').get().version;
+  const start=f.reads.length;
+  const first=await drainRuntimeIndexEvents(input);assert.equal(first.outcomes[0].state,'attention');
+  assert.equal((await drainRuntimeIndexEvents(input)).outcomes[0].state,'pending');
+  assert.equal((await drainRuntimeIndexEvents(input)).outcomes[0].state,'complete');
+  assert.equal(writes.filter(w=>w.index===nativeIndexName).length,1,'Unknown immutable native upsert is reconciled by exact readback');
+  assert.equal(writes.filter(w=>w.index===servingIndexName).length,1);assert.equal(settlements.filter(s=>s.status==='unknown').length,1);
+  assert.equal(stored.get(nativeIndexName+':'+uuid(1)),originalNative,'Historical UUID native entry untouched');
+  assert.equal(f.sql.prepare('SELECT version FROM catalog_source_version').get().version,before);
+  assert.equal(await readMutationOwner(f.db,f.input.owner),null);
+  assert.ok(f.reads.slice(start).every(q=>!q.includes('FROM products')&&!q.includes('catalog_maintenance_products')&&!q.includes('catalog_vector_deliveries')));
+  const row=f.sql.prepare('SELECT * FROM catalog_runtime_index_events').get(),descriptor=JSON.parse(row.descriptor_json);
+  assert.equal(JSON.parse(row.delivery_json).native.length,0,'No fabricated native mutation reference after the lost ACK');
+  assert.equal(JSON.parse(row.delivery_json).serving.length,1);
+  const data=JSON.parse(Buffer.from(f.objects.get('public-catalog/'+staged.seal.dataSha256+'.json')));
+  const actual=stored.get(servingIndexName+':'+descriptor.serving.id),matches=await createDerivedSemanticSearch(data.snapshot,data.semanticCatalog)
+    .resolve([{id:actual.id,score:.9,metadata:actual.metadata}]);
+  assert.equal(matches[0].product.id,f.row.id,'Real resolver adopts the new current-field vector without seed edits or model calls');
+  assert.equal(f.sql.prepare('SELECT status FROM vector_sync_outbox').get().status,'complete');
+  const count=calls.length;assert.equal((await drainRuntimeIndexEvents(input)).outcomes.length,0);assert.equal(calls.length,count);
+  assert.throws(()=>f.sql.prepare("UPDATE catalog_runtime_index_events SET descriptor_json='{}'").run(),/immutable/);
+});
+test('old saved text never masquerades as new public copy; native history stays append-only while keyword content remains valid',async t=>{
+  const f=await publicationFixture(t,20,undefined,true),staged=await prepareRuntimeDeltaPublication(f.input);
+  await commitPreparedRuntimeDelta({...f.input,handoffSha256:staged.handoffSha256});
+  const payloadJson=f.sql.prepare('SELECT payload_json FROM catalog_maintenance_vector_payloads').get().payload_json;
+  const payload=JSON.parse(payloadJson),data=JSON.parse(Buffer.from(f.objects.get('public-catalog/'+staged.seal.dataSha256+'.json')));
+  const product=data.snapshot.products.find(p=>p.publicId===payload.publicId);product.description='A different correct description with no corresponding saved embedding.';
+  const result=await runtimeIndexDescriptor({sequence:payload.sequence,releaseId:data.releaseId,payloadJson,data});
+  assert.equal(result.reason,'copy_mismatch');assert.equal(result.serving,null);assert.ok(result.native);
+  assert.ok(data.snapshot.products.includes(product));
+});
+test('flat delta successor survives a cold expired workspace, rejects cross-index/code changes, and permits ONLY its exact finalization owner',async t=>{
+  const f=await publicationFixture(t),staged=await prepareRuntimeDeltaPublication(f.input);
+  const accepted=await commitPreparedRuntimeDelta({...f.input,handoffSha256:staged.handoffSha256}),seal=accepted.seal;
+  const directory=await mkdtemp(join(await realpath(tmpdir()),'stupid-delta-control-')),handles=[];
+  t.after(async()=>{for(const w of handles.reverse())await w.close();await rm(directory,{recursive:true,force:true});});
+  let clock=next;
+  const configSha256='f'.repeat(64),options={directory:join(directory,'workspace'),repository:await realpath(new URL('..',import.meta.url).pathname),runId:seal.publication.releaseId,
+    codeSha:f.input.codeSha,configSha256,scope:{...f.input.owner,accountId:'a'.repeat(32),databaseId:uuid(1),databaseName:'fixture',workerName:'fixture'},
+    retention:{reviewReference:'test-only/delta',rules:Object.fromEntries(['amazon-observation','embedding-response','phase','publication','checkpoint']
+      .map(k=>[k,{maxAgeMs:3600000,notAfter:'2026-11-15T14:00:00.000Z'}]))},
+    budgetCaps:{httpRequests:50,sqlStatements:100},now:()=>clock};
+  // Scope is a resource identity, never a copied catalog owner/secret.
+  for(const k of ['token','generation','epoch','phase','ownerReference','operationKey','capturedAt'])delete options.scope[k];
+  const w=await openRunWorkspace({...options,mode:'create'});handles.push(w);
+  const bad={...seal,scope:{...seal.scope,indexName:'other-index'}};
+  await assert.rejects(w.recordCatalogSuccessor(bad),/catalog_successor_scope/);
+  await assert.rejects(w.recordCatalogSuccessor({...seal,request:{...seal.request,codeSha:'c'.repeat(40)}}),/catalog_successor_scope/);
+  await w.putArtifact({supplier:'test-only-expiring-body'},{kind:'phase',observedAt:next});
+  await w.recordCatalogSuccessor(seal);assert.deepEqual(await w.catalogSuccessor(),seal);await w.close();handles.pop();
+  clock='2026-11-16T15:00:00.000Z';const resumed=await openRunWorkspace({...options,mode:'resume'});handles.push(resumed);
+  assert.deepEqual(await resumed.catalogSuccessor(),seal);assert.ok(runtimeDeltaSealBytes(seal).length<16384);
+  assert.throws(()=>runtimeDeltaSealBytes({...seal,indexDelivery:'verified'}),/seal_invalid/);
+  const control={schemaVersion:1,configSha256,requestId:sha256(encodeBuildRequest(seal.request)),runReference:f.input.runReference,
+    releaseId:seal.publication.releaseId,dataSha256:seal.dataSha256,sourceSnapshotSha256:seal.snapshotSha256,
+    publicSnapshotSha256:seal.publicSnapshotSha256,previousReleaseId:seal.request.priorReleaseId,handoffSha256:staged.handoffSha256,stage:'prepared'};
+  assert.equal((await readAcceptedRuntimeHandoff(f.db,f.store,control)).seal.kind,'runtime-delta-seal');
+  const owner=await claimMutationOwnership(f.db,f.input.owner,{phase:'writing',ownerReference:f.input.runReference+':finalize',operationKey:sha256('finalize:'+configSha256)});
+  assert.ok(owner);assert.equal((await readAcceptedRuntimeHandoff(f.db,f.store,control)).seal.publication.releaseId,control.releaseId);
+  f.sql.prepare("UPDATE catalog_mutation_scopes SET owner_reference='another-run'").run();
+  await assert.rejects(readAcceptedRuntimeHandoff(f.db,f.store,control),/runtime_acceptance_changed/);
+});
+test('actual provider Retry-After defers only index delivery; accepted catalog and its idle writer remain available',async t=>{
+  const f=await publicationFixture(t,20,undefined,true),staged=await prepareRuntimeDeltaPublication(f.input);
+  await commitPreparedRuntimeDelta({...f.input,handoffSha256:staged.handoffSha256});
+  let calls=0,clock=Date.parse(next);
+  const input={db:f.db,store:f.store,accountId:'a'.repeat(32),nativeIndexName:'fixture-native',servingIndexName:'synthetic-derived-index',token:'TEST_ONLY',
+    now:()=>new Date(clock),fetch:async()=>{calls++;return new Response('{}',{status:429,headers:{'retry-after':'20'}});}};
+  const first=await drainRuntimeIndexEvents(input);assert.equal(first.outcomes[0].errorCode,'semantic_delta_throttled');assert.equal(calls,1);
+  assert.equal(f.sql.prepare('SELECT retry_after FROM catalog_runtime_index_events').get().retry_after,'2026-11-15T13:00:20.000Z');
+  assert.equal((await drainRuntimeIndexEvents(input)).outcomes.length,0);assert.equal(calls,1);
+  clock+=21000;assert.equal((await drainRuntimeIndexEvents(input)).pending,1);assert.equal(calls,2);
+  assert.equal(f.sql.prepare('SELECT release_id FROM catalog_runtime_head').get().release_id,'delta-live');
+  assert.equal(await readMutationOwner(f.db,f.input.owner),null);
 });
 test('wrong approval/row/copy and missing source trigger refuse; no provider or catalog head is touched',async t=>{
   const f=await sourceFixture(t);

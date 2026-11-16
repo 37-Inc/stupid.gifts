@@ -105,7 +105,7 @@ export async function reconcileEditorialRecoverySuccessor(options: {
     || c.permit.requestId !== c.requestId || c.permit.releaseId !== b.runId || c.permit.versionReference !== c.versionReference
     || c.permit.mutationOwner.environment !== b.scope.environment || c.permit.mutationOwner.indexName !== b.scope.indexName) fail('checkpoint');
   mutationFenceQuery(c.permit.mutationOwner, ['activating']);
-  const seal = await w.catalogSuccessor(); if (!seal) fail('seal');
+  const seal = await w.catalogSuccessor(); if (!seal || seal.kind!=='approved-catalog-seal') fail('seal');
   try { catalogSuccessorBytes(seal); } catch { fail('seal'); }
   const envelope = JSON.parse(seal.envelopeJson);
   if (seal.publication.releaseId !== b.runId || seal.snapshotSha256 !== c.intent.catalogSnapshotSha256
