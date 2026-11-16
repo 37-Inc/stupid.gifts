@@ -41,10 +41,12 @@ requires a genuine positive observation. Expiry falls back to cleared content.
 ## Search is a derived delivery, not listing acceptance
 
 - Prepare from the exact verified saved embedding, with no second model call.
-  Persist a content-addressed private native payload before the source changes;
-  a companion index-event record binds its hash to the original outbox event,
-  accepted publication/version and proof. Do not alter legacy outbox row shapes
-  or rewrite their hashed historical receipts.
+  Reuse the EXISTING immutable `catalog_maintenance_vector_payloads` row: it
+  already retains the exact original native bytes across later source changes.
+  Do not add another payload store or copy those vectors to R2. A companion
+  index-event record binds its hash to the original outbox event, accepted
+  publication/version and serving projection. Do not alter legacy outbox row
+  shapes or rewrite their hashed historical receipts.
 - New delivery uses immutable content-addressed IDs in BOTH existing indexes:
   original1536 bytes plus the1024 serving projection. Keep historical stable-ID
   vectors and every original native receipt untouched. Do not change index,
@@ -102,3 +104,19 @@ repeat an existing supplier batch just for a benchmark. Genuine new-product
 preparation is already separately proven; composed new-row tests must exercise
 the shared short commit, and real new-add latency stays explicitly measured on
 the next owner-requested addition rather than guessed from a no-op.
+
+## Implemented short-commit fixture (not activated)
+
+`commit-runtime-publication.ts` now owns the single atomic data-head transition
+for both paths. The legacy caller retains its existing native/source checks;
+`runtime-delta-publication.ts` supplies exact reviewed-source and accepted-public
+checks instead. It stages/copies public rows, exports data, saves a body-free
+handoff, commits a genuine receipt/build/head/idle transition, and recovers a
+lost acknowledgement without rereading source bodies or refetching anything.
+
+The composed 3,000-existing-plus-one-new test uses 49 read queries, five bounded
+write batches, one SQL copy and one transferred public row. It verifies the
+actual runtime reader and original photo deadlines, not just staging. These are
+local request counts, not a production wall-time benchmark. Hosted successor,
+asynchronous index delivery and workflow integration remain unfinished; do not
+activate this publisher or call the rollout complete on these fixtures alone.
