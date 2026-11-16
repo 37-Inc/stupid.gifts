@@ -42,7 +42,9 @@ requires a genuine positive observation. Expiry falls back to cleared content.
 
 - Prepare from the exact verified saved embedding, with no second model call.
   Persist a content-addressed private native payload before the source changes;
-  an additive outbox hash binds it to the original event/version and proof.
+  a companion index-event record binds its hash to the original outbox event,
+  accepted publication/version and proof. Do not alter legacy outbox row shapes
+  or rewrite their hashed historical receipts.
 - New delivery uses immutable content-addressed IDs in BOTH existing indexes:
   original1536 bytes plus the1024 serving projection. Keep historical stable-ID
   vectors and every original native receipt untouched. Do not change index,
