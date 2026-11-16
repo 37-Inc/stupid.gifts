@@ -49,8 +49,12 @@ export async function readAcceptedPublicCatalog(input:{db:CatalogD1;store:Catalo
   const {data_sha256,source_snapshot_sha256,public_snapshot_sha256,...receipt}=rows[0];
   if(receipt.release_id!==input.releaseId||data_sha256!==input.dataSha256||sha256(canonicalJson(receipt))!==input.receiptSha256)
     throw Error('runtime_predecessor_changed');
+  const intent=JSON.parse(String(receipt.manifest_json));
+  if(encodePublicationIntent(intent)!==receipt.manifest_json||intent.releaseId!==receipt.release_id
+    ||intent.catalogRevision!==receipt.catalog_revision||intent.codeSha!==receipt.code_sha
+    ||intent.manifestSha256!==data_sha256||intent.catalogSnapshotSha256!==source_snapshot_sha256)throw Error('runtime_predecessor_changed');
   const data=readRuntimeCatalogData(await object(store,'public-catalog/'+input.dataSha256+'.json',input.dataSha256));
-  if(data.releaseId!==input.releaseId||data.snapshot.catalogRevision!==receipt.catalog_revision
+  if(data.releaseId!==input.releaseId||data.sourceCodeSha!==receipt.code_sha||data.snapshot.catalogRevision!==receipt.catalog_revision
     ||sha256(JSON.stringify(data.snapshot)+'\n')!==public_snapshot_sha256)throw Error('runtime_predecessor_changed');
   const projection=(await db.prepare('SELECT * FROM catalog_projection_receipts WHERE catalog_revision=?')
     .bind(data.snapshot.catalogRevision).all<Record<string,unknown>>()).results;
