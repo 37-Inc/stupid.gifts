@@ -12,7 +12,9 @@ application**. Existing React cards, search, Random and analytics are reused.
   It does not claim a catalog owner or change catalog rows/receipts/pointers.
 - **Catalog care:** the existing morning/evening coordinator is still the only
   catalog writer. Supplier work, factual copy review, embeddings and both search
-  indexes keep the existing pipeline. Publication uploads approved public data,
+  indexes keep the existing pipeline. New supported runs save provider preparation
+  before the catalog writer and deliver saved embeddings after it. Publication
+  inherits the accepted PUBLIC catalog and stages only exact reviewed changes,
   then advances one D1 head with its genuine receipt/build resolution/idle owner.
   It does **not** build Next pages, upload application assets or activate a Worker.
 - **Collections:** authenticated staff and the daily homepage editor share
@@ -43,10 +45,13 @@ another owner's pending work is not taken over.
 - Runtime publications retain the genuine original-schema `publication_receipts`
   row. Companion `catalog_runtime_publications` records the data contract;
   historical receipt schemas and native proofs are not rewritten.
-- The final catalog transaction checks original owner/source/native barriers,
+- The final catalog transaction checks original owner and source barriers,
   expected predecessor and queued request; it records receipt/head/build/idle
   together. `version_reference=NULL` and `runtime:<hash>` truthfully resolve a
   data build request: no fake application version is invented.
+- Public-delta receipts explicitly say index delivery is asynchronous and retain
+  the original native-history anchor. They do not pretend pending delivery is a
+  legacy verified native promotion. Legacy runs keep their native barriers.
 - A retained body-free handoff settles a crash after commit. Exact readback
   recovers unknown acknowledgements, without another upload, owner takeover,
   supplier fetch or model phase. Existing hosted successor acceptance remains

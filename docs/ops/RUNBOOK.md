@@ -123,6 +123,24 @@ duration claims. The existing `.36.4` observation owns the next ordinary run's
 actual preparation/apply/review/publication timing; do not dispatch a new batch
 to benchmark it.
 
+The reviewed public-delta rollout is documented in
+[RUNTIME_DELTA_PUBLICATION.md](RUNTIME_DELTA_PUBLICATION.md). After additive
+migration0022, NEW supported runtime runs prepare outside `catalog-production`,
+then apply the finite saved cohort and publish only its reviewed public changes
+over the actual accepted public head. There is no private whole-catalog scan,
+native-history revalidation or provider visibility wait on this short path.
+The publisher refuses missing preparation; the exact source/config/run handoff
+prevents concurrent journal writers. Frozen configurations retain their original
+reader/recovery path. Ready staff additions get the next turn before a NEW daily
+publication and are checked again afterward; no per-product matrix or preemption
+framework is introduced.
+
+The same workflow delivers saved embeddings afterward in a separate index job,
+without a catalog owner or Amazon/model credentials. A pending/failed delivery
+is reported separately; a cleared keyword-searchable listing stays published.
+Original native vectors/history, exact readback, paid/unknown accounting and
+source deadlines remain intact. Do not rerun providers to finish index delivery.
+
 Runtime-data publication records acknowledged derived-index upserts without
 waiting for provider visibility. `semantic_indexing_pending` is optional
 coverage, not listing failure or proof of visibility. Existing content-addressed

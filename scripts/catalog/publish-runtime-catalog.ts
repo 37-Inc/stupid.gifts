@@ -5,7 +5,6 @@ import {mutationAssertion} from '../../lib/catalog/mutation-fence.ts';
 import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
 import {publicationPreflight,publicationActivationGate,encodePublicationIntent} from '../../lib/catalog/publication.ts';
 import {capturedRevisionBuildRequest,prunedVectorPlan} from '../../lib/catalog/prune-existing-revision.ts';
-import {encodeBuildRequest} from '../../lib/catalog/build-requests.ts';
 import type {ApprovedCohortRevision} from '../../lib/catalog/freeze-approved-cohort.ts';
 import type {PublicationConfig,PublicationResult} from './publish-release.ts';
 import {verifyPublicationSemanticCatalog} from './publish-release.ts';
@@ -20,6 +19,19 @@ import {assertApprovedCatalogInventory} from './permanent-catalog-seal.ts';
 import {createApprovedCatalogSeal,catalogSuccessorBytes} from './approved-catalog-seal.ts';
 import {createContentRequestStore,ContentAdminError} from '../../lib/catalog/content-admin.ts';
 import {applyRuntimeCollection} from '../../lib/catalog/runtime-collections.ts';
+import {commitRuntimePublication,readRuntimeAcceptance} from './commit-runtime-publication.ts';
+import {readAcceptedRuntimeDeltaHandoff} from './runtime-delta-publication.ts';
+
+/** Shared optional editor CAS: a newer manual edition always wins. */
+export async function applyReviewedRuntimeHomepage(input:{db:CatalogD1;homepage:PublicationConfig['homepage'];expectedRevision:number;
+  baseCatalogRevision:string;runReference:string;at:string}){
+  if(!input.homepage)return;
+  try{const saved=await createContentRequestStore(input.db).save({requestId:'homepage-'+sha256(input.runReference).slice(0,32),
+    resource:'/collections/homepage',action:'collection',actor:'daily-homepage-editor',reason:'Reviewed saved daily edition',
+    baseCatalogRevision:input.baseCatalogRevision,expectedRevision:input.expectedRevision,payload:{edition:input.homepage}},input.at);
+    await applyRuntimeCollection(input.db,saved.request);
+  }catch(error){if(!(error instanceof ContentAdminError&&error.status===409))console.warn(JSON.stringify({notice:'runtime_homepage_not_applied',catalogBlocked:false}));}
+}
 
 /** One atomic data-head transition, under the ORIGINAL catalog mutation fence.
  * No Worker dispatch, lease or activation is invented for a data publication. */
@@ -35,13 +47,8 @@ export async function publishRuntimeCatalog(input:{db:CatalogD1;owner:MutationOw
     if(!prior||sha256(prior.bytes)!==policy.previousDataSha256)throw Error('runtime_predecessor_changed');
     const data=readRuntimeCatalogData(JSON.parse(Buffer.from(prior.bytes).toString('utf8')));
     if(data.releaseId!==policy.previousReleaseId)throw Error('runtime_predecessor_changed');
-    if(input.editHomepage&&config.homepage){try{
-      const saved=await createContentRequestStore(db).save({requestId:'homepage-'+sha256(input.runReference).slice(0,32),resource:'/collections/homepage',
-        action:'collection',actor:'daily-homepage-editor',reason:'Reviewed saved daily edition',baseCatalogRevision:data.snapshot.catalogRevision,
-        expectedRevision:policy.homepageRevision,payload:{edition:config.homepage}},now().toISOString());
-      // A newer manual edition wins. Optional editorial can never block care.
-      await applyRuntimeCollection(db,saved.request);
-    }catch(error){if(!(error instanceof ContentAdminError&&error.status===409))console.warn(JSON.stringify({notice:'runtime_homepage_not_applied',catalogBlocked:false}));}}
+    if(input.editHomepage)await applyReviewedRuntimeHomepage({db,homepage:config.homepage,expectedRevision:policy.homepageRevision,
+      baseCatalogRevision:data.snapshot.catalogRevision,runReference:input.runReference,at:now().toISOString()});
     let semanticCatalog;
     if(config.semanticSearch?.derivedCatalog){const ref=config.semanticSearch.derivedCatalog,bytes=await readFile(ref.path);
       semanticCatalog=await verifyPublicationSemanticCatalog({semanticCatalog:JSON.parse(bytes.toString('utf8'))},config);}
@@ -77,51 +84,16 @@ export async function publishRuntimeCatalog(input:{db:CatalogD1;owner:MutationOw
   if(!handoffObject||sha256(handoffObject.bytes)!==control.handoffSha256)throw Error('runtime_handoff_changed');
   const handoff=JSON.parse(Buffer.from(handoffObject.bytes).toString('utf8')),intent=JSON.parse(handoff.receipt.manifest_json);
   catalogSuccessorBytes(handoff.seal);
-  const bytes=encodePublicationIntent(intent),requestBytes=encodeBuildRequest(capturedRevisionBuildRequest(revision)),token=sha256('runtime:'+bytes),at=handoff.receipt.completed_at;
-  const existing=async()=>{
-    const rows=(await db.prepare(`SELECT r.*,p.data_sha256,p.source_snapshot_sha256,p.public_snapshot_sha256,p.request_id
-      FROM publication_receipts r JOIN catalog_runtime_publications p USING(release_id) WHERE r.release_id=?`).bind(config.releaseId).all<Record<string,unknown>>()).results;
-    if(!rows.length)return null;const r=rows[0];
-    if(rows.length!==1||r.manifest_json!==bytes||r.data_sha256!==control!.dataSha256||r.request_id!==input.requestId
-      ||r.source_snapshot_sha256!==control!.sourceSnapshotSha256||r.public_snapshot_sha256!==control!.publicSnapshotSha256)throw Error('runtime_receipt_changed');
-    const receipt=Object.fromEntries(Object.entries(r).filter(([key])=>!['data_sha256','source_snapshot_sha256','public_snapshot_sha256','request_id'].includes(key)));
-    const proof=(await db.prepare(`SELECT h.release_id,b.state,b.dispatch_reference,b.version_reference,s.phase,s.external_pending,s.generation,s.mutation_epoch
-      FROM catalog_runtime_head h JOIN catalog_build_requests b ON b.request_id=? JOIN catalog_mutation_scopes s ON s.environment=? AND s.index_name=? WHERE h.singleton=1`)
-      .bind(input.requestId,owner.environment,owner.indexName).all<Record<string,unknown>>()).results[0];
-    if(!proof||proof.release_id!==config.releaseId||proof.state!=='resolved'||proof.dispatch_reference!=='runtime:'+control!.dataSha256
-      ||proof.version_reference!==null||proof.phase!=='idle'||proof.external_pending!==0||proof.generation!==owner.generation||proof.mutation_epoch!==owner.epoch)
-      throw Error('runtime_acceptance_changed');return receipt;
-  };
-  let receipt=await existing();
+  const commit={owner,receipt:handoff.receipt,requestId:input.requestId,runReference:input.runReference,request:capturedRevisionBuildRequest(revision),
+    dataSha256:control.dataSha256,sourceSnapshotSha256:control.sourceSnapshotSha256,publicSnapshotSha256:control.publicSnapshotSha256,
+    handoffSha256:control.handoffSha256,previousReleaseId:policy.previousReleaseId,previousDataSha256:policy.previousDataSha256};
+  let receipt=await readRuntimeAcceptance(db,commit);
   if(!receipt){
     const native=(await db.prepare('SELECT * FROM catalog_vector_deliveries WHERE delivery_id=?').bind(handoff.seal.currentNative.source.deliveryId).all<Record<string,unknown>>()).results;
     if(native.length!==1||sha256(canonicalJson(native[0]))!==handoff.seal.currentNative.source.deliverySha256)throw Error('runtime_native_proof_changed');
     await assertApprovedCatalogInventory(db,owner,revision);
     await publicationPreflight(db,revision.snapshot,intent,now());
-    const gate=publicationActivationGate(revision.snapshot,intent),assert=(sql:string,params:unknown[]=[])=>db.prepare(`SELECT json(CASE WHEN ${sql} THEN 'true' ELSE 'runtime_publication_fenced' END)`).bind(...params);
-    try{await db.batch([
-      mutationAssertion(db,owner,['freezing']),assert(gate.sql,gate.params),
-      assert(`EXISTS(SELECT 1 FROM catalog_runtime_head h JOIN catalog_runtime_publications p ON p.release_id=h.release_id
-        WHERE h.singleton=1 AND p.release_id=? AND p.data_sha256=?)`,[policy.previousReleaseId,policy.previousDataSha256]),
-      assert(`EXISTS(SELECT 1 FROM catalog_build_requests WHERE request_id=? AND request_json=? AND state='pending' AND attempts=0)
-        AND NOT EXISTS(SELECT 1 FROM publication_outbox WHERE release_id=?)`,[input.requestId,requestBytes,config.releaseId]),
-      db.prepare(`INSERT INTO publication_outbox(intent_id,release_id,catalog_revision,intent_json,state,attempts,dispatch_reference,completed_token,created_at,updated_at)
-        VALUES(?,?,?,?,'verified',1,?,?,?,?)`).bind(sha256(bytes),config.releaseId,intent.catalogRevision,bytes,'runtime:'+control.dataSha256,token,at,at),
-      db.prepare('INSERT INTO publication_receipts(release_id,catalog_revision,code_sha,completed_at,manifest_json) VALUES(?,?,?,?,?)')
-        .bind(config.releaseId,intent.catalogRevision,config.codeSha,at,bytes),
-      db.prepare('INSERT INTO catalog_runtime_publications(release_id,catalog_revision,data_sha256,source_snapshot_sha256,public_snapshot_sha256,handoff_sha256,request_id,owner_json,previous_release_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
-        .bind(config.releaseId,intent.catalogRevision,control.dataSha256,control.sourceSnapshotSha256,control.publicSnapshotSha256,control.handoffSha256,input.requestId,canonicalJson(owner),policy.previousReleaseId,at),
-      db.prepare('UPDATE catalog_runtime_head SET release_id=?,version=version+1 WHERE singleton=1 AND release_id=?').bind(config.releaseId,policy.previousReleaseId),
-      db.prepare("UPDATE catalog_revisions SET status='published' WHERE revision=?").bind(intent.catalogRevision),
-      db.prepare(`UPDATE catalog_build_requests SET state='resolved',lease_token=?,lease_until=NULL,run_reference=?,release_id=?,dispatch_reference=?,version_reference=NULL,error_code=NULL
-        WHERE request_id=? AND state='pending'`).bind(token,input.runReference,config.releaseId,'runtime:'+control.dataSha256,input.requestId),
-      db.prepare(`UPDATE catalog_mutation_scopes SET phase='idle',owner_token=NULL,owner_reference=NULL,operation_key=NULL,captured_at=NULL
-        WHERE environment=? AND index_name=? AND owner_token=? AND generation=? AND mutation_epoch=? AND phase='freezing' AND external_pending=0`)
-        .bind(owner.environment,owner.indexName,owner.token,owner.generation,owner.epoch),
-      assert(`EXISTS(SELECT 1 FROM catalog_mutation_scopes WHERE environment=? AND index_name=? AND phase='idle' AND external_pending=0 AND generation=? AND mutation_epoch=?)`,
-        [owner.environment,owner.indexName,owner.generation,owner.epoch]),
-    ]);}catch(error){receipt=await existing();if(!receipt)throw error;}
-    receipt=receipt??await existing();if(!receipt)throw Error('runtime_receipt_missing');
+    receipt=await commitRuntimePublication(db,commit,publicationActivationGate(revision.snapshot,intent));
   }
   const receiptSha256=sha256(canonicalJson(receipt));
   if(receiptSha256!==handoff.seal.publication.receiptSha256)throw Error('runtime_handoff_changed');
@@ -138,7 +110,9 @@ export async function readAcceptedRuntimeHandoff(db:CatalogD1,store:CatalogObjec
   if(rows.length!==1||handoff_sha256!==control.handoffSha256||data_sha256!==control.dataSha256||request_id!==control.requestId)throw Error('runtime_receipt_changed');
   const object=await store.get('runtime-handoffs/'+control.handoffSha256+'.json');
   if(!object||sha256(object.bytes)!==control.handoffSha256)throw Error('runtime_handoff_changed');
-  const handoff=JSON.parse(Buffer.from(object.bytes).toString('utf8'));catalogSuccessorBytes(handoff.seal);
+  const handoff=JSON.parse(Buffer.from(object.bytes).toString('utf8'));
+  if(handoff.kind==='runtime-delta-handoff')return readAcceptedRuntimeDeltaHandoff(db,control,handoff);
+  catalogSuccessorBytes(handoff.seal);
   if(canonicalJson(handoff.receipt)!==canonicalJson(receipt)||canonicalJson(handoff.owner)!==owner_json
     ||handoff.seal.publication.receiptSha256!==sha256(canonicalJson(receipt)))throw Error('runtime_handoff_changed');
   const b=(await db.prepare('SELECT state,release_id,version_reference,dispatch_reference FROM catalog_build_requests WHERE request_id=?').bind(control.requestId).all<Record<string,unknown>>()).results[0];

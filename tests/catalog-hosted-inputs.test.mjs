@@ -3,7 +3,7 @@ import test from 'node:test';
 import {mkdtemp,realpath,rm,readFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {publishHostedInputs,currentHostedInputs,restoreHostedInputs,syncHostedCampaignFeed} from '../scripts/catalog/hosted-inputs.ts';
+import {publishHostedInputs,currentHostedInputs,readHostedInput,restoreHostedInputs,syncHostedCampaignFeed} from '../scripts/catalog/hosted-inputs.ts';
 import {WEBSITE_CAMPAIGN_SCOPE} from '../lib/catalog/campaigns.ts';
 function memory(){const data=new Map();let n=0;return{data,async get(k){return data.get(k)??null;},
   async putImmutable(k,bytes){const old=data.get(k);if(old&&!Buffer.from(old.bytes).equals(bytes))throw Error('conflict');
@@ -59,6 +59,15 @@ test('versioned inputs restore exact metadata while pending runs keep their orig
   const directory=await base(t);await restoreHostedInputs(store,directory,first);
   assert.equal(JSON.parse(await readFile(path.join(directory,file({}).relative))).enabled,false);
   await assert.rejects(restoreHostedInputs(store,directory,second),/inputs_invalid/);
+});
+test('one protected input can be read without downloading unrelated bootstrap or catalog bodies',async()=>{
+  const store=memory(),policy={relative:'daily-catalog-care/semantic-search.json',bytes:Buffer.from('{"enabled":true}')};
+  const ref=await publishHostedInputs(store,[file({schemaVersion:1}),policy],null),reads=[];
+  const get=store.get;store.get=async key=>{reads.push(key);return get(key);};
+  const result=await readHostedInput(store,ref,policy.relative);assert.deepEqual(result.bytes,policy.bytes);assert.equal(result.relative,policy.relative);
+  const manifest=JSON.parse(store.data.get(ref.key).bytes),selected=manifest.files.find(f=>f.relative===policy.relative);
+  assert.deepEqual(reads,[ref.key,selected.key]);
+  await assert.rejects(readHostedInput(store,ref,'../escape.json'),/inputs_invalid/);
 });
 test('inputs reject path escapes, locks, secret paths, corrupt bodies and stale pointer replacement',async t=>{
   const store=memory();

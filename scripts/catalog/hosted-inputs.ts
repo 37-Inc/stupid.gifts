@@ -48,19 +48,30 @@ export async function currentHostedInputs(store:CatalogObjectStore){
   const object=await store.get('pointers/operator-inputs.json');if(!object)throw Error('catalog_hosted_inputs_missing');
   const ref=JSON.parse(Buffer.from(object.bytes).toString('utf8')) as HostedInputsReference;reference(ref);return ref;
 }
-async function readHostedInputFiles(store:CatalogObjectStore,ref:HostedInputsReference){
+async function readHostedInputManifest(store:CatalogObjectStore,ref:HostedInputsReference){
   reference(ref);
   const object=await store.get(ref.key);if(!object||hash(object.bytes)!==ref.sha256)fail();
   const manifest=JSON.parse(Buffer.from(object.bytes).toString('utf8')) as HostedInputs;
   if(!manifest||Object.keys(manifest).sort().join(',')!=='files,kind,schemaVersion'||manifest.schemaVersion!==1||manifest.kind!=='catalog-hosted-inputs'
     ||!Array.isArray(manifest.files)||!manifest.files.length||manifest.files.length>20
     ||new Set(manifest.files.map(f=>f.relative)).size!==manifest.files.length)fail();
-  return Promise.all(manifest.files.map(async file=>{
+  for(const file of manifest.files){
     if(!file||Object.keys(file).sort().join(',')!=='key,relative,sha256'||!relative(file.relative)||!HASH.test(file.sha256)
       ||file.key!==`inputs/files/${file.sha256}.json`)fail();
-    const value=await store.get(file.key);if(!value||value.bytes.length>10*1024*1024||hash(value.bytes)!==file.sha256)fail();
-    return{...file,bytes:value.bytes};
-  }));
+  }
+  return manifest;
+}
+async function readHostedInputFile(store:CatalogObjectStore,file:HostedInputs['files'][number]){
+  const value=await store.get(file.key);if(!value||value.bytes.length>10*1024*1024||hash(value.bytes)!==file.sha256)fail();
+  return{...file,bytes:value.bytes};
+}
+async function readHostedInputFiles(store:CatalogObjectStore,ref:HostedInputsReference){
+  const manifest=await readHostedInputManifest(store,ref);return Promise.all(manifest.files.map(file=>readHostedInputFile(store,file)));
+}
+/** A small derived job needs one protected input, not the old bootstrap/archive. */
+export async function readHostedInput(store:CatalogObjectStore,ref:HostedInputsReference,name:string){
+  if(!relative(name))fail();const manifest=await readHostedInputManifest(store,ref),file=manifest.files.find(f=>f.relative===name);
+  if(!file)throw Error('catalog_hosted_input_missing');return readHostedInputFile(store,file);
 }
 /** Protected noncredential workflow input, merged into the existing private
  * feed only before a NEW intent. Pending work retains its original input pin.

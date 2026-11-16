@@ -10,7 +10,7 @@ import type { MutationOwner } from '../../lib/catalog/mutation-fence.ts';
 import { encodeBuildRequest } from '../../lib/catalog/build-requests.ts';
 import type { CatalogBuildClaim, ActivationPermit } from '../../lib/catalog/build-requests.ts';
 import type { PublicationClaim, PublicationIntent } from '../../lib/catalog/publication.ts';
-import type {ApprovedCatalogSeal} from './approved-catalog-seal.ts';
+import type {CatalogSuccessor} from './approved-catalog-seal.ts';
 import { encodePublicationIntent } from '../../lib/catalog/publication.ts';
 import type { ProviderReceipt } from './provider-evidence.ts';
 import { validateExecutionAdoption } from './execution-adoption.ts';
@@ -165,8 +165,8 @@ export interface RunWorkspace {
   putBlob(bytes:Uint8Array,options:{kind:'phase'|'publication';observedAt:string}):Promise<ArtifactRef>;
   readBlob(ref:ArtifactRef):Promise<Uint8Array>;
   /** Immutable body-free catalog control, retained in the existing journal. */
-  recordCatalogSuccessor(seal:ApprovedCatalogSeal):Promise<void>;
-  catalogSuccessor():Promise<ApprovedCatalogSeal|null>;
+  recordCatalogSuccessor(seal:CatalogSuccessor):Promise<void>;
+  catalogSuccessor():Promise<CatalogSuccessor|null>;
   saveReceipt(input:Readonly<{sha256:string;receipt:ProviderReceipt}>):Promise<ArtifactRef>;
   readReceipt(ref:ArtifactRef):Promise<ProviderReceipt>;
   readCheckpoint(options?:{controlOnly?:false}):Promise<{sha256:string;checkpoint:WorkspaceCheckpoint}|null>;
@@ -1089,11 +1089,13 @@ async function readWorkspaceState(input:RunWorkspaceOptions) {
 }
 async function readCatalogSuccessor(state:State){
   const saved=state.successor;if(!saved)return null;if(saved.parts.length!==saved.count)fail('catalog_successor_incomplete');
-  const bytes=Buffer.concat(saved.parts.map(p=>Buffer.from(p,'base64'))),value=JSON.parse(bytes.toString('utf8')) as ApprovedCatalogSeal;
+  const bytes=Buffer.concat(saved.parts.map(p=>Buffer.from(p,'base64'))),value=JSON.parse(bytes.toString('utf8')) as CatalogSuccessor;
   const encoded=(await import('./approved-catalog-seal.ts')).catalogSuccessorBytes(value);
+  const request=value.kind==='runtime-delta-seal'?value.request:value.persistent?.request;
   if(byteHash(encoded)!==saved.sha256||!encoded.equals(bytes)
-    ||value.persistent?.request.codeSha!==(state.execution?.effective.codeSha??state.manifest.codeSha)
-    ||value.persistent.request.environment!==state.manifest.scope.environment)fail('catalog_successor');return value;
+    ||request?.codeSha!==(state.execution?.effective.codeSha??state.manifest.codeSha)
+    ||request.environment!==state.manifest.scope.environment
+    ||value.kind==='runtime-delta-seal'&&value.scope.indexName!==state.manifest.scope.indexName)fail('catalog_successor');return value;
 }
 export async function readRunWorkspace(input:RunWorkspaceOptions):Promise<WorkspaceStatus> {
   const {directory,info,state,assertUnchanged}=await readWorkspaceState(input);
@@ -1534,10 +1536,12 @@ async function openWorkspace(input:RunWorkspaceOptions,cleanupOnly=false):Promis
       readReceipt:(ref:ArtifactRef)=>serial(async()=>{const v=await read(ref);if(!['amazon-observation','embedding-response'].includes(v.kind))fail('kind');
         receipt(v.value as unknown as ProviderReceipt);return structuredClone(v.value) as unknown as ProviderReceipt;}),
       catalogSuccessor:()=>serial(catalogSuccessor),
-      recordCatalogSuccessor:(value:ApprovedCatalogSeal)=>serial(async()=>{
+      recordCatalogSuccessor:(value:CatalogSuccessor)=>serial(async()=>{
         const bytes=(await import('./approved-catalog-seal.ts')).catalogSuccessorBytes(value),digest=byteHash(bytes),count=Math.ceil(bytes.length/65536);
-        if(value.persistent!.request.environment!==manifest.scope.environment
-          ||value.persistent!.request.codeSha!==(state.execution?.effective.codeSha??manifest.codeSha))fail('catalog_successor_scope');
+        const request=value.kind==='runtime-delta-seal'?value.request:value.persistent!.request;
+        if(request.environment!==manifest.scope.environment
+          ||request.codeSha!==(state.execution?.effective.codeSha??manifest.codeSha)
+          ||value.kind==='runtime-delta-seal'&&value.scope.indexName!==manifest.scope.indexName)fail('catalog_successor_scope');
         if(state.successor&&(state.successor.sha256!==digest||state.successor.count!==count))fail('catalog_successor_rewrite');
         for(let index=state.successor?.parts.length??0;index<count;index++)await append({type:'catalog-successor-part',sha256:digest,index,count,
           data:bytes.subarray(index*65536,(index+1)*65536).toString('base64')});

@@ -337,10 +337,10 @@ export async function readApprovedCurrentRows(db: CatalogD1, ids: string[], owne
 }
 /** Same byte-bounded ordered reader used by products/projections, rather than
  * one unbounded result containing every bulk operation's changes_json. */
-export async function readOwnerBaseOperationReceipts(db:CatalogD1,owner:MutationOwner,ids:string[],approvedRecovery=false,signal?:AbortSignal) {
+export async function readOwnerBaseOperationReceipts(db:CatalogD1,owner:MutationOwner,ids:string[],approvedRecovery=false,signal?:AbortSignal,phase:'writing'|'freezing'='freezing') {
   ids=[...new Set(ids)].sort();
   if(ids.length>3383||ids.some(id=>!HASH.test(id)))throw Error('read_bounds');
-  const gate=approvedRecovery?approvedRevisionReadFence(owner):mutationFenceQuery(owner,['freezing']);
+  const gate=approvedRecovery?approvedRevisionReadFence(owner):mutationFenceQuery(owner,[phase]);
   const rows=await ownedPages(db,owner,ids,`SELECT ids.ordinal,ids.value identity,${jsonColumns('o',OPERATION)} data
     FROM requested ids CROSS JOIN catalog_maintenance_operations o ON o.operation_id=ids.value`,[],gate,signal);
   if(rows.length!==ids.length)throw Error('approved_identity_missing');return rows;

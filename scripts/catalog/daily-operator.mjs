@@ -72,7 +72,12 @@ async function put(file,value){
 async function optional(file){try{return await json(file);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 async function priorSuccess(){try{return await RUNTIME.state.readPointer('last-success',CARE+'/last-success.json');}
   catch(error){if(error.code==='ENOENT')return null;throw error;}}
-export async function routineHostedPending(runtime,source,runKey,{recovery=false}={}){
+export async function routineHostedPending(runtime,source,runKey,{recovery=false,preparation=false}={}){
+  if(preparation){
+    const record=hostedRunRecord(JSON.parse(await runtime.state.bytes(runtime.care+'/runs/'+runKey+'/hosted-run.json')));
+    if(record.source!==source||record.runKey!==runKey||!['full','photos','canary','admit'].includes(record.kind))refuse('hosted_preparation');
+    return record;
+  }
   const pointer=JSON.parse(await runtime.state.readPointer('pending-run',runtime.care+'/pending-run.json'));
   const ref=pointer?.pending;
   if(pointer?.schemaVersion!==1||Object.keys(pointer).sort().join(',')!=='pending,schemaVersion'||!ref
@@ -213,6 +218,7 @@ export async function routineServingPrior(token,seal,send=fetch){
 /** Detect a previously interrupted product write before reserving a merchant batch. */
 export async function assertNoUnsealedMaintenance(db,seal,scope=SCOPE){
   const generation=seal.kind==='approved-catalog-seal'?seal.persistent?.generation
+    :seal.kind==='runtime-delta-seal'?seal.generation
     :seal.kind==='permanent-catalog-seal'?seal.control?.installationOwner?.generation+1:NaN;
   if(!Number.isSafeInteger(generation)||generation<1)refuse('prior_generation');
   const rows=(await db.prepare(`SELECT 1 FROM catalog_maintenance_operations
@@ -237,7 +243,7 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,a
   if(await optional(directory+'/prepare-intent.json'))refuse('preparation_interrupted');
   const priorBytes=await priorSuccess();if(RUNTIME.hosted&&!priorBytes)refuse('hosted_catalog_bootstrap');
   const prior=priorBytes?JSON.parse(priorBytes.toString('utf8')):INITIAL,seal=await json(prior.control.path,prior.control.sha256);
-  if(!['permanent-catalog-seal','approved-catalog-seal'].includes(seal.kind))refuse('prior_kind');
+  if(!['permanent-catalog-seal','approved-catalog-seal','runtime-delta-seal'].includes(seal.kind))refuse('prior_kind');
   const token=await RUNTIME.token(),plan=await currentD1Plan(token),limits=routineLimits(plan),capacity=await observeHeadroom(token,undefined,null,fetch,plan);
   const db=await createCatalogD1ReadOnlyRest({accountId:SCOPE.accountId,databaseId:SCOPE.databaseId,databaseName:SCOPE.databaseName,token,
     ...(bundled?{requestLimit:'observe'}:{}),
@@ -283,7 +289,10 @@ async function prepare(directory,calendar,photosOnly=false,admitAsins,canaryId,a
   if(runtimeTable){const head=(await db.prepare(`SELECT p.release_id,p.data_sha256 FROM catalog_runtime_head h JOIN catalog_runtime_publications p ON p.release_id=h.release_id WHERE h.singleton=1 AND h.enabled=1`).all()).results[0];
     if(head){if(head.release_id!==seal.publication.releaseId)refuse('runtime_catalog_successor_changed');
       const latest=(await db.prepare("SELECT coalesce(max(revision),0) n FROM content_admin_requests WHERE resource='/collections/homepage'").all()).results[0].n;
-      runtimeCatalog={schemaVersion:1,previousReleaseId:head.release_id,previousDataSha256:head.data_sha256,homepageRevision:latest};}}
+      const delta=(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='catalog_runtime_index_events'").all()).results.length===1;
+      if(seal.kind==='runtime-delta-seal'&&!delta)refuse('runtime_delta_schema_required');
+      runtimeCatalog={schemaVersion:1,previousReleaseId:head.release_id,previousDataSha256:head.data_sha256,homepageRevision:latest,
+        ...(delta&&!admitSavedRun&&['approved-catalog-seal','runtime-delta-seal'].includes(seal.kind)?{mode:'public-delta'}:{})};}}
   let homepageEdition=await routineHomepageEdition(calendar.day,prior.control.path,canaryId?file=>
     file===path.dirname(prior.control.path)+'/homepage-edition.json'?optional(file):null:optional);
   if(runtimeCatalog){const {currentHomepageEdition}=await import('./homepage-editor.mjs');
@@ -379,7 +388,11 @@ export async function remember(result,entry,config,directory){
   if(config.publication.homepage)await put(directory+'/homepage-edition.json',config.publication.homepage);
   await put(directory+'/success.json',{next,result:weeklyCommandSummary(result),source:config.codeSha,operatorSource:SOURCE,helperSha256:self});
   const pointer=CARE+'/last-success.json',oldBytes=await priorSuccess(),old=oldBytes?JSON.parse(oldBytes.toString('utf8')):null;
-  if(old&&old.control.sha256!==config.inputs.previous.sha256&&old.control.sha256!==hash)refuse('successor_pointer_changed');
+  if(old&&old.control.sha256!==config.inputs.previous.sha256&&old.control.sha256!==hash){
+    if(result.catalogSeal.kind!=='runtime-delta-seal')refuse('successor_pointer_changed');
+    const actual=await json(old.control.path,old.control.sha256);
+    if(canonicalJson(actual.publication)!==canonicalJson(result.catalogSeal.previousPublication))refuse('successor_pointer_changed');
+  }
   if(old?.control.sha256===hash)return;
   await RUNTIME.state.pointer('last-success',pointer,next,oldBytes);
   }finally{await w.close();}
@@ -458,13 +471,25 @@ if(argv[0]==='code-only'){
   await source('code-only');await operator.codeOnlyMain(argv.slice(1));return;
 }
 let calendar=pacificCatalogCalendar();
+const staging=argv[0]==='stage';if(staging)argv=['prepare',...argv.slice(1)];
 // Parse the stable run key first. A captured prior day is trusted ONLY through
 // the immutable hosted pending record, never a CLI date/environment override.
-const rawRun=argv.indexOf('--run'),pending=RUNTIME.hosted?await routineHostedPending(RUNTIME,SOURCE,rawRun>=0?argv[rawRun+1]:'scheduled-'+calendar.day,{recovery:argv[0]==='recover'}):null;
+const rawRun=argv.indexOf('--run'),pending=RUNTIME.hosted?await routineHostedPending(RUNTIME,SOURCE,rawRun>=0?argv[rawRun+1]:'scheduled-'+calendar.day,{recovery:argv[0]==='recover',preparation:staging}):null;
 if(pending)calendar=pacificCatalogCalendar(pending.day+'T12:00:00Z');
 const {command,approvalSha,runKey,photosOnly,admitAsins,admitSavedRun,canaryId,photoAsins}=operatorInvocation(argv,calendar),directory=CARE+'/runs/'+runKey;
 routineHostedPreparation(pending,{command,photosOnly,admitAsins,admitSavedRun,canaryId,photoAsins});
 await source(command,runKey,pending);
+if(staging){
+  if(!RUNTIME.hosted)refuse('preparation_hosted_only');
+  const record=await prepare(directory,calendar,photosOnly,admitAsins,canaryId,admitSavedRun,photoAsins);
+  if(record.state==='skipped'){console.log(JSON.stringify(record));return;}
+  const config=validateCloudflareWeeklyConfig(await json(record.configPath,record.configSha256));
+  if(config.publication.runtimeCatalog?.mode!=='public-delta'){console.log(JSON.stringify({state:'skipped',reason:'legacy_publication_mode'}));return;}
+  await hydrateRoutineInputs(config);const entry=options(config,record.configPath,record.configSha256);
+  const started=await RUNTIME.durable.get('runs/'+config.runId+'/manifest.json');
+  const result=await runCloudflareWeekly({...entry.driver,command:started?'resume':'start',prepareOnly:true});
+  console.log(JSON.stringify(weeklyCommandSummary(result)));return;
+}
 if(command==='prepare'||command==='reconcile-availability'){
   if(command==='reconcile-availability'&&(!argv.includes('--run')||photosOnly||admitAsins))refuse('availability_command');
   const record=await prepare(directory,calendar,photosOnly,admitAsins,canaryId,admitSavedRun,photoAsins);
@@ -503,6 +528,7 @@ else{
     if(['publish','recover'].includes(command)&&!HASH.test(approvalSha??''))refuse('explicit_review_digest');
     if(command==='start'||recoveryPhase==='start'){const token=await RUNTIME.token();await observeHeadroom(token,undefined,record.capacity,fetch,await currentD1Plan(token));}
     const result=await runCloudflareWeekly({...entry.driver,command:recoveryPhase==='start'?'start':command==='publish'||recovering?'resume':command,
+      ...(config.publication.runtimeCatalog?.mode==='public-delta'?{publicationOnly:true}:{}),
       ...(approvalSha&&!['start','provider','admission-repair'].includes(recoveryPhase)?{approval:{path:directory+'/reviewed-proposal.json',sha256:approvalSha}}:{})},
       {...(recovering?{repository:config.publication.sourceRoot}:{}),...(recoveryPhase==='admission-repair'?{repairSavedAdmission:true}:{}),
         beforeResume:async spent=>{const token=await RUNTIME.token();await observeHeadroom(token,spent,record.capacity,fetch,await currentD1Plan(token));}});

@@ -2,7 +2,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {createInterface} from 'node:readline';
 import {createHash} from 'node:crypto';
-import {lstat,mkdir,readFile,realpath} from 'node:fs/promises';
+import {lstat,mkdir,readFile,realpath,appendFile} from 'node:fs/promises';
 import path from 'node:path';
 import {homedir} from 'node:os';
 import {fileURLToPath,pathToFileURL} from 'node:url';
@@ -153,6 +153,46 @@ export function reportHostedCleanupFailure(error,warn=console.warn){
   warn(JSON.stringify(report));warn(`::warning::Expired catalog cleanup needs attention (${errorCode}); original registration retained.`);
   return report;
 }
+/** SAME run/config/source, before catalog-production. It owns no publication
+ * pointer or product writer, and cannot publish/review/apply anything. An old
+ * unfinished publisher retains priority; it is never replaced by another batch. */
+export async function prepareHostedCatalog({mode,canaryId,admitAsins,admitSavedRun,photoAsins,source,day:capturedDay,runtime,environment=process.env},injected={}){
+  if(!runtime.hosted||!runtime.durable||!SOURCE.test(source)||!['full','photos','canary','admit'].includes(mode))fail('preparation_invocation');
+  day(capturedDay);
+  if(admitSavedRun)return{state:'skipped',reason:'original_saved_admission'};
+  const deps={...defaults(runtime,environment),...injected};let record;
+  const pointer=await optional(()=>runtime.state.readPointer('pending-run',runtime.care+'/pending-run.json'));
+  if(pointer){const value=json(pointer);if(!exact(value,'schemaVersion,pending')||value.schemaVersion!==1)fail('pending_pointer');
+    if(value.pending!==null){const ref=value.pending;
+      if(!exact(ref,'path,sha256')||!HASH.test(ref.sha256)||typeof ref.path!=='string'||!ref.path.startsWith(runtime.care+'/runs/')
+        ||! /^[A-Za-z0-9][A-Za-z0-9_-]{0,95}\/hosted-run\.json$/.test(ref.path.slice((runtime.care+'/runs/').length)))fail('pending_pointer');
+      const body=await runtime.state.bytes(ref.path);if(hash(body)!==ref.sha256)fail('pending_digest');record=hostedRunRecord(json(body));
+      if(ref.path!==runtime.care+'/runs/'+record.runKey+'/hosted-run.json')fail('pending_path');
+      if(record.kind==='code'||record.admitSavedRun)return{state:'skipped',reason:'existing_catalog_run'};
+    }}
+  const runKey=record?.runKey??hostedRunKey(mode,capturedDay,source,canaryId,admitAsins,undefined,photoAsins);
+  const file=runtime.care+'/runs/'+runKey+'/hosted-run.json',body=record?null:await optional(()=>runtime.state.bytes(file));
+  if(body){record=hostedRunRecord(json(body));if(record.runKey!==runKey)fail('run_record');
+    const completed=await completedSlot(runtime,record);if(completed)return{...completed,runKey};
+  }else if(!record){record=hostedRunRecord({schemaVersion:1,runKey,source,day:capturedDay,kind:mode,inputsRef:inputsReference(await deps.currentInputs({refreshCampaigns:true})),
+    ...(mode==='canary'?{canaryId}:mode==='admit'?{admitAsins}:photoAsins?{photoAsins}:{})});await runtime.state.put(file,record);}
+  await deps.restoreInputs(record.inputsRef);const directory=await deps.checkout(record.source),status=await deps.inspect(record,directory);
+  if(record.source!==source&&status.config?.publication.runtimeCatalog?.mode!=='public-delta')return{state:'skipped',reason:'original_source_resume_required',runKey};
+  if(status.owner||status.started&&!['created','phases_running'].includes(status.phase))return{state:'skipped',reason:'original_publisher_resume_required',runKey};
+  const ready=await optional(()=>runtime.state.bytes(runtime.care+'/runs/'+runKey+'/provider-prepared.json'));
+  if(ready){const saved=json(ready);if(!exact(saved,'schemaVersion,source,configSha256,runId')||saved.schemaVersion!==1
+    ||saved.source!==record.source||saved.configSha256!==status.configSha256||saved.runId!==status.config?.runId)fail('preparation_identity');
+    return{state:'prepared',runKey,reused:true};}
+  const args=record.kind==='photos'?['--photos-only',...(record.photoAsins?['--photo-asins',record.photoAsins.join(',')]:[])]:record.kind==='canary'?['--canary-id',record.canaryId]
+    :record.kind==='admit'?['--admit-asins',record.admitAsins.join(',')]:[];
+  const result=await deps.invoke(directory,['stage',...args,'--run',runKey]);
+  if(result.state==='skipped')return{...result,runKey};
+  if(result.state!=='prepared'||result.reason!=='provider_preparation_complete')return{state:'attention',runKey,errorCode:result.errorCode??result.reason??'catalog_hosted_preparation_incomplete'};
+  const checked=await deps.inspect(record,directory);
+  if(checked.owner||checked.phase!=='phases_running'||!HASH.test(checked.configSha256??''))fail('preparation_identity');
+  await runtime.state.put(runtime.care+'/runs/'+runKey+'/provider-prepared.json',{schemaVersion:1,source:record.source,configSha256:checked.configSha256,runId:checked.config.runId});
+  return{state:'prepared',runKey,reused:false};
+}
 export function validateHostedProposal({bytes,sha256,runId,catalogRevision,summary,approvalPin}){
   if(!HASH.test(sha256)||hash(bytes)!==sha256)fail('proposal_digest');const value=json(bytes);
   if(!exact(value,'schemaVersion,runId,catalogRevision,changes')||value.schemaVersion!==1||value.runId!==runId
@@ -245,20 +285,27 @@ function defaults(runtime,environment){
         if(hash(bytes)!==config.inputs.savedAdmission.sha256
           ||pin.runKey!==record.admitSavedRun||canonicalJson(pin.ids)!==canonicalJson(record.admitAsins))fail('admission_config');}
       for(const role of ['cloudflare','amazonId','amazonSecret','openai'])if(config.credentials[role]&&canonicalJson(config.credentials[role])!==canonicalJson(runtime.credentials[role]))fail('credential_reference');
+      let providerPrepared;
+      if(config.publication.runtimeCatalog?.mode==='public-delta'){
+        const ready=await optional(async()=>json(await runtime.state.bytes(stateFile(record.runKey)+'/provider-prepared.json')));
+        if(ready&&(!exact(ready,'schemaVersion,source,configSha256,runId')||ready.schemaVersion!==1||ready.source!==record.source
+          ||ready.configSha256!==operator.configSha256||ready.runId!==config.runId))fail('preparation_identity');
+        providerPrepared=Boolean(ready||config.inputs.staffPreparation);
+      }
       const remote=await Promise.all(['manifest.json','head.json'].map(name=>runtime.durable.get(`runs/${config.runId}/${name}`)));
       const local=await Promise.all(['manifest.json','head.json'].map(name=>optional(()=>lstat(path.join(runtime.workspace,'runs',config.runId,name)))));
-      if(remote.every(v=>v===null)&&local.every(v=>v===null))return{prepared:true,started:false,config,configSha256:operator.configSha256};
+      if(remote.every(v=>v===null)&&local.every(v=>v===null))return{prepared:true,started:false,config,configSha256:operator.configSha256,providerPrepared};
       if(remote.some(v=>v===null))fail('workspace_uncertain');
       const {openRunWorkspace,readApprovedPublicationRoute}=await import('./run-workspace.ts');
       const options={directory:runtime.workspace,repository:directory,mode:'resume',runId:config.runId,
         codeSha:record.source,configSha256:operator.configSha256,scope:CATALOG_SCOPE,retention:config.retention,
         budgetCaps:{httpRequests:config.limits.requests,sqlStatements:config.limits.statements},requestLimit:'observe',durable:runtime.durable};
       const route=config.publication.runtimeCatalog&&await readApprovedPublicationRoute(options,...remote);
-      if(route)return{prepared:true,started:true,config,configSha256:operator.configSha256,...route};
+      if(route)return{prepared:true,started:true,config,configSha256:operator.configSha256,providerPrepared,...route};
       const workspace=await openRunWorkspace(options);
       try{const checkpoint=await workspace.readCheckpoint({controlOnly:true});return{prepared:true,started:true,config,
         phase:checkpoint?.checkpoint.phase??'created',owner:checkpoint?.checkpoint.owner??null,configSha256:operator.configSha256,
-        approvalPin:checkpoint?.checkpoint.pins.approval?.sha256,publication:checkpoint?.checkpoint.control?.publication,runtimeCatalog:checkpoint?.checkpoint.control?.runtimeCatalog};}
+        providerPrepared,approvalPin:checkpoint?.checkpoint.pins.approval?.sha256,publication:checkpoint?.checkpoint.control?.publication,runtimeCatalog:checkpoint?.checkpoint.control?.runtimeCatalog};}
       finally{await workspace.close();}
     },
     async accepted(record,status){
@@ -401,6 +448,9 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
       return repaired?finish({state:'accepted',...repaired}):{state:'attention',runKey:record.runKey,errorCode:'catalog_hosted_successor_pending'};
     }
     let result;
+    if(status.config?.publication.runtimeCatalog?.mode==='public-delta'&&!status.providerPrepared&&!status.owner
+      &&(!status.started||['created','phases_running'].includes(status.phase)))
+      return{state:'pending',runKey:record.runKey,errorCode:'catalog_preparation_required'};
     if(!status.prepared){result=await invoke('prepare',record.kind==='photos'?['--photos-only',...(record.photoAsins?['--photo-asins',record.photoAsins.join(',')]:[])]:record.kind==='canary'?['--canary-id',record.canaryId]
       :record.kind==='admit'?['--admit-asins',record.admitAsins.join(','),...(record.admitSavedRun?['--admit-saved-run',record.admitSavedRun]:[])]:[]);
       if(['attention','pending'].includes(result.state))return{...result,runKey:record.runKey};
@@ -457,7 +507,8 @@ export async function coordinateHostedCatalog({mode='shadow',canaryId,admitAsins
 async function main(){
   process.umask(0o077);
   if(process.platform!=='linux'||process.versions.node.split('.')[0]!=='22'||homedir()!=='/home/runner')fail('runner');
-  const [mode='shadow',canaryId,admissionList,savedRun,photoList]=process.argv.slice(2);if(process.argv.length>7)fail('invocation');
+  const values=process.argv.slice(2),preparing=values[0]==='stage';if(preparing)values.shift();
+  const [mode='shadow',canaryId,admissionList,savedRun,photoList]=values;if(values.length>5)fail('invocation');
   const admitAsins=hostedAdmissionAsins(mode,admissionList);
   const admitSavedRun=savedRun||undefined;
   const photoAsins=photoList?photoList.split(',').map(id=>id.trim()).sort():undefined;
@@ -467,6 +518,12 @@ async function main(){
   const now=new Date(),scheduledAt=catalogScheduledTime(mode,process.env.CATALOG_SCHEDULED_AT),capturedDay=hostedInvocationDay(mode,scheduledAt??now);
   console.log(JSON.stringify({state:'started',mode,scheduledEvent:scheduledAt?'cloudflare':null,
     scheduledAt:scheduledAt?.toISOString()??null,startDelayMs:scheduledAt?now.getTime()-scheduledAt.getTime():null,runDay:capturedDay,startedAt:now.toISOString()}));
+  if(preparing){
+    const result=await prepareHostedCatalog({mode,...(canaryId?{canaryId}:{}),...(admitAsins?{admitAsins}:{}),...(admitSavedRun?{admitSavedRun}:{}),...(photoAsins?{photoAsins}:{}),source,day:capturedDay,runtime});
+    const publish=!['photos_current','run_already_accepted','historical_slot_finalized'].includes(result.reason);
+    if(process.env.GITHUB_OUTPUT)await appendFile(process.env.GITHUB_OUTPUT,`publish=${publish}\n`);
+    console.log(JSON.stringify(result));if(result.state==='attention')process.exitCode=1;return;
+  }
   if(mode==='cleanup'){
     if(canaryId||admissionList||savedRun)fail('invocation');
     const {cleanupHostedRuns}=await import('./hosted-cleanup.mjs'),checkout=defaults(runtime,process.env).checkout;
@@ -496,6 +553,17 @@ async function main(){
     const {runAdminAdmissions}=await import('./admin-admissions.mjs');
     const result=await runAdminAdmissions(runtime,{source,day:capturedDay,coordinate:coordinateHostedCatalog});
     console.log(JSON.stringify(result));if(['attention','pending'].includes(result.state))process.exitCode=1;return;
+  }
+  // Ready explicit additions get the next turn before a NEW daily commit.
+  // Never preempt an owned/pending publication or create another publisher.
+  if(['full','photos'].includes(mode)){
+    const pointer=await optional(()=>runtime.state.readPointer('pending-run',runtime.care+'/pending-run.json'));
+    if(!pointer||json(pointer).pending===null){
+      const {runAdminAdmissions}=await import('./admin-admissions.mjs');
+      const admissions=await runAdminAdmissions(runtime,{source,day:capturedDay,coordinate:coordinateHostedCatalog});
+      console.log(JSON.stringify({priorityAdmissions:admissions}));
+      if(['attention','pending'].includes(admissions.state)){process.exitCode=1;return;}
+    }
   }
   const result=await coordinateHostedCatalog({mode,...(canaryId?{canaryId}:{}),...(admitAsins?{admitAsins}:{}),...(admitSavedRun?{admitSavedRun}:{}),...(photoAsins?{photoAsins}:{}),source,day:capturedDay,runtime});
   console.log(JSON.stringify(result));if(result.state==='attention'){console.error('::warning::Catalog run remains pending; resume its existing identity.');process.exitCode=1;}

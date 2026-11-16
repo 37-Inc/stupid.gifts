@@ -14,6 +14,8 @@ import {mutationAssertion} from '../../lib/catalog/mutation-fence.ts';
 import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
 import {canonicalDescriptionEmbeddingInput,hasRepairedSemanticCopy} from '../../lib/catalog/presentation.ts';
 import {validateAutomationCohort} from '../../lib/catalog/automation-cohort.ts';
+import {isImmutableNativeVector,nativeVectorDigest} from './immutable-native-vector.ts';
+import type {ImmutableNativeVector} from './immutable-native-vector.ts';
 
 type Row=Record<string,unknown>;
 export type DerivedVector={id:string;values:number[];metadata:ReturnType<typeof semanticVectorMetadata>};
@@ -108,21 +110,35 @@ export async function prepareMaintenanceSearchDelta(db:CatalogD1,revision:Approv
 /** Immutable content-addressed IDs make same-payload retries safe, unlike the
  * native mutable-ID outbox. No deletion, model call, source mutation or takeover.
  * Only an explicitly scoped/accounted sender is used by the routine driver. */
-export async function syncDerivedSearchVectors(input:{accountId:string;indexName:string;token:string;vectors:DerivedVector[];
-  fetch:typeof fetch;wait?:(ms:number)=>Promise<void>;deferVisibility?:boolean}) {
+interface ImmutableSyncOptions {accountId:string;indexName:string;token:string;fetch:typeof fetch;
+  wait?:(ms:number)=>Promise<void>;deferVisibility?:boolean;acknowledged?:(id:string,reference:string)=>Promise<void>}
+export async function syncDerivedSearchVectors(input:ImmutableSyncOptions&{vectors:DerivedVector[]}){
+  return syncImmutableSearchVectors({...input,kind:'derived'});
+}
+export async function syncImmutableNativeVectors(input:ImmutableSyncOptions&{vectors:ImmutableNativeVector[]}){
+  return syncImmutableSearchVectors({...input,kind:'native'});
+}
+/** Shared bounded content-addressed transport; never mutate legacy UUID IDs. */
+async function syncImmutableSearchVectors(input:ImmutableSyncOptions&{vectors:Array<DerivedVector|ImmutableNativeVector>;kind:'derived'|'native'}) {
   const {vectors}=input;
+  const dimensions=input.kind==='native'?1536:DERIVED_SEARCH_PROFILE.dimensions;
   if(!/^[a-f0-9]{32}$/.test(input.accountId)||!vectors.length||vectors.length>30
     ||!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(input.indexName)
-    ||vectors.some(v=>!/^[a-f0-9]{64}$/.test(v.id)||v.values.length!==DERIVED_SEARCH_PROFILE.dimensions
+    ||vectors.some(v=>input.kind==='native'?!isImmutableNativeVector(v):!/^[a-f0-9]{64}$/.test(v.id)||v.values.length!==DERIVED_SEARCH_PROFILE.dimensions
       ||v.values.some(n=>!Number.isFinite(n)||!Object.is(Math.fround(n),n))
       ||Math.abs(Math.hypot(...v.values)-1)>1e-6
-      ||digest(Buffer.from(encodePgvectorSendBase64(v.values),'base64'))!==v.metadata.derivedNativeSha256)
+      ||nativeVectorDigest(v.values)!==(v as DerivedVector).metadata.derivedNativeSha256)
     ||new Set(vectors.map(v=>v.id)).size!==vectors.length)throw Error('semantic_delta_invalid');
   const base=`https://api.cloudflare.com/client/v4/accounts/${input.accountId}/vectorize/v2/indexes/${input.indexName}`;
   const request=async(path:string,body:string,ndjson=false)=>{
     const signal=AbortSignal.timeout(15000);
     const response=await input.fetch(base+'/'+path,{method:'POST',redirect:'error',signal,
       headers:{Authorization:`Bearer ${input.token}`,'Content-Type':ndjson?'application/x-ndjson':'application/json'},body});
+    if(response.status===429||response.status===503){
+      const header=response.headers.get('retry-after'),delay=header===null?NaN:/^\d+$/.test(header)?Number(header)*1000:Date.parse(header)-Date.now();
+      await response.body?.cancel();
+      throw Object.assign(Error('semantic_delta_throttled'),{retryAfterMs:Number.isFinite(delay)&&delay>=0?delay:60000});
+    }
     // Response streaming is bounded as well as dispatch; no unbounded .json().
     if(!response.body)throw Error('semantic_delta_provider_failed');
     const reader=response.body.getReader(),chunks:Uint8Array[]=[];let bytes=0,rejectAbort:(error:Error)=>void=()=>{};
@@ -141,7 +157,7 @@ export async function syncDerivedSearchVectors(input:{accountId:string;indexName
   const read=async()=>{
     // Vectorize accepts at most20 IDs per lookup, independently of upsert batch
     // size. This is a transport chunk, never a cap on the approved delta.
-    const result:Array<DerivedVector & {namespace?:string}>=[];
+    const result:Array<(DerivedVector|ImmutableNativeVector) & {namespace?:string}>=[];
     for(let offset=0;offset<vectors.length;offset+=20){
       const page=await request('get_by_ids',JSON.stringify({ids:vectors.slice(offset,offset+20).map(v=>v.id)}));
       if(!Array.isArray(page))throw Error('semantic_delta_provider_failed');result.push(...page);
@@ -150,17 +166,19 @@ export async function syncDerivedSearchVectors(input:{accountId:string;indexName
       throw Error('semantic_delta_provider_failed');
     for(const returned of result){const expected=vectors.find(v=>v.id===returned.id);
       if(!expected||returned.namespace||canonicalJson(returned.metadata)!==canonicalJson(expected.metadata)
-        ||!Array.isArray(returned.values)||returned.values.length!==DERIVED_SEARCH_PROFILE.dimensions
+        ||!Array.isArray(returned.values)||returned.values.length!==dimensions
         ||returned.values.some((v:unknown)=>typeof v!=='number'||!Number.isFinite(v))
-        ||hash(returned.values.map(Math.fround))!==hash(expected.values))throw Error('semantic_delta_readback_mismatch');}
+        ||nativeVectorDigest(returned.values.map(Math.fround))!==nativeVectorDigest(expected.values))throw Error('semantic_delta_readback_mismatch');}
     return new Set(result.map(v=>v.id));
   };
   const found=await read(),missing=vectors.filter(v=>!found.has(v.id));
   // One vector per request fits the same bounded accounting bridge as native
   // delivery. Existing immutable matches are not written again on resume.
   for(const vector of missing){
-    const result=await request('upsert',JSON.stringify(vector)+'\n',true);
+    const body=`{"id":${JSON.stringify(vector.id)},"values":[${vector.values.map(n=>Object.is(n,-0)?'-0':JSON.stringify(n)).join(',')}],"metadata":${JSON.stringify(vector.metadata)}}\n`;
+    const result=await request('upsert',body,true);
     if(typeof result?.mutationId!=='string'||!/^[a-zA-Z0-9._:-]{1,200}$/.test(result.mutationId))throw Error('semantic_delta_provider_failed');
+    await input.acknowledged?.(vector.id,result.mutationId);
   }
   // Serving IDs bind the exact saved vector and current public copy. A genuine
   // provider ACK schedules indexing; visibility is not listing acceptance. The
