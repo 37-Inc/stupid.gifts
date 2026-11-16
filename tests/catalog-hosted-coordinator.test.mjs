@@ -152,7 +152,8 @@ test('workflow has one catalog writer, owner-free preparation and post-publicati
   const prep=yaml.split('  prepare-catalog:')[1].split('  catalog:')[0];
   assert.match(prep,/hosted-coordinator\.mjs stage/);assert.doesNotMatch(prep,/group: catalog-production/);
   const indexes=yaml.split('  indexes:')[1].split('  cleanup:')[0];
-  assert.match(indexes,/needs: catalog/);assert.match(indexes,/hosted-index-delivery\.mjs/);
+  assert.match(indexes,/needs: \[prepare-catalog, catalog\]/);assert.match(indexes,/hosted-index-delivery\.mjs/);
+  assert.match(indexes,/needs\.catalog\.result == 'skipped' && needs\.prepare-catalog\.result == 'success'/,'healthy catch-ups can finish pending indexes without another publication');
   assert.doesNotMatch(indexes,/AMAZON|OPENAI|catalog-production/);assert.doesNotMatch(yaml,/\n\s+schedule:/);
 });
 
