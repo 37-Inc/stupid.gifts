@@ -7,6 +7,9 @@ import {createHash} from 'node:crypto';
 import {openRunWorkspace,readRunWorkspace,readApprovedPublicationRoute} from '../scripts/catalog/run-workspace.ts';
 import {canonicalJson,sha256} from '../scripts/catalog/migration.ts';
 import {inventoryPublicationPackage} from '../scripts/catalog/publish-release.ts';
+import {createReviewedPhaseJournal} from '../scripts/catalog/reviewed-provider-phases.mjs';
+import {putOrdered,readOrdered} from '../scripts/catalog/run-cloudflare-weekly.ts';
+import {validatePublicationControlArtifact} from '../scripts/catalog/publication-control.ts';
 
 const NOW='2026-11-06T12:00:00.000Z',LATER='2026-11-06T14:00:00.000Z',HASH='a'.repeat(64);
 const encode=value=>Buffer.from(canonicalJson(value)+'\n');
@@ -48,6 +51,40 @@ async function fixture(t){
   t.after(async()=>{for(const w of handles.reverse())try{await w.close();}catch{}await rm(parent,{recursive:true,force:true});});
   return{...m,input,parent,open,setNow:value=>{now=value;}};
 }
+
+test('ID/hash phase journals avoid content registrations while preserving checkpoints, recovery and original body expiry',async t=>{
+  const measured=[];
+  for(const controls of [false,true]){
+    const f=await fixture(t),w=await f.open({publicationControls:true});let checkpoint=null,last;
+    const receipt=await w.putArtifact({fixture:'original provider body'},{kind:'phase',observedAt:NOW});
+    const journal=createReviewedPhaseJournal({read:ref=>readOrdered(w,ref),put:value=>putOrdered(w,value,NOW,'phase'),
+      save:async value=>{
+        last=controls?await w.putPublicationControl('phase-journal',value):await putOrdered(w,value,NOW,'phase');
+        checkpoint=await w.writeCheckpoint(checkpoint?.sha256??null,{...cp(),state:{automationJournal:last},pins:{}});
+      }});
+    f.calls.length=0;await journal.receipt(receipt);
+    for(let n=0;n<10;n++)await journal.beforeMutation({operationId:sha256(`operation-${n}`),inputSha256:sha256(`input-${n}`),
+      owner:{...cp().owner,epoch:n}});
+    const calls={writes:f.calls.filter(([method])=>method==='put'||method==='cas').length,
+      journalEvents:JSON.parse(Buffer.from(f.objects.get('runs/test-run/head.json').bytes)).sequence};
+    measured.push({...calls,snapshot:journal.snapshot()});
+    await w.close();const restored=await f.open({publicationControls:true,directory:join(f.parent,'reader'),mode:'resume',expectedManifestSha256:w.manifestSha256});
+    assert.deepEqual(await readOrdered(restored,last),journal.snapshot());
+    assert.deepEqual((await restored.readCheckpoint()).checkpoint.state,{automationJournal:last});
+    if(controls){
+      f.setNow(LATER);assert.deepEqual(await readOrdered(restored,last),journal.snapshot());
+      await assert.rejects(restored.readArtifact(receipt),/expired/,'control metadata never renews its referenced provider body');
+      const value=journal.snapshot();
+      for(const invalid of [{...value,text:'supplier body'}, {...value,entries:{bad:{sha256:HASH,reference:'https://private.invalid'}}},
+        {...value,receipts:[{...receipt,embedding:[1]}]}, {...value,mutations:{[HASH]:{operationId:HASH,inputSha256:HASH,owner:{...cp().owner,text:'copy'}}}}])
+        assert.throws(()=>validatePublicationControlArtifact({schemaVersion:1,kind:'phase-journal',value:invalid}),/publication_control_invalid/);
+    }
+  }
+  assert.deepEqual(measured[0].snapshot,measured[1].snapshot);
+  assert.equal(measured[0].writes-measured[1].writes,22,'one two-write registration event avoided for each of eleven journal snapshots');
+  assert.equal(measured[0].journalEvents-measured[1].journalEvents,11);
+  console.info(JSON.stringify({fixture:'phase-journal-10-mutations',before:measured[0].writes,after:measured[1].writes}));
+});
 
 test('route to the reviewed driver without restoring bodies; never shortcut terminal or uncertain control',async t=>{
   const f=await fixture(t),w=await f.open({publicationControls:true}),prefix='runs/test-run/';
