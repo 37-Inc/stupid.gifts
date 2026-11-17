@@ -41,13 +41,14 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: '22.23.1'
+          node-version: '26.13.1'
       - name: Install the reviewed isolated uploader runtime
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y bubblewrap
           sudo apparmor_parser -r .github/catalog-bwrap.apparmor
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test tests/node-runtime.test.mjs
       - run: npm run test:catalog-automation
       - run: node --experimental-strip-types --test tests/catalog-content-admin.test.mjs tests/catalog-content-admin-dispatch.test.mjs
       - run: node --import tsx --test tests/catalog-admin-admissions.test.mjs tests/catalog-admin-state.test.mjs tests/catalog-staff-preparation.test.mjs

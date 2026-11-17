@@ -42,10 +42,9 @@ export ENV_OUT="${1:-.env.local}"
 
 if ! command -v node >/dev/null 2>&1; then
   for node_dir in \
-    "$HOME/.nvm/versions/node/v22.22.1/bin" \
-    "$HOME/.nvm/versions/node/v22.14.0/bin" \
     "/opt/homebrew/bin" \
-    "/usr/local/bin"; do
+    "/usr/local/bin" \
+    "$HOME/.nvm/versions/node/v26.13.1/bin"; do
     if [[ -x "$node_dir/node" ]]; then
       export PATH="$node_dir:$PATH"
       break
