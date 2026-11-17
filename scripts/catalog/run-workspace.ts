@@ -17,7 +17,7 @@ import { validateExecutionAdoption } from './execution-adoption.ts';
 import type { ExecutionAdoption } from './execution-adoption.ts';
 import {activatedPermanentRevisionControl,activatedPermanentSummary} from './activated-permanent-control.ts';
 import type {CatalogObjectStore,DurableObject} from './r2-object-store.ts';
-import {validatePublicationControlArtifact,validatePublicationCheckpointState} from './publication-control.ts';
+import {PUBLICATION_CONTROL_KINDS,validatePublicationControlArtifact,validatePublicationCheckpointState} from './publication-control.ts';
 import type {DurablePublicationArtifact,PublicationControlKind} from './publication-control.ts';
 
 type Json = null | boolean | number | string | Json[] | { [key:string]:Json };
@@ -545,7 +545,7 @@ async function verifyExecutionMetadata(directory:string,state:State,repository:s
 function apply(state:State,event:Event,dry=false) {
   if(state.success&&!['purge','publication-build-cleaned','publication-purged'].includes(event.type))fail('publication_completed');
   if(event.type==='publication-artifact'){
-    if(!exact(event,['type','ref','kind'])||!['request','revision','summary','appeals','search-delta','publication-result'].includes(event.kind))fail('publication_control');
+    if(!exact(event,['type','ref','kind'])||!PUBLICATION_CONTROL_KINDS.includes(event.kind))fail('publication_control');
     artifactRef(event.ref);if(!controlRef(event.ref))fail('reference');const old=state.controls.get(event.ref.sha256);
     if(old&&!same(old,{ref:event.ref,kind:event.kind}))fail('publication_control');
     if(!dry)state.controls.set(event.ref.sha256,{ref:event.ref,kind:event.kind});

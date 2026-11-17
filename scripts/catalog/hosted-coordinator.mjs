@@ -111,10 +111,10 @@ function parsedOutput(stdout){
 export function hostedPublicationProgress(line){
   if(typeof line!=='string'||line.length>1024)return;
   let value;try{value=JSON.parse(line);}catch{return;}
-  if(exact(value,'state,phase,totalPhases,stage,elapsedMs')&&value.state==='catalog_phase_progress'
+  if(exact(value,'state,phase,totalPhases,stage,elapsedMs')&&['catalog_phase_progress','catalog_application_progress'].includes(value.state)
     &&['start','complete'].includes(value.stage)&&[value.phase,value.totalPhases,value.elapsedMs].every(n=>Number.isSafeInteger(n)&&n>=0)
     &&value.phase>0&&value.phase<=value.totalPhases)
-    return{...value,state:'progress',step:'catalog'};
+    return{...value,state:'progress',step:value.state==='catalog_application_progress'?'application':'catalog'};
   if(exact(value,'state,phase,stage,products,elapsedMs')&&value.state==='publication_progress'&&['inventory','native_batch','projection','source_check','source_capture'].includes(value.phase)
     &&['start','complete','reused'].includes(value.stage)&&[value.products,value.elapsedMs].every(n=>Number.isSafeInteger(n)&&n>=0))
     return{state:'progress',step:'publication',phase:value.phase,stage:value.stage,products:value.products,elapsedMs:value.elapsedMs};

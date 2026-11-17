@@ -46,6 +46,8 @@ test('publication progress streams split lines before exit and never echoes raw 
     assert.equal(hostedPublicationProgress(JSON.stringify({...inventory,phase})).phase,phase);
   const phase={state:'catalog_phase_progress',phase:3,totalPhases:14,stage:'complete',elapsedMs:123};
   assert.deepEqual(hostedPublicationProgress(JSON.stringify(phase)),{...phase,state:'progress',step:'catalog'});
+  assert.deepEqual(hostedPublicationProgress(JSON.stringify({...phase,state:'catalog_application_progress'})),{...phase,state:'progress',step:'application'});
+  assert.equal(hostedPublicationProgress(JSON.stringify({...phase,state:'catalog_application_progress',product:'private'})),undefined);
   for(const changed of [{phase:15},{stage:'private'},{product:'private'}])assert.equal(hostedPublicationProgress(JSON.stringify({...phase,...changed})),undefined);
   for(const invalid of ['private supplier body',JSON.stringify({...value,token:'secret'}),JSON.stringify({...value,phase:'arbitrary'}),
     JSON.stringify({...value,completedBytes:-1}),JSON.stringify({...value,completedFiles:5})])assert.equal(hostedPublicationProgress(invalid),undefined);
@@ -155,6 +157,26 @@ test('workflow has one catalog writer, owner-free preparation and post-publicati
   assert.match(indexes,/needs: \[prepare-catalog, catalog\]/);assert.match(indexes,/hosted-index-delivery\.mjs/);
   assert.match(indexes,/needs\.catalog\.result == 'skipped' && needs\.prepare-catalog\.result == 'success'/,'healthy catch-ups can finish pending indexes without another publication');
   assert.doesNotMatch(indexes,/AMAZON|OPENAI|catalog-production/);assert.doesNotMatch(yaml,/\n\s+schedule:/);
+});
+
+test('cleanup runs after successful publication even when an unused preparation ancestor skipped',async()=>{
+  const yaml=await readFile(new URL('../.github/workflows/catalog-manual.yml',import.meta.url),'utf8');
+  const cleanup=yaml.split('\n  cleanup:')[1];
+  const condition=cleanup.match(/\n    if: >-\n([\s\S]*?)\n    runs-on:/)[1].trim();
+  // An explicit status function suppresses Actions' implicit success(), which
+  // would otherwise skip this job when prepare-admin or prepare-catalog skips.
+  assert.match(condition,/^!cancelled\(\)/);
+  const evaluate=new Function('inputs','needs','github','cancelled',`return (${condition});`);
+  for(const mode of ['full','photos','canary','admit','admin','code']){
+    const needs={catalog:{result:'success'},'prepare-admin':{result:mode==='admin'?'success':'skipped'},
+      'prepare-catalog':{result:['full','photos','canary','admit'].includes(mode)?'success':'skipped'}};
+    const run=(result='success',cancelled=false,ref='refs/heads/main')=>evaluate({mode},
+      {...needs,catalog:{result}},{ref},()=>cancelled);
+    assert.equal(run(),true,mode);
+    for(const result of ['failure','skipped','cancelled'])assert.equal(run(result),false,`${mode}: ${result}`);
+    assert.equal(run('success',true),false);assert.equal(run('success',false,'refs/heads/feature'),false);
+  }
+  assert.equal(evaluate({mode:'shadow'},{catalog:{result:'success'}},{ref:'refs/heads/main'},()=>false),false);
 });
 
 test('one existing operator performs prepare/start/review/exact-SHA publish; pointer clears only after acceptance',async()=>{

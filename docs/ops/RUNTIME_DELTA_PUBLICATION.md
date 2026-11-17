@@ -1,7 +1,9 @@
 # Short runtime publication — implementation contract
 
 Scope: `roadmap-lbbz1.32.1`, with real-run measurements in `.36.4`.
-This is unfinished implementation, **not an activated production mode**.
+Activated by PR458 (48b0a8b). The first unattended due-photo and full runs on
+November16 UTC used this path and have independently matched public identity,
+genuine D1 receipt, resolved build, idle owner and hosted successor evidence.
 
 ## Keep
 
@@ -118,7 +120,7 @@ preparation is already separately proven; composed new-row tests must exercise
 the shared short commit, and real new-add latency stays explicitly measured on
 the next owner-requested addition rather than guessed from a no-op.
 
-## Implemented short-commit fixture (not activated)
+## Implemented short-commit fixture
 
 `commit-runtime-publication.ts` now owns the single atomic data-head transition
 for both paths. The legacy caller retains its existing native/source checks;
@@ -151,5 +153,16 @@ catalog owner. Optional pending delivery reports separately from acceptance.
 Composed driver coverage verifies preparation makes no product writes, the
 publisher refuses missing preparation, saved work publishes without another
 provider request or native wait, and finalized retries cannot replay anything.
-STILL REQUIRED: CI/review/merge and actual safe production cutover/QA. No
-migration, mode or publication has been activated yet.
+Production observations: due-photo43804497252 completed in21m15s; full43908209952
+in85m31s. Full preparation took38m16s; its catalog job44m44s included38m06s
+applying the finite saved cohort, not building the app or waiting for indexes.
+The cohorts differ, so compare operation counts as well as wall time. Actual
+provider billing/storage remain unknown; the full run's model-cost estimate is
+not an account invoice. Seven unattended cycles remain a separate observation.
+
+The ID/hash-only phase journal uses the existing validated control store in
+public-delta runs. Its referenced provider bodies retain their original expiry;
+every mutation still awaits the original durable checkpoint and accounting.
+This avoids registering each recovery-metadata snapshot as expiring merchant
+content. An identical ten-mutation fixture uses55 versus77 durable writes,
+with unchanged recovered state. This is not a live wall-time saving claim.

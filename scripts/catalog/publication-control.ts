@@ -3,8 +3,11 @@ import {activatedPermanentSummary} from './activated-permanent-control.ts';
 import {catalogSuccessorBytes} from './approved-catalog-seal.ts';
 import {isCatalogAsin,validateAutomationCohort} from '../../lib/catalog/automation-cohort.ts';
 import {validatePermanentCatalogSeal} from './permanent-catalog-seal.ts';
+import {mutationFenceQuery} from '../../lib/catalog/mutation-fence.ts';
+import type {MutationOwner} from '../../lib/catalog/mutation-fence.ts';
 
-export type PublicationControlKind='request'|'revision'|'summary'|'appeals'|'search-delta'|'publication-result';
+export const PUBLICATION_CONTROL_KINDS=['request','revision','summary','appeals','search-delta','publication-result','phase-journal'] as const;
+export type PublicationControlKind=typeof PUBLICATION_CONTROL_KINDS[number];
 export interface DurablePublicationArtifact {schemaVersion:1;kind:PublicationControlKind;value:unknown}
 const exact=(v:unknown,keys:string[])=>Boolean(v&&typeof v==='object'&&!Array.isArray(v)
   &&Object.keys(v).sort().join(',')===[...keys].sort().join(','));
@@ -46,7 +49,27 @@ function metadata(v:unknown,key='',depth=0):void{
 }
 export function validatePublicationControlArtifact(input:DurablePublicationArtifact):DurablePublicationArtifact{
   if(!exact(input,['schemaVersion','kind','value'])||input.schemaVersion!==1
-    ||!['request','revision','summary','appeals','search-delta','publication-result'].includes(input.kind))fail();
+    ||!PUBLICATION_CONTROL_KINDS.includes(input.kind))fail();
+  if(input.kind==='phase-journal'){
+    const v=input.value as {schemaVersion:number;entries:Record<string,unknown>;receipts:unknown[];mutations:Record<string,unknown>};
+    const dictionary=(value:unknown)=>Boolean(value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length<=10000);
+    const reference=(value:unknown)=>{
+      const r=value as {sha256:string;reference:string};
+      return exact(r,['sha256','reference'])&&hash(r.sha256)&&r.reference===`objects/${r.sha256}.json`;
+    };
+    if(!exact(v,['schemaVersion','entries','receipts','mutations'])||v.schemaVersion!==1||!dictionary(v.entries)||!dictionary(v.mutations)
+      ||!Array.isArray(v.receipts)||v.receipts.length>10000||!v.receipts.every(reference))fail();
+    for(const[key,ref]of Object.entries(v.entries))if(!/^[a-zA-Z0-9_-]{1,180}$/.test(key)||!reference(ref))fail();
+    for(const[key,value]of Object.entries(v.mutations)){
+      const m=value as {operationId:string;inputSha256:string;owner:MutationOwner};
+      if(!hash(key)||!exact(m,['operationId','inputSha256','owner'])||m.operationId!==key||!hash(m.inputSha256)
+        ||!exact(m.owner,['environment','indexName','token','generation','epoch','phase','ownerReference','operationKey','capturedAt'])
+        ||m.owner.phase!=='writing')fail();
+      try{mutationFenceQuery(m.owner);}catch{fail();}
+    }
+    // References and original owner proofs only: no supplier body, copy or vector.
+    if(Buffer.byteLength(canonicalJson(input))>8*1024*1024)fail();return input;
+  }
   if(input.kind==='appeals'){
     if(!Array.isArray(input.value)||input.value.length>10000||input.value.some(v=>!exact(v,['id','sourceSha256','appeal'])
       ||!isCatalogAsin(v.id)||!hash(v.sourceSha256)||!['standout','giftable','ordinary','unreviewed'].includes(v.appeal)))fail();

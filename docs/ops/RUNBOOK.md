@@ -141,6 +141,14 @@ is reported separately; a cleared keyword-searchable listing stays published.
 Original native vectors/history, exact readback, paid/unknown accounting and
 source deadlines remain intact. Do not rerun providers to finish index delivery.
 
+Public-delta phase journals contain only artifact references and exact mutation
+owner/hash proofs. They use the existing control store, not expiring provider-body
+registration; supplier bodies keep their original deadlines. Per-phase
+`application` progress now separates applying saved changes from provider work
+and publication. Post-publication cleanup has an explicit cancellation guard so
+the unused skipped preparation lane cannot silently skip cleanup. It stays in
+its separate queue and never gates an accepted release.
+
 Runtime-data publication records acknowledged derived-index upserts without
 waiting for provider visibility. `semantic_indexing_pending` is optional
 coverage, not listing failure or proof of visibility. Existing content-addressed

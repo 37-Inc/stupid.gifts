@@ -195,7 +195,7 @@ jobs:
     name: Stupid Gifts — Expired cleanup
     needs: catalog
     if: >-
-      github.ref == 'refs/heads/main' && needs.catalog.result == 'success' &&
+      !cancelled() && github.ref == 'refs/heads/main' && needs.catalog.result == 'success' &&
       (inputs.mode == 'code' || inputs.mode == 'full' ||
        inputs.mode == 'photos' || inputs.mode == 'canary' || inputs.mode == 'admit' || inputs.mode == 'admin')
     runs-on: ubuntu-24.04

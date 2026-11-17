@@ -633,7 +633,8 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
       let applying:{current:MutationOwner}|undefined;
       const journal=createReviewedPhaseJournal({initial,read:(ref:ArtifactRef)=>readOrdered(ws,ref),readReceipt:(ref:ArtifactRef)=>ws.readReceipt(ref),
         put:(value:unknown)=>putOrdered(ws,value,now(),'phase'),
-        save:async(value:unknown)=>{const pin=await putOrdered(ws,value,now(),'phase');
+        save:async(value:unknown)=>{const pin=config.publication.runtimeCatalog?.mode==='public-delta'
+          ?await ws.putPublicationControl('phase-journal',value):await putOrdered(ws,value,now(),'phase');
           await write({...(applying?{owner:applying.current}:{}),state:{...state(),automationJournal:{sha256:pin.sha256,reference:pin.reference}}});}});
       if(cp.phase==='created'||cp.phase==='phases_running'){
         const phases=config.cadence!.automation?automatedCatalogPhases(config.cadence!.automation,{runId:config.runId,photosOnly:config.cadence!.photosOnly})
@@ -710,8 +711,12 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
           const results=[],warnings=[],timingsMs:Record<string,number>={},merchandising:Record<string,unknown>={},changed=new Set<string>(),admitted=new Set<string>();
           for(let index=0;index<phases.length;index++){
             const key=`phase-${index}`,prepared=preparedPhases[index];
+            const phaseStarted=Date.now(),progress=(stage:'start'|'complete')=>console.info(JSON.stringify({state:'catalog_application_progress',
+              phase:index+1,totalPhases:phases.length,stage,elapsedMs:Math.max(0,Date.now()-phaseStarted)}));
+            progress('start');
             await applyReviewedPhase({key,journal,prepared,store:maintenance,telemetryStore:telemetry,runId:config.runId,
               withIntent:async(value:unknown,action:()=>Promise<unknown>)=>{capturedIntent=value;try{return await action();}finally{capturedIntent=null;}}});
+            progress('complete');
             results.push(numbers(prepared.result));warnings.push(...prepared.warnings);Object.assign(merchandising,prepared.merchandising);
             for(const[key,value]of Object.entries(prepared.timingsMs))timingsMs[key]=(timingsMs[key]||0)+Number(value);
             for(const mutation of prepared.mutations){
