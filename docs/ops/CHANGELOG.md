@@ -7,7 +7,10 @@ workflow pins; align the package engine, lockfile and nvm selection and remove
 obsolete Node 22 launcher fallbacks. This changes the build/operator toolchain,
 not the Cloudflare Workers runtime or compatibility date. No production
 publication, data migration or provider configuration change is included.
-Runtime consistency is covered by `tests/node-runtime.test.mjs`.
+Runtime consistency is covered by `tests/node-runtime.test.mjs`. PR
+[#460](https://github.com/37-Inc/stupid.gifts/pull/460); local Node 26 lint,
+127 focused tests and both synthetic export/release checks passed. The active
+canonical/operator checkouts remain unmoved until a safe integration checkpoint.
 
 ## 2026-11-05 — Campaign-selection proposal and search-health audit
 
