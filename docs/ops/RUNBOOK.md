@@ -223,10 +223,12 @@ These commands are for an explicitly reconciled fallback only. First stop hosted
 writes and settle its saved pending run; paused scheduling alone does not cancel
 an in-flight publisher. Routine hosted resumption uses the same GitHub workflow.
 
-Use Node22 and this scrubbed prefix from the canonical clean operator:
+Use the qualified Node 26.13.1 toolchain and this scrubbed prefix from the
+canonical clean operator. Existing pinned/in-flight operators keep their original
+source and runtime until an explicit safe checkpoint; do not restart them here.
 
 ```sh
-env -i HOME="$HOME" PATH="/Users/cameronehrlich/.nvm/versions/node/v22.23.1/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" npm run catalog:care -- prepare
+env -i HOME="$HOME" PATH="/Users/cameronehrlich/.nvm/versions/node/v26.13.1/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" npm run catalog:care -- prepare
 ```
 
 Morning: optional `catalog:homepage preview`/`select` first, following

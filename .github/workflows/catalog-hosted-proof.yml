@@ -38,7 +38,7 @@ jobs:
         env:
           CATALOG_LINUX_SANDBOX_TESTS: '1'
         run: >-
-          node --experimental-transform-types --test
+          node --test
           tests/catalog-publication-upload-command.test.mjs
           tests/catalog-publication-upload-isolation.test.mjs
           tests/catalog-publication-upload-linux.test.mjs

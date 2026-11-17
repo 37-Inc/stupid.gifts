@@ -11,6 +11,9 @@ Runtime consistency is covered by `tests/node-runtime.test.mjs`. PR
 [#460](https://github.com/37-Inc/stupid.gifts/pull/460); local Node 26 lint,
 127 focused tests and both synthetic export/release checks passed. The active
 canonical/operator checkouts remain unmoved until a safe integration checkpoint.
+The Linux isolation fixture also uses a digest-verified Node 26 image. Replace
+the removed experimental type-transform flag with native erasable TypeScript
+(explicit error fields), preserving uploader behavior and sandbox policies.
 
 ## 2026-11-05 — Campaign-selection proposal and search-health audit
 

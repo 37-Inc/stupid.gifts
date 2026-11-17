@@ -19,4 +19,7 @@ test('local, install and CI Node versions stay on the qualified Node 26 line', (
   }
   assert.ok(count >= 10, 'check all existing CI and operator setup-node pins');
   assert.doesNotMatch(read('scripts/ops/pull-env.sh'), /\/node\/v22\./);
+  assert.match(read('tests/fixtures/upload-isolation.Dockerfile'), new RegExp(`^FROM node:${version.replaceAll('.', '\\.')}\\b`));
+  assert.doesNotMatch(read('tests/fixtures/upload-isolation.Dockerfile'), /experimental-transform-types/);
+  assert.doesNotMatch(read('.github/workflows/catalog-hosted-proof.yml'), /experimental-transform-types/);
 });
