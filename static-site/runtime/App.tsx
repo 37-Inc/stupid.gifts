@@ -36,9 +36,9 @@ function Chrome({children,analytics}:{children:React.ReactNode;analytics:boolean
         <a href="https://www.pinterest.com/stupid_gifts/" target="_blank" rel="noopener noreferrer">Pinterest<span className="sr-only"> (opens in a new tab)</span></a>
         <a href={`mailto:${PUBLIC_CONTACT_EMAIL}`}>Contact</a><a href="/privacy">Privacy</a></div></footer></>;
 }
-function Grid({products,show=false}:{products:PublicCatalogProduct[];show?:boolean}){
+function Grid({products,show=false,context=show?'show-curated':'catalog'}:{products:PublicCatalogProduct[];show?:boolean;context?:string}){
   return <div className="catalog-grid" aria-label="Gifts">{products.map((p,index)=><ProductCard key={p.publicId} product={p}
-    lead={show&&index===0} eager={show} context={show?'show-curated':'catalog'}/>)}</div>;
+    lead={show&&index===0} eager={show} context={context}/>)}</div>;
 }
 function Detail({product,related=[]}:{product:PublicCatalogProduct;related?:PublicCatalogProduct[]}){
   const retailer=product.source==='amazon'?'Amazon':'Etsy';
@@ -69,7 +69,7 @@ export function RuntimeApp(props:RuntimePageProps){
   else if(props.kind==='guide'&&props.guide)content=<><a className="back-link" href="/gift-guides">← Gift guides</a>
     <div className="page-heading"><p className="eyebrow">Gift guides</p><h1>{props.guide.h1}</h1><p>{props.guide.intro}</p></div>
     <section className="guide-selection"><div className="section-heading"><h2>Gift ideas</h2><span className="quiet">{props.products.length} selections</span></div>
-      {props.products.length?<Grid products={props.products}/>:<p>No matching gifts yet. <a href="/">Browse all gifts.</a></p>}</section>
+      {props.products.length?<Grid products={props.products} context={`gift_guide:${props.guide.slug}`}/>:<p>No matching gifts yet. <a href="/">Browse all gifts.</a></p>}</section>
     {props.guide.editorialSections?.map(s=><section className="section-block" key={s.title}><h2>{s.title}</h2>{s.paragraphs.map(p=><p key={p}>{p}</p>)}
       {s.links?.map(link=><a className="text-action" key={link.slug} href={`/gift-guides/${link.slug}`}>{link.label}</a>)}</section>)}
     {Boolean(props.guide.faqs?.length)&&<section className="section-block"><h2>What to know before picking one.</h2>{props.guide.faqs?.map(faq=><article key={faq.question}><h3>{faq.question}</h3><p>{faq.answer}</p></article>)}</section>}

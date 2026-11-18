@@ -36,6 +36,13 @@ export function selectGuideProducts(
   guide: GiftGuideDefinition,
   now = Date.parse(snapshot.generatedAt),
 ): PublicCatalogProduct[] {
+  const products = readySnapshotProducts(snapshot, now);
+  if (guide.curatedProductIds) {
+    const byId = new Map(products.map((product) => [product.id, product]));
+    return [...new Set(guide.curatedProductIds)]
+      .flatMap((id) => byId.get(id) ?? [])
+      .slice(0, GUIDE_PRODUCT_LIMIT);
+  }
   const groups = giftGuideFocusKeywordGroups[guide.slug] || [
     guide.keywords.slice(0, 1),
   ];
@@ -53,7 +60,7 @@ export function selectGuideProducts(
           : 0),
       0,
     );
-  const candidates = readySnapshotProducts(snapshot, now)
+  const candidates = products
     .filter((p) =>
       groups.every((group) =>
         group.some((keyword) => matches(p.title, keyword)),

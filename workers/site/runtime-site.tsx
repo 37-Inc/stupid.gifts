@@ -124,6 +124,7 @@ async function prepare(view:RuntimeCatalogView,options:RuntimeSiteOptions,now:()
     eligibleUntil:p.eligibleUntil,persistentIndexable:Boolean(base)};}
   for(const p of snapshot.heldProducts)routes[p.path]={...pageRoute(p.path,false),state:'held'};
   for(const guide of guides)routes['/gift-guides/'+guide.slug]=pageRoute('/gift-guides/'+guide.slug,selectGuideProducts({...snapshot,products},guide,at).length>0);
+  const listedGuides=guides.filter(guide=>routes['/gift-guides/'+guide.slug].indexable);
   const manifest:SiteAssetManifest={schemaVersion:1,dataKind:'catalog',sourceMode:'stupid-production',siteIdentitySha256:'0'.repeat(64),releaseId:options.releaseId,codeSha:options.codeSha,
     catalogRevision:snapshot.catalogRevision,catalogSnapshotSha256:view.head.snapshotSha256,generatedAt:snapshot.generatedAt,nextExpiry:null,
     productCount:snapshot.products.length,slugCount:snapshot.products.length+snapshot.heldProducts.length+snapshot.slugHistory.length,vectorSyncWatermark:0,priorReleaseId:null,
@@ -142,7 +143,7 @@ async function prepare(view:RuntimeCatalogView,options:RuntimeSiteOptions,now:()
   };
   const active=collection(view,'active-show').name;
   const activeName=typeof active==='string'&&names.has(active)?active:ACTIVE_SHOW_PRESET;
-  return{snapshot,products,ranked,cards,version,base,feedCount,virtual,photoLookup:index,photoIndex:photoShard?photoBase+'/photos.json':null,photoSlots:Object.keys(index.products),manifest,api,bySlug,byId,related,names,showIds,activeName};
+  return{snapshot,products,ranked,cards,version,base,feedCount,virtual,photoLookup:index,photoIndex:photoShard?photoBase+'/photos.json':null,photoSlots:Object.keys(index.products),manifest,api,bySlug,byId,related,names,showIds,activeName,listedGuides};
 }
 type Prepared=Awaited<ReturnType<typeof prepare>>;
 async function pageOg(view:RuntimeCatalogView,props:RuntimePageProps,at:number){
@@ -159,7 +160,7 @@ async function pageOg(view:RuntimeCatalogView,props:RuntimePageProps,at:number){
 }
 function page(path:string,view:RuntimeCatalogView,p:Prepared,options:RuntimeSiteOptions,now:()=>number){
   const props:RuntimePageProps={kind:'missing',products:[],cards:[],catalogRevision:p.snapshot.catalogRevision,version:p.version,next:null,poolSize:p.cards.slice(0,48).length,
-    action:'/',guides:guides.map(({slug,title,intro})=>({slug,title,intro})),analytics:options.analytics===true,
+    action:'/',guides:p.listedGuides.map(({slug,title,intro})=>({slug,title,intro})),analytics:options.analytics===true,
     disclosures:view.data.disclosures??{},photoIndex:p.photoIndex,photoSlots:p.photoSlots,eligibleUntil:null};
   let title='That gift wandered off.',description='We couldn’t find that page.',status=200,indexable=true,schema:unknown;
   if(path==='/'){props.kind='home';props.cards=p.cards.slice(0,24);props.next=p.feedCount?p.base+'/feed-1.json':null;indexable=props.cards.length>0;
@@ -254,7 +255,7 @@ export function createRuntimeSite(options:RuntimeSiteOptions){
       if(Object.hasOwn(view.data.assets,path))return finish(await runtimePublicAsset(request,env,view,path,now));
       if(path==='/robots.txt')return finish(new Response('User-agent: *\nAllow: /\nDisallow: /h\nDisallow: /api/\nSitemap: '+ORIGIN+'/sitemap.xml\n',{headers:{'Content-Type':'text/plain; charset=utf-8','Cache-Control':'public, max-age=300'}}));
       if(path==='/sitemap.xml'||path==='/sitemap/0.xml'){
-        const paths=['/','/gift-guides','/random-gift','/privacy',...guides.filter(g=>p.manifest.routes['/gift-guides/'+g.slug].indexable).map(g=>'/gift-guides/'+g.slug),...p.products.filter(product=>{
+        const paths=['/','/gift-guides','/random-gift','/privacy',...p.listedGuides.map(g=>'/gift-guides/'+g.slug),...p.products.filter(product=>{
           const route=p.manifest.routes['/gifts/'+product.slug];return catalogDeadline(route.eligibleUntil)>now()?route.indexable!==false:route.persistentIndexable===true;
         }).map(product=>'/gifts/'+product.slug)];
         return finish(new Response('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+paths.map(path=>'<url><loc>'+escape(ORIGIN+path)+'</loc></url>').join('')+'</urlset>',{headers:{'Content-Type':'application/xml; charset=utf-8','Cache-Control':'no-store'}}));

@@ -9,6 +9,8 @@ export interface GiftGuideDefinition {
   description: string;
   intro: string;
   keywords: string[];
+  /** Ordered editorial picks, resolved against the currently eligible catalog. */
+  curatedProductIds?: readonly string[];
   editorialHeading?: string;
   editorialAside?: string;
   editorialSections?: GiftGuideEditorialSection[];
@@ -51,7 +53,6 @@ export const giftGuideFocusKeywordGroups: Record<string, string[][]> = {
   ]],
   'novelty-desk-toys': [['desk toy', 'desktop toy', 'fidget']],
   'secret-santa-gag-gifts': [['secret santa']],
-  'dirty-santa-gifts': [['dirty santa']],
   'funny-gifts-for-dads-who-fish': [['fish', 'fishing', 'tackle']],
   'cat-lover-gag-gifts': [['cat', 'cats', 'kitten', 'kitty']],
   'dog-lover-gag-gifts': [['dog', 'dogs', 'puppy', 'canine']],
@@ -347,10 +348,36 @@ export const giftGuides: GiftGuideDefinition[] = [
   {
     slug: 'dirty-santa-gifts',
     title: 'Dirty Santa Gifts',
-    h1: 'Dirty Santa gifts built for steals, laughs, and instant reactions',
-    description: 'Browse Dirty Santa gifts, holiday exchange gag gifts, and weird novelty products with real catalog items.',
-    intro: 'Dirty Santa works best when the gift is obvious from across the room and just tempting enough to get stolen.',
+    h1: 'Dirty Santa gifts worth stealing',
+    description: 'Funny gift ideas for a holiday swap, from a fortune-telling pickle to a tortilla blanket.',
+    intro: 'Pick something the whole room gets on sight and at least one person will fight to take home. A useful object with a stupid twist is a good place to start.',
     keywords: ['dirty santa', 'white elephant', 'holiday', 'christmas', 'party', 'exchange', 'gag'],
+    curatedProductIds: [
+      'B0CYKK1167', // Fortune-telling pickle
+      'B07VLBVQBP', // Crab spoon rest
+      '0762460806', // Desktop boxing set
+      'B082SHCSH6', // Tortilla blanket
+      'B0CRRWZHK1', // Sheep toilet paper holders
+      'B0FZDRNRH4', // Screaming goat
+      'B08TJ1BSDV', // Cowboy cat pillow cover
+      'B09T39W736', // Desktop golf pen set
+      'B0BHY3K6ZL', // Chicken-leg socks
+      'B0FR5J39PR', // Grumpy frog
+    ],
+    editorialHeading: 'Pick for the swap, not for one person',
+    editorialSections: [
+      {
+        title: 'Go for a joke that needs no explanation',
+        paragraphs: [
+          'A crab that holds a spoon or a tiny punching bag makes sense before you finish unwrapping it. If the room is a mix of coworkers, relatives, and plus-ones, skip the inside joke and pick something the next person can use or display.',
+          'Check the host’s budget and steal rules, then check the current price at the retailer. For a quieter room, lean toward the spoon rest or blanket rather than a gift that makes noise.',
+        ],
+        links: [
+          { slug: 'white-elephant-gifts', label: 'Browse more steal-and-swap gifts' },
+          { slug: 'secret-santa-gag-gifts', label: 'Buying for one assigned person instead?' },
+        ],
+      },
+    ],
   },
   {
     slug: 'funny-gifts-for-dads-who-fish',

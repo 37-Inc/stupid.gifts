@@ -96,6 +96,44 @@ test('runtime pages retain saved/custom shows, submit-only search, product links
   assert.equal((await f.request('/',{method:'HEAD'})).body,null);
 });
 
+test('a curated guide resolves only available picks in editorial order and agrees with directory and sitemap',async t=>{
+  const f=await runtimeFixture(t),path='/gift-guides/dirty-santa-gifts';
+  const getGuide=async()=>{
+    const response=await f.request(path),html=await response.text();
+    assert.equal(response.status,200,html);
+    const props=JSON.parse(html.match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);
+    return {response,html,products:props.products};
+  };
+  const inDirectory=async()=>(await(await f.request('/gift-guides')).text()).includes('href="'+path+'"');
+  const inSitemap=async()=>(await(await f.request('/sitemap.xml')).text()).includes('https://stupid.gifts'+path+'</loc>');
+  const empty=await getGuide();
+  assert.equal(empty.response.headers.get('X-Robots-Tag'),'noindex, follow');
+  assert.equal(await inDirectory(),false);assert.equal(await inSitemap(),false);
+
+  const [crab,pickle,unrelated]=f.products;
+  for(const [p,id,title] of [[crab,'B07VLBVQBP','Crab spoon rest'],[pickle,'B0CYKK1167','Fortune-telling pickle']]){
+    Object.assign(p,{id,title,affiliateUrl:'https://www.amazon.com/dp/'+id+'?tag=goose-gifts-37-20'});
+  }
+  unrelated.title='Generic Dirty Santa gag';
+  f.head.version++;await f.publish();f.time.now+=6000;
+  const populated=await getGuide();
+  assert.deepEqual(populated.products.map(p=>p.id),[pickle.id,crab.id]);
+  assert.match(populated.html,/<meta name="robots" content="index, follow"/);
+  assert.equal((populated.html.match(/data-analytics-context="gift_guide:dirty-santa-gifts"/g)??[]).length,2);
+  assert.equal(populated.response.headers.get('X-Robots-Tag'),null);
+  assert.equal(await inDirectory(),true);assert.equal(await inSitemap(),true);
+
+  f.collections.push({name:'/products/'+pickle.publicId,revision:1,payload_json:JSON.stringify({visibility:'unlisted'})});
+  f.head.version++;f.time.now+=6000;
+  assert.deepEqual((await getGuide()).products.map(p=>p.id),[crab.id]);
+  f.collections.push({name:'/products/'+crab.publicId,revision:1,payload_json:JSON.stringify({visibility:'unlisted'})});
+  f.head.version++;f.time.now+=6000;
+  const unavailable=await getGuide();
+  assert.deepEqual(unavailable.products,[]);
+  assert.equal(unavailable.response.headers.get('X-Robots-Tag'),'noindex, follow');
+  assert.equal(await inDirectory(),false);assert.equal(await inSitemap(),false);
+});
+
 test('new exact products and show order publish through data alone, preserving an archived lineup',async t=>{
   const f=await runtimeFixture(t),props=async path=>JSON.parse((await(await f.request(path)).text()).match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);
   f.collections.push({name:'/collections/billy-ray',revision:1,payload_json:JSON.stringify({ids:[f.products[1].publicId,f.products[0].publicId]})});
