@@ -1,8 +1,8 @@
-import { guides } from "../../lib/guides";
+import { guides, selectGuideProducts } from "../../lib/guides";
 import { previewMetadata } from "../../lib/metadata";
 import { PREVIEW_ORIGIN } from "../../lib/metadata";
 import { JsonLd } from "../../components/JsonLd";
-import { isFixtureRelease } from "../../lib/catalog";
+import { catalog, isFixtureRelease } from "../../lib/catalog";
 import { GuideIcon } from "../../components/GuideIcon";
 import { Icon } from "../../components/Icon";
 export const metadata = previewMetadata(
@@ -12,6 +12,7 @@ export const metadata = previewMetadata(
   { indexable: true, fixture: isFixtureRelease },
 );
 export default function Guides() {
+  const available = guides.filter((guide) => selectGuideProducts(catalog, guide).length > 0);
   return (
     <main id="main" className="site-main">
       <JsonLd
@@ -22,8 +23,8 @@ export default function Guides() {
           url: `${PREVIEW_ORIGIN}/gift-guides`,
           mainEntity: {
             "@type": "ItemList",
-            numberOfItems: guides.length,
-            itemListElement: guides.map((guide, index) => ({
+            numberOfItems: available.length,
+            itemListElement: available.map((guide, index) => ({
               "@type": "ListItem",
               position: index + 1,
               name: guide.title,
@@ -37,7 +38,7 @@ export default function Guides() {
         <p>Start with the occasion, the person or their particular obsession.</p>
       </div>
       <div className="guide-links">
-        {guides.map((guide) => (
+        {available.map((guide) => (
           <a key={guide.slug} href={`/gift-guides/${guide.slug}`}>
             <GuideIcon slug={guide.slug} />
             {guide.title}
