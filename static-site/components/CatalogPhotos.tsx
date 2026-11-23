@@ -1,14 +1,19 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { ProductImage } from "@/components/ProductImage";
 import { PHOTO_PLACEHOLDER, photoVersion, validatePhotoIndex, validatePhotoShard } from "../lib/photo-shard";
-import type { PhotoIndex } from "../lib/photo-shard";
+import type { CatalogPhoto, PhotoIndex } from "../lib/photo-shard";
 import { Icon } from "./Icon";
 
 const PhotoContext = createContext<{ indexPath: string | null; photoSlots: readonly string[]; initialIndex?: PhotoIndex;
+  initialPhotos?: Readonly<Record<string, CatalogPhoto>>;
+  hydrating?: boolean;
   editorialDisclosures: Readonly<Record<string, string>>;
 }>({ indexPath: null, photoSlots: [], editorialDisclosures: {} });
+const noSubscription = () => () => {};
+const clientSnapshot = () => false;
+const serverSnapshot = () => true;
 const pending = new Map<string, Promise<unknown>>();
 async function read(path: string, validate: (value: unknown) => unknown): Promise<unknown> {
   const existing = pending.get(path);
@@ -36,11 +41,13 @@ async function read(path: string, validate: (value: unknown) => unknown): Promis
   return request;
 }
 
-export function CatalogPhotos({ indexPath, photoSlots = [], initialIndex, editorialDisclosures = {}, children }: {
+export function CatalogPhotos({ indexPath, photoSlots = [], initialIndex, initialPhotos, editorialDisclosures = {}, children }: {
   indexPath: string | null; photoSlots?: readonly string[]; initialIndex?: PhotoIndex; editorialDisclosures?: Readonly<Record<string, string>>;
+  initialPhotos?: Readonly<Record<string, CatalogPhoto>>;
   children: React.ReactNode;
 }) {
-  return <PhotoContext.Provider value={{ indexPath, photoSlots, initialIndex, editorialDisclosures }}>{children}</PhotoContext.Provider>;
+  const hydrating = useSyncExternalStore(noSubscription, clientSnapshot, serverSnapshot);
+  return <PhotoContext.Provider value={{ indexPath, photoSlots, initialIndex, initialPhotos, hydrating, editorialDisclosures }}>{children}</PhotoContext.Provider>;
 }
 
 export function CatalogDescription({ fallback, card = false }: {
@@ -69,15 +76,21 @@ export function CatalogCardArt({ href, label, illustrative = false, ...props }: 
 }
 
 export function CatalogImage({ id, ...props }: React.ComponentProps<typeof ProductImage> & { id: string }) {
-  const { indexPath, initialIndex } = useContext(PhotoContext);
-  return <PhotoImage key={`${id}:${indexPath}:${props.imageUrl}`} id={id} indexPath={indexPath} initialIndex={initialIndex} {...props} />;
+  const { indexPath, initialIndex, initialPhotos, hydrating } = useContext(PhotoContext);
+  const initialPhoto = props.imageUrl === PHOTO_PLACEHOLDER && initialPhotos && Object.hasOwn(initialPhotos, id) ? initialPhotos[id] : undefined;
+  return <PhotoImage key={`${id}:${indexPath}:${props.imageUrl}`} id={id} indexPath={indexPath} initialIndex={initialIndex}
+    initialPhoto={initialPhoto} hydrating={hydrating} {...props} />;
 }
-function PhotoImage({ id, indexPath, initialIndex, ...props }: React.ComponentProps<typeof ProductImage> & { id: string; indexPath: string | null; initialIndex?: PhotoIndex }) {
-  const [photo, setPhoto] = useState<{ imageUrl: string; eligibleUntil: string } | null>(null);
-  const [loading, setLoading] = useState(Boolean(indexPath && props.imageUrl === PHOTO_PLACEHOLDER));
+function PhotoImage({ id, indexPath, initialIndex, initialPhoto, hydrating, ...props }: React.ComponentProps<typeof ProductImage> &
+  { id: string; indexPath: string | null; initialIndex?: PhotoIndex; initialPhoto?: CatalogPhoto; hydrating?: boolean }) {
+  // Match server markup at hydration, but don't re-request expired images
+  // when the saved grid mounts again (for example after clearing search).
+  const [photo, setPhoto] = useState<CatalogPhoto | null>(() =>
+    initialPhoto && (hydrating || Date.parse(initialPhoto.eligibleUntil) > Date.now()) ? initialPhoto : null);
+  const [loading, setLoading] = useState(Boolean(!initialPhoto && indexPath && props.imageUrl === PHOTO_PLACEHOLDER));
   useEffect(() => {
     let cancelled = false;
-    if (!indexPath || props.imageUrl !== PHOTO_PLACEHOLDER) return;
+    if (initialPhoto || !indexPath || props.imageUrl !== PHOTO_PLACEHOLDER) return;
     void (async () => {
       try {
         const version = photoVersion(indexPath);
@@ -96,10 +109,11 @@ function PhotoImage({ id, indexPath, initialIndex, ...props }: React.ComponentPr
       finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [id, indexPath, initialIndex, props.imageUrl]);
+  }, [id, indexPath, initialIndex, initialPhoto, props.imageUrl]);
   useEffect(() => {
     if (!photo) return;
     const expire = () => { if (Date.parse(photo.eligibleUntil) <= Date.now()) setPhoto(null); };
+    expire();
     const timer = window.setTimeout(expire, Math.max(0, Date.parse(photo.eligibleUntil) - Date.now()));
     window.addEventListener("pageshow", expire);
     document.addEventListener("visibilitychange", expire);
