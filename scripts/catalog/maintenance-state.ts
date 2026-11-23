@@ -6,6 +6,7 @@ import { isPurchasableAvailability, hasReviewedGiftShortCopy } from '../../lib/g
 import { editorialSourceHash } from '../ops/catalog-editorial-core.mjs';
 import { normalizedEditorialFacts, originalEditorialEquivalent } from '../../lib/catalog/editorial-equivalence.ts';
 import { canonicalDescriptionEmbeddingInput } from '../../lib/catalog/presentation.ts';
+import { matchesPreferredAmazonPhoto } from '../../lib/catalog/amazon-photo-preferences.mjs';
 
 export type Row = Record<string, unknown>;
 /** Exact existing guard, restored inside an unpublished-URL repair batch. */
@@ -202,7 +203,8 @@ function retainedBase(previous: { row: Row; product: SemanticProduct } | undefin
 export function refreshPhotoRights(p: SemanticProduct, rights: ProductRights,
   observation: {reference:string;observedAt:string}, now: string, previous: {row:Row;product:SemanticProduct}) {
   const base=retainedBase(previous,p,rights,new Date(now));
-  if(!base?.display||base.display.imageUrl!=='/images/gift-placeholder.svg'||rights.imageUrl?.basis!=='merchant'
+  const preferred=p.source==='amazon'&&matchesPreferredAmazonPhoto(p.id,p.imageUrl);
+  if(!base?.display||(!preferred&&(base.display.imageUrl!=='/images/gift-placeholder.svg'||rights.imageUrl?.basis!=='merchant'))
     ||typeof p.imageUrl!=='string'||!/^https:\/\//.test(p.imageUrl))return rights;
   const observedAt=new Date(explicitMaintenanceTime(observation.observedAt)).toISOString(),expiresAt=new Date(Date.parse(observedAt)+86400000).toISOString();
   if(Date.parse(observedAt)>Date.parse(now)||Date.parse(expiresAt)<=Date.parse(now))return rights;
@@ -241,7 +243,8 @@ export function maintenanceProjection(p: SemanticProduct, rights: ProductRights,
   // A freshly observed photo does not need a new article, model call or native
   // embedding. Render it over the exact approved base, not unreviewed new copy.
   const image=rights.imageUrl;
-  if(base?.display?.imageUrl==='/images/gift-placeholder.svg'&&image?.basis==='merchant'&&image.value===p.imageUrl
+  if(base?.display&&(base.display.imageUrl==='/images/gift-placeholder.svg'||p.source==='amazon'&&matchesPreferredAmazonPhoto(p.id,p.imageUrl))
+    &&image?.basis==='merchant'&&image.value===p.imageUrl
     &&image.observedAt&&observedVerification&&Date.parse(image.observedAt)===Date.parse(observedVerification)
     &&image.expiresAt&&Date.parse(image.expiresAt)>Date.parse(now)){
     try{

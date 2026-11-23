@@ -255,6 +255,30 @@ test('saved show requests deliver only the opening row’s valid photo URLs, wit
   assert.deepEqual(props.products.map(p=>p.id),picks.map(p=>p.id));
 });
 
+test('the selected Amazon alternative renders in the saved show until its original deadline and restores the cleared photo',async t=>{
+  const f=await runtimeFixture(t),base=f.products[0],expiresAt=new Date(f.time.now+20000).toISOString(),
+    imageUrl='https://m.media-amazon.com/images/I/71nY+6TsrYL._SL500_.jpg';
+  base.id='B0C85MZCYY';base.imageUrl='/images/test-cleared.jpg';
+  base.affiliateUrl='https://www.amazon.com/dp/'+base.id+'?tag=goose-gifts-37-20';
+  f.collections[0].payload_json=JSON.stringify({ids:[...f.products.slice(1,5),base].map(p=>p.publicId)});
+  const overlay={...base,imageUrl,eligibleUntil:expiresAt,persistent:base};
+  const bytes=new TextEncoder().encode(JSON.stringify([overlay])+'\n'),sha256=await runtimeDigest(bytes);
+  f.data.overlays=[{sha256,expiresAt}];f.objects.set(`catalog-v1/public-overlays/${Date.parse(expiresAt)}/${sha256}.json`,bytes);await f.publish();
+  const r=await f.request('/h'),html=await r.text();
+  assert.equal(r.headers.get('Cache-Control'),'no-store');
+  assert.match(html,/<img[^>]+71nY\+6TsrYL[^>]+loading="lazy"/);
+  assert.ok(!html.includes('<img src="'+base.imageUrl+'"'));
+  const props=JSON.parse(html.match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);
+  assert.equal(props.products[4].imageUrl,base.imageUrl);
+  assert.deepEqual(props.initialShowPhotos[base.id],{imageUrl,eligibleUntil:expiresAt});
+  const detail=await (await f.request('/gifts/'+base.slug)).text();
+  assert.ok(!detail.includes(imageUrl)); // Normal pages use the finite shard.
+  f.time.now=Date.parse(expiresAt);
+  const expired=await (await f.request('/h')).text();
+  assert.ok(!expired.includes(imageUrl));
+  assert.ok(expired.includes('<img src="'+base.imageUrl+'"'));
+});
+
 test('homepage backfills only expired photo slots, without changing the edition, show or browse membership',async t=>{
   const f=await runtimeFixture(t),[anchor]=f.products;
   for(const p of f.products.slice(1))p.imageUrl='/images/offline.jpg';
