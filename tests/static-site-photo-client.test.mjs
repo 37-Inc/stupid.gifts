@@ -15,7 +15,7 @@ const { outputText } = ts.transpileModule(source, { compilerOptions: {
   module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX,
 } });
 const flush = () => new Promise(setImmediate);
-function client(serve = async (_path, body) => body, json = true, initialIndex, initialPhotos) {
+function client(serve = async (_path, body) => body, json = true, initialIndex, initialPhotos, hydrating = false) {
   const index = { schemaVersion: 1, status: 'ready', version, products: Object.fromEntries(
     [first, second].map(id => [id, { shard: 1, eligibleUntil: deadline }])) };
   const shard = { schemaVersion: 1, status: 'ready', version, eligibleUntil: deadline,
@@ -67,7 +67,7 @@ function client(serve = async (_path, body) => body, json = true, initialIndex, 
     navigator: { sendBeacon: deny, get credentials() { return deny(); } },
   });
   function render(name, props = { id: first, imageUrl: photos.PHOTO_PLACEHOLDER, alt: 'Synthetic fixture' }, path = indexPath) {
-    context = { indexPath: path, photoSlots: [first, second], initialIndex: embedded, initialPhotos };
+    context = { indexPath: path, photoSlots: [first, second], initialIndex: embedded, initialPhotos, hydrating };
     const outer = commonJs.exports.CatalogImage(props);
     let fiber = slots.get(name);
     if (!fiber || fiber.key !== outer.key) {
@@ -194,13 +194,14 @@ test('mismatched initial photo hints fail closed without requesting a supplier i
 test('a server-rendered show photo skips metadata requests and expires, including delayed hydration', async () => {
   for (const trigger of ['timer', 'hydration']) {
     const initialPhotos = { [first]: { imageUrl: image(first), eligibleUntil: deadline } };
-    const ui = client(undefined, true, undefined, initialPhotos);
+    const ui = client(undefined, true, undefined, initialPhotos, trigger === 'hydration');
     if (trigger === 'hydration') ui.clock(5000);
     assert.equal(ui.render('one'), image(first), 'Hydration starts with the server markup');
     await ui.flush();
     if (trigger === 'timer') {
       assert.equal(ui.url('one'), image(first));
       await ui.expire('timer');
+      assert.equal(ui.render('remount'), photos.PHOTO_PLACEHOLDER);
     }
     assert.equal(ui.placeholder('one'), 'unavailable');
     assert.equal(ui.url('one'), photos.PHOTO_PLACEHOLDER);

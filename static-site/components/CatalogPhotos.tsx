@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { ProductImage } from "@/components/ProductImage";
 import { PHOTO_PLACEHOLDER, photoVersion, validatePhotoIndex, validatePhotoShard } from "../lib/photo-shard";
 import type { CatalogPhoto, PhotoIndex } from "../lib/photo-shard";
@@ -8,8 +8,12 @@ import { Icon } from "./Icon";
 
 const PhotoContext = createContext<{ indexPath: string | null; photoSlots: readonly string[]; initialIndex?: PhotoIndex;
   initialPhotos?: Readonly<Record<string, CatalogPhoto>>;
+  hydrating?: boolean;
   editorialDisclosures: Readonly<Record<string, string>>;
 }>({ indexPath: null, photoSlots: [], editorialDisclosures: {} });
+const noSubscription = () => () => {};
+const clientSnapshot = () => false;
+const serverSnapshot = () => true;
 const pending = new Map<string, Promise<unknown>>();
 async function read(path: string, validate: (value: unknown) => unknown): Promise<unknown> {
   const existing = pending.get(path);
@@ -42,7 +46,8 @@ export function CatalogPhotos({ indexPath, photoSlots = [], initialIndex, initia
   initialPhotos?: Readonly<Record<string, CatalogPhoto>>;
   children: React.ReactNode;
 }) {
-  return <PhotoContext.Provider value={{ indexPath, photoSlots, initialIndex, initialPhotos, editorialDisclosures }}>{children}</PhotoContext.Provider>;
+  const hydrating = useSyncExternalStore(noSubscription, clientSnapshot, serverSnapshot);
+  return <PhotoContext.Provider value={{ indexPath, photoSlots, initialIndex, initialPhotos, hydrating, editorialDisclosures }}>{children}</PhotoContext.Provider>;
 }
 
 export function CatalogDescription({ fallback, card = false }: {
@@ -71,13 +76,16 @@ export function CatalogCardArt({ href, label, illustrative = false, ...props }: 
 }
 
 export function CatalogImage({ id, ...props }: React.ComponentProps<typeof ProductImage> & { id: string }) {
-  const { indexPath, initialIndex, initialPhotos } = useContext(PhotoContext);
+  const { indexPath, initialIndex, initialPhotos, hydrating } = useContext(PhotoContext);
   const initialPhoto = props.imageUrl === PHOTO_PLACEHOLDER && initialPhotos && Object.hasOwn(initialPhotos, id) ? initialPhotos[id] : undefined;
-  return <PhotoImage key={`${id}:${indexPath}:${props.imageUrl}`} id={id} indexPath={indexPath} initialIndex={initialIndex} initialPhoto={initialPhoto} {...props} />;
+  // Hydrate the exact server markup, but don't restart a stale URL on a later
+  // mount (for example after clearing search on a long-open show page).
+  return <PhotoImage key={`${id}:${indexPath}:${props.imageUrl}`} id={id} indexPath={indexPath} initialIndex={initialIndex}
+    initialPhoto={initialPhoto} inlineFresh={hydrating || (initialPhoto !== undefined && Date.parse(initialPhoto.eligibleUntil) > Date.now())} {...props} />;
 }
-function PhotoImage({ id, indexPath, initialIndex, initialPhoto, ...props }: React.ComponentProps<typeof ProductImage> &
-  { id: string; indexPath: string | null; initialIndex?: PhotoIndex; initialPhoto?: CatalogPhoto }) {
-  const [photo, setPhoto] = useState<CatalogPhoto | null>(initialPhoto ?? null);
+function PhotoImage({ id, indexPath, initialIndex, initialPhoto, inlineFresh, ...props }: React.ComponentProps<typeof ProductImage> &
+  { id: string; indexPath: string | null; initialIndex?: PhotoIndex; initialPhoto?: CatalogPhoto; inlineFresh?: boolean }) {
+  const [photo, setPhoto] = useState<CatalogPhoto | null>(inlineFresh ? initialPhoto ?? null : null);
   const [loading, setLoading] = useState(Boolean(!initialPhoto && indexPath && props.imageUrl === PHOTO_PLACEHOLDER));
   useEffect(() => {
     let cancelled = false;
