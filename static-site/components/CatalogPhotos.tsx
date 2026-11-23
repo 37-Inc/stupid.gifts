@@ -5,7 +5,6 @@ import { ProductImage } from "@/components/ProductImage";
 import { PHOTO_PLACEHOLDER, photoVersion, validatePhotoIndex, validatePhotoShard } from "../lib/photo-shard";
 import type { CatalogPhoto, PhotoIndex } from "../lib/photo-shard";
 import { Icon } from "./Icon";
-import { hasPreferredAmazonPhoto, matchesPreferredAmazonPhoto } from "../../lib/catalog/amazon-photo-preferences.mjs";
 
 const PhotoContext = createContext<{ indexPath: string | null; photoSlots: readonly string[]; initialIndex?: PhotoIndex;
   initialPhotos?: Readonly<Record<string, CatalogPhoto>>;
@@ -77,16 +76,13 @@ export function CatalogCardArt({ href, label, illustrative = false, ...props }: 
 }
 
 export function CatalogImage({ id, ...props }: React.ComponentProps<typeof ProductImage> & { id: string }) {
-  const { indexPath, photoSlots, initialIndex, initialPhotos, hydrating } = useContext(PhotoContext);
-  const prefersAlternate = props.imageUrl !== PHOTO_PLACEHOLDER && hasPreferredAmazonPhoto(id) && photoSlots.includes(id);
-  const hasOverlay = props.imageUrl === PHOTO_PLACEHOLDER || prefersAlternate;
-  const initialPhoto = hasOverlay && initialPhotos && Object.hasOwn(initialPhotos, id) ? initialPhotos[id] : undefined;
-  return <PhotoImage key={`${id}:${indexPath}:${props.imageUrl}`} id={id} indexPath={hasOverlay ? indexPath : null} initialIndex={initialIndex}
-    prefersAlternate={prefersAlternate}
+  const { indexPath, initialIndex, initialPhotos, hydrating } = useContext(PhotoContext);
+  const initialPhoto = props.imageUrl === PHOTO_PLACEHOLDER && initialPhotos && Object.hasOwn(initialPhotos, id) ? initialPhotos[id] : undefined;
+  return <PhotoImage key={`${id}:${indexPath}:${props.imageUrl}`} id={id} indexPath={indexPath} initialIndex={initialIndex}
     initialPhoto={initialPhoto} hydrating={hydrating} {...props} />;
 }
-function PhotoImage({ id, indexPath, initialIndex, initialPhoto, hydrating, prefersAlternate, ...props }: React.ComponentProps<typeof ProductImage> &
-  { id: string; indexPath: string | null; initialIndex?: PhotoIndex; initialPhoto?: CatalogPhoto; hydrating?: boolean; prefersAlternate: boolean }) {
+function PhotoImage({ id, indexPath, initialIndex, initialPhoto, hydrating, ...props }: React.ComponentProps<typeof ProductImage> &
+  { id: string; indexPath: string | null; initialIndex?: PhotoIndex; initialPhoto?: CatalogPhoto; hydrating?: boolean }) {
   // Match server markup at hydration, but don't re-request expired images
   // when the saved grid mounts again (for example after clearing search).
   const [photo, setPhoto] = useState<CatalogPhoto | null>(() =>
@@ -94,7 +90,7 @@ function PhotoImage({ id, indexPath, initialIndex, initialPhoto, hydrating, pref
   const [loading, setLoading] = useState(Boolean(!initialPhoto && indexPath && props.imageUrl === PHOTO_PLACEHOLDER));
   useEffect(() => {
     let cancelled = false;
-    if (initialPhoto || !indexPath) return;
+    if (initialPhoto || !indexPath || props.imageUrl !== PHOTO_PLACEHOLDER) return;
     void (async () => {
       try {
         const version = photoVersion(indexPath);
@@ -107,13 +103,13 @@ function PhotoImage({ id, indexPath, initialIndex, initialPhoto, hydrating, pref
         const shard = validatePhotoShard(await read(`/catalog/${version}/photos-${entry.shard}.json`,
           value => validatePhotoShard(value, version, Date.now())), version, Date.now());
         const image = Object.hasOwn(shard.images, id) ? shard.images[id] : undefined;
-        if (!image || shard.eligibleUntil !== entry.eligibleUntil || (prefersAlternate && !matchesPreferredAmazonPhoto(id, image.imageUrl))) return;
+        if (!image || shard.eligibleUntil !== entry.eligibleUntil) return;
         if (!cancelled) setPhoto({ imageUrl: image.imageUrl, eligibleUntil: shard.eligibleUntil });
       } catch { /* The independently cleared listing remains usable without a photo. */ }
       finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [id, indexPath, initialIndex, initialPhoto, prefersAlternate]);
+  }, [id, indexPath, initialIndex, initialPhoto, props.imageUrl]);
   useEffect(() => {
     if (!photo) return;
     const expire = () => { if (Date.parse(photo.eligibleUntil) <= Date.now()) setPhoto(null); };

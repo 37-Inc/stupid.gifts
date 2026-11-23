@@ -9,7 +9,6 @@ import type {PublicCatalogProduct} from '../../lib/catalog/types.ts';
 import type {SemanticProduct} from './maintenance-state.ts';
 import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import type {CatalogSnapshot} from '../../lib/catalog/types.ts';
-import {matchesPreferredAmazonPhoto} from '../../lib/catalog/amazon-photo-preferences.mjs';
 type Row=Record<string,unknown>;
 /** One rule for both native and serving indexes. A supplier title can drift
  * without changing either the permanent listing or its actual public overlay. */
@@ -47,8 +46,7 @@ export function preservedPhotoVector(product:Row,state:Row,previous:PublicCatalo
     ||member.publicId!==product.public_id||member.sourceFactsHash!==product.source_facts_hash
     ||state.embedding_present!==1||typeof state.embedding_native_base64!=='string')fail();
   const display=JSON.parse(String(product.public_display_json)),base=persistentPublicProduct(display),prior=persistentPublicProduct(previous!);
-  if(!base||!prior||base.imageUrl!=='/images/gift-placeholder.svg'&&!matchesPreferredAmazonPhoto(base.id,display.imageUrl)
-    ||canonicalJson(base)!==canonicalJson(prior)
+  if(!base||!prior||base.imageUrl!=='/images/gift-placeholder.svg'||canonicalJson(base)!==canonicalJson(prior)
     ||typeof display.imageUrl!=='string'||!display.imageUrl.startsWith('https://')||display.eligibleUntil===null)return fail();
   const current=JSON.parse(String(state.semantic_json)) as SemanticProduct,proof=JSON.parse(String(state.embedding_provenance_json));
   // A refreshed supplier title is not the cleared public title. The canonical

@@ -21,11 +21,13 @@ import {buildGiftPageSchema} from '../../lib/gift-page-schema.ts';
 import {shortProductName} from '../../static-site/lib/product-presentation.ts';
 import {PHOTO_SHARD_SIZE,PHOTO_PLACEHOLDER} from '../../static-site/lib/photo-shard.ts';
 import type {CatalogPhoto} from '../../static-site/lib/photo-shard.ts';
-import {hasPreferredAmazonPhoto,matchesPreferredAmazonPhoto} from '../../lib/catalog/amazon-photo-preferences.mjs';
 import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import {createStaticFeedPlan} from './feed.ts';
+import {PRODUCT_PHOTO_ROOT} from '../../lib/catalog/product-photos.ts';
+import {serveProductMedia} from './product-media.ts';
+import type {ProductMediaBucket} from './product-media.ts';
 
-export type RuntimeSiteEnv=SiteEnv&RuntimeCatalogEnv&{DB:CatalogD1};
+export type RuntimeSiteEnv=SiteEnv&RuntimeCatalogEnv&{DB:CatalogD1;PRODUCT_MEDIA?:ProductMediaBucket};
 export interface RuntimeSiteOptions {
   codeSha:string;releaseId:string;manifestSha256:string;clientPath:string;cssPath:string;brandOgPath?:string;analytics?:boolean;
   now?:()=>number;readView?:(env:RuntimeSiteEnv)=>Promise<RuntimeCatalogView>;
@@ -105,8 +107,7 @@ async function prepare(view:RuntimeCatalogView,options:RuntimeSiteOptions,now:()
   const photoVersion=await runtimeDigest(canonicalJson({revision:snapshot.catalogRevision,photos:snapshot.products.filter(p=>p.persistent&&p.eligibleUntil!==null).map(p=>[p.id,p.imageUrl,p.eligibleUntil])}));
   const photoBase='/catalog/'+photoVersion,index:{schemaVersion:1;status:'ready';version:string;products:Record<string,{shard:number;eligibleUntil:string}>}={schemaVersion:1,status:'ready',version:photoVersion,products:{}};
   const photoGroups=new Map<string,PublicCatalogProduct[]>(),photos=new Map<string,CatalogPhoto>();
-  for(const p of snapshot.products)if(p.persistent&&p.eligibleUntil!==null&&catalogDeadline(p.eligibleUntil)>at&&p.imageUrl.startsWith('https://')
-    &&(!hasPreferredAmazonPhoto(p.id)||p.persistent.imageUrl===PHOTO_PLACEHOLDER||matchesPreferredAmazonPhoto(p.id,p.imageUrl))){
+  for(const p of snapshot.products)if(p.persistent&&p.eligibleUntil!==null&&catalogDeadline(p.eligibleUntil)>at&&p.imageUrl.startsWith('https://')){
     const group=photoGroups.get(p.eligibleUntil)??[];group.push(p);photoGroups.set(p.eligibleUntil,group);}
   let photoShard=0;
   for(const [eligibleUntil,group]of photoGroups)for(let i=0;i<group.length;i+=PHOTO_SHARD_SIZE){const batch=group.slice(i,i+PHOTO_SHARD_SIZE);photoShard++;
@@ -234,6 +235,7 @@ export function createRuntimeSite(options:RuntimeSiteOptions){
         if(hit?.status===200&&Number.isFinite(until)&&until>now())return finish(photoResponse(hit,until,now(),'HIT'));
       }catch{/* A cache outage must not interrupt the normal validated read. */}
       const view=await read(env);catalogRevision=view.head.catalogRevision;
+      if(path.startsWith(PRODUCT_PHOTO_ROOT))return finish(await serveProductMedia(request,url,view,env.PRODUCT_MEDIA,now));
       if(options.handleRequest){const result=await options.handleRequest(request,env,view);if(result)return finish(result);}
       if(path==='/.well-known/catalog-release.json'||path==='/.well-known/runtime-catalog.json'){
         if(!['GET','HEAD'].includes(request.method))return finish(new Response(null,{status:405,headers:{Allow:'GET, HEAD'}}));
@@ -283,12 +285,10 @@ export function createRuntimeSite(options:RuntimeSiteOptions){
       const og=await pageOg(view,value.props,now())??options.brandOgPath;
       if(value.props.kind==='show'&&!url.searchParams.has('ids')&&!url.searchParams.has('q')){
         // These are the same finite entries the photo shards serve, not durable
-        // product fields. Only the no-store saved lineup gets first-row URLs
-        // and explicitly selected alternatives to permanently cleared photos.
-        const at=now(),photos=Object.fromEntries(value.props.products.flatMap((product,index)=>{
+        // product fields. Only the no-store saved lineup gets first-row URLs.
+        const at=now(),photos=Object.fromEntries(value.props.products.slice(0,SHOW_PRIORITY_COUNT).flatMap(product=>{
           const photo=p.photos.get(product.id);
-          return photo&&(index<SHOW_PRIORITY_COUNT&&product.imageUrl===PHOTO_PLACEHOLDER||matchesPreferredAmazonPhoto(product.id,photo.imageUrl))
-            &&catalogDeadline(photo.eligibleUntil)>at?[[product.id,photo]]:[];
+          return product.imageUrl===PHOTO_PLACEHOLDER&&photo&&catalogDeadline(photo.eligibleUntil)>at?[[product.id,photo]]:[];
         }));
         if(Object.keys(photos).length)value.props.initialShowPhotos=photos;
       }

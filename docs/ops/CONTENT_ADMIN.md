@@ -138,6 +138,23 @@ live-verified for `.32`; the first real queued-admission proof is tracked in `.3
 
 This is the standard route for one-offs, not a special filming hook in daily
 care. There is no preview-only product endpoint or parallel product database.
+
+### Change a product photo
+
+Open [Product photos](https://stupid.gifts/api/content-admin/photos) with the
+existing staff sign-in and enter the gift-page URL or slug. Upload a JPEG, PNG,
+or WebP up to 2 MB that you own or have permission to host. Do not upload
+retailer gallery images based on a retailer URL or screenshot alone. Choose
+**Restore catalog photo** to remove the override.
+
+The edit uses the same versioned product record as copy and visibility. A
+single private R2 bucket (`stupid-gifts-product-media`) holds the image bytes;
+only a currently attached photo on a public gift is served by the Worker.
+Unassigned and previous versions remain private. Allow five seconds for a
+change to appear in a fresh page; an already loaded or cached image can linger
+in a visitor's browser. Refreshes preserve the edit, but it cannot unhold a
+gift or renew supplier rights. No application deploy, supplier calls, search
+reindex, or product re-enrichment is needed to change or undo the photo.
 Accepted products enter ordinary stock/photo refresh and native/serving index
 delivery. Do not reuse expired preview imagery or extend its old observation.
 
@@ -147,13 +164,6 @@ includes that cohort. It uses the ordinary photo-only refresh, with no discovery
 copy, article or embedding generation and no homepage edit. Other pending work
 must finish first; retries keep the saved IDs and observations. Omitting the
 field leaves scheduled due-photo selection unchanged.
-
-For an explicitly chosen Amazon gallery photo, record the exact ASIN and image
-identity in `lib/catalog/amazon-photo-preferences.mjs`. Never save gallery URLs
-or claim permanent clearance in source. The same photo-only run requests the
-variant in its normal GetItems call. Only a fresh matching variant gets the
-24-hour overlay; the older cleared image is preserved and returns if the
-variant is missing or expires. Routine due-photo care can renew the same choice.
 
 ## Authentication and rollout
 

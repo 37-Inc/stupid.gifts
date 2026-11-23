@@ -11,6 +11,7 @@ import {createDerivedSemanticSearch} from '../workers/site/derived-search.ts';
 import {DERIVED_SEARCH_PROFILE,semanticHash,semanticPublicFields,semanticVectorIdentity,semanticVectorMetadata} from '../lib/catalog/semantic-profile.ts';
 import {canonicalJson} from '../lib/catalog/canonical-json.ts';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+import {generateKeyPair,exportJWK,SignJWT} from 'jose';
 
 const source='a'.repeat(40),uuid=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 // server.browser uses browser MessageChannels. Close only channels created by
@@ -255,30 +256,6 @@ test('saved show requests deliver only the opening row’s valid photo URLs, wit
   assert.deepEqual(props.products.map(p=>p.id),picks.map(p=>p.id));
 });
 
-test('the selected Amazon alternative renders in the saved show until its original deadline and restores the cleared photo',async t=>{
-  const f=await runtimeFixture(t),base=f.products[0],expiresAt=new Date(f.time.now+20000).toISOString(),
-    imageUrl='https://m.media-amazon.com/images/I/71nY+6TsrYL._SL500_.jpg';
-  base.id='B0C85MZCYY';base.imageUrl='/images/test-cleared.jpg';
-  base.affiliateUrl='https://www.amazon.com/dp/'+base.id+'?tag=goose-gifts-37-20';
-  f.collections[0].payload_json=JSON.stringify({ids:[...f.products.slice(1,5),base].map(p=>p.publicId)});
-  const overlay={...base,imageUrl,eligibleUntil:expiresAt,persistent:base};
-  const bytes=new TextEncoder().encode(JSON.stringify([overlay])+'\n'),sha256=await runtimeDigest(bytes);
-  f.data.overlays=[{sha256,expiresAt}];f.objects.set(`catalog-v1/public-overlays/${Date.parse(expiresAt)}/${sha256}.json`,bytes);await f.publish();
-  const r=await f.request('/h'),html=await r.text();
-  assert.equal(r.headers.get('Cache-Control'),'no-store');
-  assert.match(html,/<img[^>]+71nY\+6TsrYL[^>]+loading="lazy"/);
-  assert.ok(!html.includes('<img src="'+base.imageUrl+'"'));
-  const props=JSON.parse(html.match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);
-  assert.equal(props.products[4].imageUrl,base.imageUrl);
-  assert.deepEqual(props.initialShowPhotos[base.id],{imageUrl,eligibleUntil:expiresAt});
-  const detail=await (await f.request('/gifts/'+base.slug)).text();
-  assert.ok(!detail.includes(imageUrl)); // Normal pages use the finite shard.
-  f.time.now=Date.parse(expiresAt);
-  const expired=await (await f.request('/h')).text();
-  assert.ok(!expired.includes(imageUrl));
-  assert.ok(expired.includes('<img src="'+base.imageUrl+'"'));
-});
-
 test('homepage backfills only expired photo slots, without changing the edition, show or browse membership',async t=>{
   const f=await runtimeFixture(t),[anchor]=f.products;
   for(const p of f.products.slice(1))p.imageUrl='/images/offline.jpg';
@@ -346,6 +323,76 @@ test('actual workerd starts the browser-SSR bundle and renders live D1/R2 data p
   const props=JSON.parse(html.match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);
   const shard=await (await mf.dispatchFetch('https://stupid.gifts'+props.next)).json();assert.equal(shard.products.length,24);
   assert.equal((await mf.dispatchFetch('https://stupid.gifts/api/content-admin')).status,404);
+});
+
+test('staff photo editor uploads and restores via real Worker, D1 and private R2 without changing the source catalog',async t=>{
+  const f=await runtimeFixture(t),issuer='https://test-photo-editor.cloudflareaccess.com',audience='b'.repeat(64);
+  const keys=await generateKeyPair('RS256'),jwk={...await exportJWK(keys.publicKey),kid:'photo-fixture',alg:'RS256'};
+  const jwt=await new SignJWT({type:'app',email:'staff@example.invalid'}).setProtectedHeader({alg:'RS256',kid:jwk.kid})
+    .setIssuer(issuer).setAudience(audience).setSubject('staff-fixture').setIssuedAt().setExpirationTime('1h').sign(keys.privateKey);
+  const mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:await fs.readFile(f.output.entryPath,'utf8'),compatibilityDate:'2026-10-19',
+    bindings:{ENVIRONMENT:'production',RUNTIME_CATALOG_ENABLED:'true',CONTENT_ADMIN_ENABLED:'true',
+      CONTENT_ADMIN_TEAM_DOMAIN:issuer,CONTENT_ADMIN_AUD:audience,CONTENT_ADMIN_STAFF_EMAILS:'staff@example.invalid'},
+    outboundService:request=>{assert.equal(request.url,issuer+'/cdn-cgi/access/certs');return Response.json({keys:[jwk]});},
+    d1Databases:{DB:'photo-offline-db'},r2Buckets:['CATALOG_DATA','PRODUCT_MEDIA']}));
+  t.after(()=>mf.dispose());
+  const db=await mf.getD1Database('DB'),catalog=await mf.getR2Bucket('CATALOG_DATA'),media=await mf.getR2Bucket('PRODUCT_MEDIA');
+  const schema=await fs.readFile(new URL('../migrations/d1/0018_content_admin_requests.sql',import.meta.url),'utf8');
+  await db.prepare(schema.slice(schema.indexOf('CREATE TABLE'),schema.indexOf('CREATE TRIGGER'))).run();
+  await db.exec(`CREATE TABLE catalog_runtime_publications(release_id TEXT PRIMARY KEY,catalog_revision TEXT,data_sha256 TEXT,source_snapshot_sha256 TEXT,public_snapshot_sha256 TEXT);
+    CREATE TABLE catalog_runtime_head(singleton INTEGER,release_id TEXT,version INTEGER,enabled INTEGER);
+    CREATE TABLE catalog_runtime_collections(name TEXT,revision INTEGER,request_id TEXT,payload_json TEXT);
+    CREATE TABLE content_admin_results(request_id TEXT PRIMARY KEY,state TEXT,result_json TEXT,created_at TEXT);`);
+  const head=f.head;
+  await db.batch([db.prepare('INSERT INTO catalog_runtime_publications VALUES(?,?,?,?,?)').bind(head.release_id,head.catalog_revision,head.data_sha256,head.source_snapshot_sha256,head.public_snapshot_sha256),
+    db.prepare('INSERT INTO catalog_runtime_head VALUES(1,?,1,1)').bind(head.release_id)]);
+  for(const [key,bytes]of f.objects)await catalog.put(key,bytes);
+  const gift=f.products[0],origin='https://stupid.gifts',editor='/api/content-admin/photos',detail='/gifts/'+gift.slug;
+  const call=(path,options)=>mf.dispatchFetch(origin+path,{redirect:'manual',...options});
+  const headers={'Cf-Access-Jwt-Assertion':jwt},writeHeaders={...headers,Origin:origin};
+  const find=()=>call(editor+'?gift='+encodeURIComponent(origin+detail),{headers});
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/3iQAAAAASUVORK5CYII=','base64');
+  const hash=await runtimeDigest(png),replacement='/images/product-media/'+gift.publicId+'/'+hash+'.png';
+  const submit=async(id,revision,action='upload',file=png,type='image/png',extra={},h=writeHeaders)=>{
+    const form=new FormData();
+    for(const [key,value]of Object.entries({publicId:gift.publicId,catalogRevision:head.catalog_revision,expectedRevision:String(revision),requestId:id,action,...extra}))
+      form.set(key,value);
+    if(action==='upload'){form.set('rights','yes');form.set('image',new Blob([file],{type}),'test.png');}
+    const request=new Request(origin+editor,{method:'POST',headers:h,body:form});
+    return call(editor,{method:'POST',headers:Object.fromEntries(request.headers),body:await request.arrayBuffer()});
+  };
+  assert.equal((await call(editor)).status,403);
+  assert.equal((await call(replacement)).status,404);
+  const original=await(await find()).text();assert.match(original,/Use this photo/);assert.doesNotMatch(original,/Restore catalog photo/);
+  assert.equal((await submit(uuid(300),0,'upload',png,'image/png',{}, {...headers,Origin:'https://other.example.invalid'})).status,403);
+  assert.equal((await submit(uuid(301),0,'upload',Buffer.from('<svg></svg>'))).status,415);
+  const oversized=await submit(uuid(302),0,'upload',Buffer.alloc(2*1024*1024+1));assert.equal(oversized.status,413,await oversized.text());
+  assert.equal((await submit(uuid(304),0,'upload',png,'image/png',{publicId:uuid(999)})).status,404);
+  assert.equal((await media.list()).objects.length,0);
+  const saved=await submit(uuid(305),0);assert.equal(saved.status,303,await saved.text());
+  assert.equal(saved.headers.get('location'),editor+'?gift='+gift.slug+'&saved=1');
+  assert.equal((await submit(uuid(305),0)).status,303,'exact form retry is idempotent');
+  assert.equal((await submit(uuid(306),0)).status,409,'a stale photo form must not overwrite the newer edit');
+  assert.equal((await media.list()).objects.length,1);
+  assert.equal((await db.prepare('SELECT version FROM catalog_runtime_head').first()).version,2);
+  await new Promise(resolve=>setTimeout(resolve,5100));
+  assert.match(await(await find()).text(),/Restore catalog photo/);
+  assert.match(await(await call(detail)).text(),new RegExp(replacement));
+  const served=await call(replacement);assert.equal(served.status,200);assert.equal(served.headers.get('content-type'),'image/png');
+  assert.deepEqual(Buffer.from(await served.arrayBuffer()),png);
+  assert.equal((await call(replacement,{method:'HEAD'})).headers.get('Content-Length'),String(png.length));
+  assert.equal((await call(replacement.replace(gift.publicId,f.products[1].publicId))).status,404);
+  const after=await(await call('/.well-known/runtime-catalog.json')).json();assert.equal(after.dataSha256,head.data_sha256);
+  const edit=await call('/api/content-admin/products/'+gift.publicId,{method:'PUT',headers:{...writeHeaders,'Content-Type':'application/json','Idempotency-Key':uuid(307)},
+    body:JSON.stringify({catalogRevision:head.catalog_revision,expectedRevision:1,payload:{title:'Corrected photo fixture title'},reason:'Offline test'})});
+  assert.equal(edit.status,200,await edit.text());
+  const persisted=await db.prepare('SELECT payload_json FROM catalog_runtime_collections WHERE revision=2').first();
+  assert.equal(JSON.parse(persisted.payload_json).photo.sha256,hash,'ordinary edits preserve a photo override');
+  const restored=await submit(uuid(308),2,'restore');assert.equal(restored.status,303,await restored.text());
+  await new Promise(resolve=>setTimeout(resolve,5100));
+  assert.equal((await call(replacement)).status,404);
+  const html=await(await call(detail)).text();assert.doesNotMatch(html,new RegExp(replacement));assert.match(html,/Corrected photo fixture title/);
+  assert.equal((await media.list()).objects.length,1,'previous bytes remain private; do not erase audit history');
 });
 
 test('runtime failures log only bounded machine codes, never bucket errors, SQL, queries or private body text',async t=>{
