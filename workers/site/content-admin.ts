@@ -9,6 +9,9 @@ import {resolvePublicProduct} from '../../lib/catalog/display.ts';
 import {productPresentation} from '../../lib/catalog/presentation.ts';
 import {contentAdminActor} from './content-admin-auth.ts';
 import {dispatchAdmission,readAdmissionDispatch} from './content-admin-dispatch.ts';
+import {boundedAdminBody} from './content-admin-body.ts';
+import {PRODUCT_PHOTO_EDITOR,adminProductPhoto} from './content-admin-photos.ts';
+import type {ProductMediaBucket} from './product-media.ts';
 
 const PREFIX='/api/content-admin';
 const exact=(v:Record<string,unknown>,keys:string)=>Object.keys(v).sort().join(',')===keys.split(',').sort().join(',');
@@ -18,19 +21,13 @@ const response=(value:unknown,status=200)=>Response.json(value,{status,headers:{
   'Cloudflare-CDN-Cache-Control':'no-store','CDN-Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow','Vary':'Cf-Access-Jwt-Assertion'}});
 async function body(request:Request):Promise<Record<string,unknown>>{
   if(!/^application\/json(?:\s*;|$)/i.test(request.headers.get('Content-Type')??''))throw new ContentAdminError(415,'json_required');
-  if(Number(request.headers.get('Content-Length'))>20000)throw new ContentAdminError(413,'request_too_large');
-  const reader=request.body?.getReader();if(!reader)invalid();
-  let size=0;const chunks:Uint8Array[]=[];
-  try{while(true){const next=await reader.read();if(next.done)break;size+=next.value.length;
-    if(size>20000){await reader.cancel();throw new ContentAdminError(413,'request_too_large');}chunks.push(next.value);}}
-  finally{reader.releaseLock();}
-  const bytes=new Uint8Array(size);let offset=0;for(const part of chunks){bytes.set(part,offset);offset+=part.length;}
+  const bytes=await boundedAdminBody(request,20000);
   try{return object(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));}catch(error){if(error instanceof ContentAdminError)throw error;return invalid();}
 }
 export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;manifest:SiteAssetManifest;releaseIdentity?:SiteReleaseIdentity;
   showCollections:Record<string,string[]>;activeShow:string;now:()=>number;
   applyCollection?:(request:ContentRequest)=>Promise<unknown>;readApplication?:(id:string)=>Promise<unknown>;
-  campaigns?:()=>Promise<unknown>;hostedStatus?:()=>Promise<unknown>}){
+  campaigns?:()=>Promise<unknown>;hostedStatus?:()=>Promise<unknown>;productMedia?:ProductMediaBucket}){
   const {snapshot,manifest,now}=options;
   const metadata=readMerchandising(manifest.merchandising)??{};
   const identities=new Map([...snapshot.products,...snapshot.heldProducts].map(p=>[p.publicId,p]));
@@ -68,7 +65,7 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
   return async(request:Request,env:SiteEnv)=>{
     if(env.CONTENT_ADMIN_ENABLED!=='true'||env.ENVIRONMENT!=='production'||snapshot.dataKind!=='catalog')return response({error:'not_found'},404);
     const url=new URL(request.url);
-    if(url.origin!=='https://stupid.gifts'||url.search) return response({error:'not_found'},404);
+    if(url.origin!=='https://stupid.gifts'||url.search&&url.pathname!==PRODUCT_PHOTO_EDITOR) return response({error:'not_found'},404);
     try{
       const actor=await contentAdminActor(request,env,now());if(!actor)return response({error:'staff_authentication_required'},403);
       // Access returns the signed-in browser from another origin. A top-level
@@ -83,6 +80,10 @@ export function createContentAdminHandler(options:{snapshot:CatalogSnapshot;mani
       if(request.method!=='GET'&&request.headers.get('Origin')!==url.origin)return response({error:'origin_required'},403);
       if(!env.DB)return response({error:'admin_storage_unavailable'},503);
       const store=createContentRequestStore(env.DB),path=url.pathname.slice(PREFIX.length);
+      if(url.pathname===PRODUCT_PHOTO_EDITOR){
+        if(!options.productMedia||!options.applyCollection)return response({error:'photo_editor_unavailable'},503);
+        return await adminProductPhoto({request,snapshot,store,actor,bucket:options.productMedia,apply:options.applyCollection,now:now()});
+      }
       const withApplication=async(saved:ContentRequest)=>({...saved,application:await options.readApplication?.(saved.requestId)??null,
         ...(env.CONTENT_ADMIN_DISPATCH_ENABLED==='true'&&saved.action==='admit'
           ?{dispatch:await readAdmissionDispatch(env.DB!,saved.requestId)}:{})});

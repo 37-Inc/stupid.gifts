@@ -22,6 +22,7 @@ export async function runtimeAdminRequest(request:Request,env:RuntimeSiteEnv,vie
     homepage:(view.collections['/collections/homepage']?.payload as {edition?:SiteAssetManifest['homepage']})?.edition??data.homepage,
     merchandising:data.merchandising} as SiteAssetManifest;
   return createContentAdminHandler({snapshot:data.snapshot,manifest,releaseIdentity:identity,showCollections,activeShow:active,now:Date.now,
+    productMedia:env.PRODUCT_MEDIA,
     campaigns:()=>adminCampaigns(env.CATALOG_DATA,data.snapshot.products,Date.now()),
     hostedStatus:()=>adminHostedStatus(env.CATALOG_DATA),
     applyCollection:saved=>applyRuntimeCollection(env.DB,saved),readApplication:async id=>{

@@ -1,4 +1,5 @@
 import type {CatalogSnapshot,PublicCatalogProduct} from './types.ts';
+import {PHOTO_PRODUCT_ID,productPhotoPath,readProductPhoto} from './product-photos.ts';
 
 export type RuntimeEdits=Record<string,{revision:number;payload:unknown}>;
 /** One presentation projection for every public consumer. The accepted source
@@ -7,7 +8,7 @@ export type RuntimeEdits=Record<string,{revision:number;payload:unknown}>;
 export function runtimePresentation(snapshot:CatalogSnapshot,edits:RuntimeEdits){
   const repaired:string[]=[],held=[...snapshot.heldProducts];
   const products=snapshot.products.flatMap(original=>{
-    const edit=edits['/products/'+original.publicId]?.payload as {title?:string;description?:string;visibility?:string}|undefined;
+    const edit=edits['/products/'+original.publicId]?.payload as {title?:string;description?:string;visibility?:string;photo?:unknown}|undefined;
     if(!edit)return[original];
     if(edit.visibility==='unlisted'){
       held.push({id:original.id,publicId:original.publicId,slug:original.slug,path:'/gifts/'+original.slug,
@@ -16,8 +17,10 @@ export function runtimePresentation(snapshot:CatalogSnapshot,edits:RuntimeEdits)
     }
     const changed=edit.title!==undefined&&edit.title!==original.title||edit.description!==undefined&&edit.description!==original.description;
     if(changed)repaired.push(original.publicId);
+    const photo=PHOTO_PRODUCT_ID.test(original.publicId)?readProductPhoto(edit.photo):null;
     const apply=<T extends PublicCatalogProduct>(p:T):T=>({...p,
       ...(edit.title!==undefined?{title:edit.title}:{}),...(edit.description!==undefined?{description:edit.description}:{}),
+      ...(photo?{imageUrl:productPhotoPath(original.publicId,photo)}:{}),
       ...(changed?{punnyTitle:undefined,wittyDescription:edit.description??p.description,humorTags:[]}:{})});
     return[{...apply(original),...(original.persistent?{persistent:apply(original.persistent)}:{})}];
   });

@@ -9,6 +9,7 @@ import {automationRuntime,CATALOG_SCOPE as SCOPE} from './automation-runtime.mjs
 import {buildRuntimeApp} from './build-runtime-app.mjs';
 import {canonicalJson} from '../../lib/catalog/canonical-json.ts';
 import {contentAdminSettings} from './content-admin-settings.mjs';
+import {PRODUCT_MEDIA_BUCKET} from '../../lib/catalog/product-photos.ts';
 
 const ROOT=path.resolve(fileURLToPath(new URL('../..',import.meta.url))),hash=b=>createHash('sha256').update(b).digest('hex');
 const UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -20,7 +21,7 @@ export function runtimeWranglerConfig(output,vars={}){
     assets:{directory:output.assetsDirectory,binding:'ASSETS',run_worker_first:true,html_handling:'none',not_found_handling:'none'},
     vars:{...vars,ENVIRONMENT:'production',RUNTIME_CATALOG_ENABLED:'true'},
     d1_databases:[{binding:'DB',database_name:SCOPE.databaseName,database_id:SCOPE.databaseId}],
-    r2_buckets:[{binding:'CATALOG_DATA',bucket_name:'stupid-gifts-catalog-private'}],
+    r2_buckets:[{binding:'CATALOG_DATA',bucket_name:'stupid-gifts-catalog-private'},{binding:'PRODUCT_MEDIA',bucket_name:PRODUCT_MEDIA_BUCKET}],
     vectorize:[{binding:'VECTORIZE',index_name:SCOPE.indexName},{binding:'SEMANTIC_VECTORIZE',index_name:'stupid-gifts-search-serving'}]};
 }
 /** Separate app queue: no catalog owner claim, supplier, model or product write.
@@ -49,9 +50,10 @@ export async function deployRuntimeApp({runtime,source,root=ROOT,send=fetch,comm
     const current=await api('/versions/'+(await active()).version),bindings=current.resources?.bindings;
     if(!Array.isArray(bindings)||bindings.some(b=>!['DB','ASSETS','VECTORIZE','SEMANTIC_VECTORIZE','OPENAI_API_KEY','ENVIRONMENT','SEMANTIC_SEARCH_ENABLED','RUNTIME_CATALOG_ENABLED',
       'CONTENT_ADMIN_ENABLED','CONTENT_ADMIN_TEAM_DOMAIN','CONTENT_ADMIN_AUD','CONTENT_ADMIN_STAFF_EMAILS','CONTENT_ADMIN_DISPATCH_ENABLED',
-      'GITHUB_CATALOG_DISPATCH_TOKEN','CATALOG_DATA'].includes(b.name)))fail('bindings_need_review');
+      'GITHUB_CATALOG_DISPATCH_TOKEN','CATALOG_DATA','PRODUCT_MEDIA'].includes(b.name))
+      ||bindings.some(b=>b.name==='PRODUCT_MEDIA'&&(b.type!=='r2_bucket'||b.bucket_name!==PRODUCT_MEDIA_BUCKET)))fail('bindings_need_review');
     const variables={...Object.fromEntries(bindings.filter(b=>b.type==='plain_text').map(b=>[b.name,b.text])),...contentAdminSettings,ENVIRONMENT:'production',RUNTIME_CATALOG_ENABLED:'true'};
-    const settingsSha256=hash(canonicalJson({variables,derived:bindings.find(b=>b.name==='SEMANTIC_VECTORIZE')?.index_name}));
+    const settingsSha256=hash(canonicalJson({variables,derived:bindings.find(b=>b.name==='SEMANTIC_VECTORIZE')?.index_name,productMedia:PRODUCT_MEDIA_BUCKET}));
     const key='app-releases/'+source+'/'+output.manifestSha256+'/'+settingsSha256+'/',save=(name,v)=>runtime.durable.putImmutable(key+name+'.json',Buffer.from(JSON.stringify(v)+'\n')),
       read=async name=>{const value=await runtime.durable.get(key+name+'.json');return value?json(value.bytes):null;};
     const before=await active();
@@ -90,6 +92,7 @@ export async function deployRuntimeApp({runtime,source,root=ROOT,send=fetch,comm
     const uploaded=await api('/versions/'+version),actualBindings=uploaded.resources?.bindings;
     if(uploaded.annotations?.['workers/tag']!==marker||uploaded.annotations?.['workers/message']!=='runtime-app:'+output.manifestSha256+'/'+workerSha256||!Array.isArray(actualBindings)
       ||actualBindings.find(b=>b.name==='DB')?.id!==SCOPE.databaseId||actualBindings.find(b=>b.name==='CATALOG_DATA')?.bucket_name!=='stupid-gifts-catalog-private'
+      ||!actualBindings.some(b=>b.name==='PRODUCT_MEDIA'&&b.type==='r2_bucket'&&b.bucket_name===PRODUCT_MEDIA_BUCKET)
       ||actualBindings.find(b=>b.name==='RUNTIME_CATALOG_ENABLED')?.text!=='true'
       ||Object.entries(contentAdminSettings).some(([name,text])=>actualBindings.find(b=>b.name===name)?.text!==text)
       ||!actualBindings.some(b=>b.name==='OPENAI_API_KEY'&&b.type==='secret_text')

@@ -60,13 +60,15 @@ function fixture({lostActivation=false,lostUpload=false,dispatchBinding={name:'G
     assert.equal(options.env.CLOUDFLARE_API_TOKEN,'SYNTHETIC_TOKEN');assert.ok(writes.some(k=>k.endsWith('/upload-dispatched.json')));
     const configPath=args[args.indexOf('--config')+1],config=JSON.parse(await readFile(configPath,'utf8'));
     assert.equal(config.keep_vars,true);assert.equal(config.vars.SEMANTIC_SEARCH_ENABLED,'true');assert.equal(config.vectorize[1].index_name,'actual-existing-search');
+    assert.deepEqual(config.r2_buckets,[{binding:'CATALOG_DATA',bucket_name:'stupid-gifts-catalog-private'},
+      {binding:'PRODUCT_MEDIA',bucket_name:'stupid-gifts-product-media'}]);
     assert.equal(Object.hasOwn(config.vars,'GITHUB_CATALOG_DISPATCH_TOKEN'),false,'secrets never become generated plain-text variables');
     for(const [name,value]of Object.entries(contentAdminSettings))assert.equal(config.vars[name],value);
     const bytes=await readFile(path.join(path.dirname(configPath),'app-manifest.json'));state.metadata=JSON.parse(bytes);
     state.manifestSha256=(await import('node:crypto')).createHash('sha256').update(bytes).digest('hex');
     state.tag=args[args.indexOf('--tag')+1];state.message=args[args.indexOf('--message')+1];state.uploads++;state.uploaded=true;
-    state.bindings=[...bindings.filter(b=>b.type!=='plain_text'),...Object.entries(config.vars).map(([name,text])=>({type:'plain_text',name,text})),
-      {type:'r2_bucket',name:'CATALOG_DATA',bucket_name:'stupid-gifts-catalog-private'}];
+    state.bindings=[...bindings.filter(b=>b.type!=='plain_text'&&b.type!=='r2_bucket'),...Object.entries(config.vars).map(([name,text])=>({type:'plain_text',name,text})),
+      ...config.r2_buckets.map(({binding,bucket_name})=>({type:'r2_bucket',name:binding,bucket_name}))];
     if(lostUpload){lostUpload=false;throw Error('synthetic upload acknowledgement lost');}
   };
   return{runtime,send,command,state,objects};
