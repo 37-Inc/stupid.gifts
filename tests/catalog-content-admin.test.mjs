@@ -74,6 +74,26 @@ test('staff auth verifies signed audience/issuer/time and exact staff identity, 
   assert.equal(await contentAdminActor(request(await token()),config,NOW+7200_000,localKeys),null);
   assert.equal(await contentAdminActor(request(await token()),{...config,CONTENT_ADMIN_ENABLED:undefined},NOW,localKeys),null);
 });
+test('only the explicitly approved signed service client can use the staff API without an email',async t=>{
+  const f=await fixture(t),client='c'.repeat(32)+'.access';
+  const sign=({name=client,aud=AUD,sub='',email,signer=pair.privateKey}={})=>
+    new SignJWT({type:'app',common_name:name,...(email?{email}:{})}).setProtectedHeader({alg:'RS256',kid:'admin-fixture'})
+      .setIssuer(ISSUER).setAudience(aud).setSubject(sub).setIssuedAt(NOW/1000-10).setExpirationTime(NOW/1000+3600).sign(signer);
+  const jwt=await sign();
+  assert.equal((await f.call('/status',{auth:jwt})).status,403,'disabled until an exact client ID is configured');
+  f.env.CONTENT_ADMIN_SERVICE_CLIENT_ID=client;
+  for(const claims of [{name:'d'.repeat(32)+'.access'},{aud:'d'.repeat(64)},{sub:'not-a-user'},{email:'staff@example.invalid'},
+    {signer:(await generateKeyPair('RS256')).privateKey}]){
+    assert.equal((await f.call('/status',{auth:await sign(claims)})).status,403);
+  }
+  assert.equal((await f.call('/status',{auth:null,headers:{'Cf-Access-Client-Id':client,'Cf-Access-Client-Secret':'unverified'}})).status,403);
+  assert.equal((await f.call('/status',{auth:jwt})).status,200);
+  const write=path=>f.call(path,{method:'PUT',payload:f.edit({title:'Reviewed by staff'}),auth:jwt});
+  const response=await write('/products/public-1');
+  assert.equal(response.status,202);assert.equal((await response.json()).request.actor,'service:'+client);
+  assert.equal((await f.call('/products/public-2',{method:'PUT',payload:f.edit({title:'Different title'}),auth:jwt,headers:{Origin:'https://other.example.invalid'}})).status,403);
+  assert.equal((await f.call('/status')).status,200,'ordinary staff authentication remains intact');
+});
 test('disabled/unauthorized/forged headers and CSRF cannot access storage or mutate; old admin stays retired',async t=>{
   const f=await fixture(t);
   for(const headers of [{},{'Cf-Access-Authenticated-User-Email':'staff@example.invalid'}])assert.equal((await f.call('/status',{auth:null,headers})).status,403);

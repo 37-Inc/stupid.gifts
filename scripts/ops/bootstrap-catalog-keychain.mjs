@@ -113,7 +113,7 @@ const readItem = ref => resolveReadToken(ref, (command, args, options) => run(co
 /** Compile before any credential is passed to the child; the ephemeral helper
  * trusts only /usr/bin/security, not itself. Its only input is a bounded pipe.
  */
-async function addAbsentItems(entries) {
+export async function addAbsentItems(entries) {
   const directory = await mkdtemp(join(tmpdir(), 'goose-catalog-keychain-'));
   await chmod(directory, 0o700);
   try {

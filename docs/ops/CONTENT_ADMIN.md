@@ -180,18 +180,23 @@ The reviewed serving package must explicitly retain these nonsecret bindings:
 - `CONTENT_ADMIN_TEAM_DOMAIN=https://<team>.cloudflareaccess.com`
 - `CONTENT_ADMIN_AUD=<that application's 64-character audience>`
 - `CONTENT_ADMIN_STAFF_EMAILS=<comma-separated approved staff emails>`
+- `CONTENT_ADMIN_SERVICE_CLIENT_ID=<optional approved Access client ID; never the secret>`
 
 Missing/invalid configuration denies access. The app publisher loads the reviewed
 nonsecret `scripts/catalog/content-admin-settings.mjs` and verifies every setting
-on the uploaded version. It names only the owner-approved Access audience and
-`cam@37.technology`; it does not provision credentials or change Access policies.
+on the uploaded version. It names the owner-approved Access audience,
+`cam@37.technology`, and, when enabled, the approved service client ID.
+It does not provision credentials or change Access policies.
 The Free Access app is `6a8715bd-84b8-4ecb-87d0-3ec807731d6a`, team
 `37-technology`, six-hour sessions, HTTP-only path-scoped cookie, one email-only
 allow policy. Public routes remain outside Access.
 
 The Worker validates Access's signed RS256 JWT, fixed issuer/audience, expiry
-and allowed staff email, and audits its signed subject. It never trusts the
-email header or a browser-supplied admin secret. It uses `jose`, as in
+and allowed staff email, and audits its signed subject. For CLI operations, a
+separate Service Auth policy on this same application can include one exact
+service token. The Worker matches its signed client identity against the
+approved ID and audits that identity separately. It never trusts raw credential
+or identity headers. Human browser sign-in is unchanged. It uses `jose`, as in
 [Cloudflare's JWT validation example](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/).
 Direct JWT verification is necessary here because
 [Static Assets do not forward `ctx.access`](https://developers.cloudflare.com/workers/configuration/cloudflare-access/).
@@ -199,6 +204,15 @@ Public signing keys are cached; no token is stored or logged. All responses are
 private/no-store/noindex, no CORS is enabled, and writes require exact same-origin
 `Origin`, JSON, and an `Idempotency-Key`. Request-body bounds are technical input
 bounds, not visitor/spending cutoffs.
+
+For local machine requests use `contentAdminFetch('/status')` from
+`scripts/ops/content-admin-client.mjs`. The helper reads the Access client
+pair from macOS Keychain (`goose.gifts.CONTENT_ADMIN_ACCESS`, account
+`goose.gifts`) and never follows redirects. Writes use the usual method, body,
+revision and idempotency key. The service credential can only reach this
+application; it cannot manage Cloudflare or deploy anything. To revoke it,
+disable/remove the specific token and its Service Auth policy in Cloudflare.
+Do not change the existing staff allow policy.
 
 ## Routes
 
