@@ -19,7 +19,7 @@ function page(gift:string,product?:PublicCatalogProduct,fields='',saved=false){
   <form action="${PRODUCT_PHOTO_EDITOR}" method="post" enctype="multipart/form-data">
     ${fields}${input('action','upload')}
     <p><label>New photo (JPEG, PNG or WebP, up to 2 MB) <input name="image" type="file" accept="image/jpeg,image/png,image/webp" required></label></p>
-    <p><label><input name="rights" type="checkbox" value="yes" required> I own this image or have permission to host it.</label></p>
+    <p>Only upload images you own or have permission to host.</p>
     <button>Use this photo</button>
   </form>
   ${product.imageUrl.startsWith(PRODUCT_PHOTO_ROOT)?`<form action="${PRODUCT_PHOTO_EDITOR}" method="post" enctype="multipart/form-data">
@@ -60,7 +60,9 @@ export async function adminProductPhoto({request,snapshot,store,actor,bucket,app
   const form=await new Response(bytes,{headers:{'Content-Type':type}}).formData().catch(()=>{throw invalid();});
   const field=(key:string)=>form.get(key);
   const action=field('action'),id=field('publicId'),revision=field('expectedRevision'),catalog=field('catalogRevision'),requestId=field('requestId');
-  const fields=['action','publicId','expectedRevision','catalogRevision','requestId',...(action==='upload'?['image','rights']:[])];
+  // Preserve older open forms and exact retries without requiring the old checkbox.
+  const legacy=action==='upload'&&field('rights')==='yes';
+  const fields=['action','publicId','expectedRevision','catalogRevision','requestId',...(action==='upload'?['image']:[]),...(legacy?['rights']:[])];
   if(action!=='upload'&&action!=='restore'||[...form.keys()].length!==fields.length||fields.some(key=>form.getAll(key).length!==1)
     ||typeof id!=='string'||!PHOTO_PRODUCT_ID.test(id)||typeof revision!=='string'||!/^\d{1,15}$/.test(revision)
     ||typeof catalog!=='string'||!catalog||catalog.length>200||typeof requestId!=='string'||!/^[-\w]{16,100}$/.test(requestId))throw invalid();
@@ -72,7 +74,7 @@ export async function adminProductPhoto({request,snapshot,store,actor,bucket,app
   let photo:ProductPhoto|null=null;
   if(action==='upload'){
     const image=field('image');
-    if(field('rights')!=='yes'||!image||typeof image==='string')throw invalid();
+    if(!image||typeof image==='string')throw invalid();
     if(image.size>PRODUCT_PHOTO_MAX)throw new ContentAdminError(413,'request_too_large');
     const content=new Uint8Array(await image.arrayBuffer()),format=productPhotoFormat(content);
     if(!format||image.type!==PHOTO_TYPES[format])throw new ContentAdminError(415,'unsupported_photo');
@@ -82,8 +84,9 @@ export async function adminProductPhoto({request,snapshot,store,actor,bucket,app
       if(stored.size!==photo.bytes)throw new ContentAdminError(503,'photo_storage_unconfirmed');
     }
   }
+  const reason=photo?(legacy?'Staff confirmed permission to host this photo':'Staff uploaded a product photo'):'Restore catalog photo';
   const result=await store.save({requestId,resource,action:'product',actor,baseCatalogRevision:catalog,
-    reason:photo?'Staff confirmed permission to host this photo':'Restore catalog photo',expectedRevision:Number(revision),payload:{photo}},new Date(now).toISOString());
+    reason,expectedRevision:Number(revision),payload:{photo}},new Date(now).toISOString());
   await apply(result.request);
   return new Response(null,{status:303,headers:{...HEADERS,Location:PRODUCT_PHOTO_EDITOR+'?gift='+encodeURIComponent(product.slug)+'&saved=1'}});
 }
