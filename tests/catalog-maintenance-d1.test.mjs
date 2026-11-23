@@ -82,8 +82,8 @@ async function setup({products=[],presence={},intent,revision='r-new'}={}) {
   const store=createD1CatalogMaintenanceStore(options);
   return {sqlite,db,owner,options,store,close:() => sqlite.close(),setClock(value){clock=value;},
     hookBefore(fn){beforeBatch=fn;},hookAfter(fn){afterBatch=fn;},counts:() => ({queries,batches}),
-    row:n => ({...sqlite.prepare('SELECT * FROM products WHERE id=?').get(typeof n==='number'?id(n):n)}),
-    state:n => {const r=sqlite.prepare('SELECT * FROM catalog_maintenance_products WHERE product_id=?').get(typeof n==='number'?id(n):n);return r ? {...r,product:JSON.parse(r.semantic_json)} : null;},
+    row:n => ({...sqlite.prepare('SELECT * FROM products WHERE id=?').get(id(n))}),
+    state:n => {const r=sqlite.prepare('SELECT * FROM catalog_maintenance_products WHERE product_id=?').get(id(n));return r ? {...r,product:JSON.parse(r.semantic_json)} : null;},
     events:() => sqlite.prepare('SELECT * FROM vector_sync_outbox ORDER BY sequence').all().map(row => ({...row})),
     epoch:() => sqlite.prepare('SELECT mutation_epoch FROM catalog_mutation_scopes').get().mutation_epoch};
 }
@@ -138,9 +138,9 @@ function markPublic(f,products) {
 const permanentArticle=Array(9).fill('Synthetic plastic button fixture provides clicking behavior for this owned test.').join(' ')+'\n\n'
   +Array(9).fill('Original crab button commentary checks factual persistence without any real merchant offer.').join(' ');
 async function permanentFixture({known=true,direct=false,preservePermanentListings=false,
-  sourceFacts={material:'plastic',behavior:'clicking button fixture'},productId=id(1),basePhoto='/images/gift-placeholder.svg'}={}) {
+  sourceFacts={material:'plastic',behavior:'clicking button fixture'}}={}) {
   const p=input(1,{embedding:vectors,editorialWriteup:permanentArticle,
-    sourceFacts,id:productId,affiliateUrl:`https://www.amazon.com/dp/${productId}?tag=fixture-20`});
+    sourceFacts});
   const hash=editorialSourceHash(p);p.editorialSourceHash=hash;
   assert.equal(validateEditorialDraft(p,p.editorialWriteup).approved,true);
   const supplierRights=rights(p);supplierRights.imageUrl={...supplierRights.imageUrl,basis:'merchant',observedAt:NOW,
@@ -150,8 +150,8 @@ async function permanentFixture({known=true,direct=false,preservePermanentListin
     ...(known ? {embeddingById:{[p.id]:{reference:'test/original-native',model:'text-embedding-3-small',
       text:maintenanceEmbeddingText(p),sourceFactsHash:hash}}} : {})})});
   await f.store.upsertProduct(p,hash);
-  const row=f.row(productId),baseProduct={...p,publicId:row.public_id,slug:row.slug,title:'Cleared crab identity',
-    description:p.wittyDescription,imageUrl:basePhoto,qualityScore:.85,editorialQualityScore:.95,
+  const row=f.row(1),baseProduct={...p,publicId:row.public_id,slug:row.slug,title:'Cleared crab identity',
+    description:p.wittyDescription,imageUrl:'/images/gift-placeholder.svg',qualityScore:.85,editorialQualityScore:.95,
     sourceFactsHash:hash};
   const baseRights=rights(baseProduct),base=createPersistentCatalogProduct({product:baseProduct,rights:baseRights},new Date(NOW));
   assert.ok(base);assert.equal(base.indexable,true);
@@ -788,33 +788,6 @@ test('photo refresh cannot extend an old observation or replace independently cl
       assert.equal(permission.imageUrl.expiresAt,'2026-10-21T07:00:00.123Z');
     }finally{f.close();}
   }
-});
-
-test('only the chosen same-ASIN gallery image gets a finite override; the exact cleared fallback is retained',async()=>{
-  const productId='B0C85MZCYY',basePhoto='https://example.invalid/cleared.jpg';
-  const f=await permanentFixture({preservePermanentListings:true,direct:true,productId,basePhoto});
-  try{
-    const base={...f.base,indexable:false};
-    f.sqlite.prepare('UPDATE products SET public_display_json=? WHERE id=?').run(canonicalJson(base),productId);
-    const original=f.row(productId),native=f.state(productId).embedding_native_base64;
-    const observedAt='2026-10-22T08:00:00.123Z',expiresAt='2026-10-23T08:00:00.123Z';f.setClock(observedAt);
-    const imageUrl='https://m.media-amazon.com/images/I/71nY+6TsrYL._SL500_.jpg',other='https://m.media-amazon.com/images/I/other.jpg';
-    for(const candidate of [other,imageUrl]){
-      const product={...f.p,imageUrl:candidate,embedding:undefined},hash=editorialSourceHash(product);
-      f.useIntent({verificationById:{[productId]:{reference:'fixture/photo',observedAt,sourceFactsHash:hash}}});
-      await f.store.upsertProduct(product,hash);
-      const current=f.row(productId),display=JSON.parse(current.public_display_json),rights=JSON.parse(current.rights_json);
-      assert.equal(display.imageUrl,candidate===imageUrl?imageUrl:basePhoto);
-      assert.equal(display.eligibleUntil,candidate===imageUrl?expiresAt:null);
-      assert.deepEqual(display.persistent??display,base);
-      assert.deepEqual(rights.persistent,f.baseRights);
-      assert.equal(current.source_record_json,original.source_record_json);
-      assert.equal(f.state(productId).embedding_native_base64,native);
-    }
-    f.setClock('2026-10-22T15:00:00.123Z'); // Inside the existing 18-hour photo lead.
-    const plan=await f.store.planProductFreshness({photosOnly:true});
-    assert.ok(plan.entries.some(x=>x.id===productId));
-  }finally{f.close();}
 });
 
 test('compact catalog reads fail closed on oversized views and ownership changes, without returning a partial catalog',async()=>{

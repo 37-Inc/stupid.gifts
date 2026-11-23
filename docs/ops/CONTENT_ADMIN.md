@@ -148,13 +148,6 @@ copy, article or embedding generation and no homepage edit. Other pending work
 must finish first; retries keep the saved IDs and observations. Omitting the
 field leaves scheduled due-photo selection unchanged.
 
-For an explicitly chosen Amazon gallery photo, record the exact ASIN and image
-identity in `lib/catalog/amazon-photo-preferences.mjs`. Never save gallery URLs
-or claim permanent clearance in source. The same photo-only run requests the
-variant in its normal GetItems call. Only a fresh matching variant gets the
-24-hour overlay; the older cleared image is preserved and returns if the
-variant is missing or expires. Routine due-photo care can renew the same choice.
-
 ## Authentication and rollout
 
 Before enabling, review/apply migrations0018/0019 through the runtime bootstrap
