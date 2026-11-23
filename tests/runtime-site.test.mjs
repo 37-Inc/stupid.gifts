@@ -357,13 +357,14 @@ test('staff photo editor uploads and restores via real Worker, D1 and private R2
     const form=new FormData();
     for(const [key,value]of Object.entries({publicId:gift.publicId,catalogRevision:head.catalog_revision,expectedRevision:String(revision),requestId:id,action,...extra}))
       form.set(key,value);
-    if(action==='upload'){form.set('rights','yes');form.set('image',new Blob([file],{type}),'test.png');}
+    if(action==='upload')form.set('image',new Blob([file],{type}),'test.png');
     const request=new Request(origin+editor,{method:'POST',headers:h,body:form});
     return call(editor,{method:'POST',headers:Object.fromEntries(request.headers),body:await request.arrayBuffer()});
   };
   assert.equal((await call(editor)).status,403);
   assert.equal((await call(replacement)).status,404);
   const original=await(await find()).text();assert.match(original,/Use this photo/);assert.doesNotMatch(original,/Restore catalog photo/);
+  assert.doesNotMatch(original,/type="checkbox"|name="rights"/);
   assert.equal((await submit(uuid(300),0,'upload',png,'image/png',{}, {...headers,Origin:'https://other.example.invalid'})).status,403);
   assert.equal((await submit(uuid(301),0,'upload',Buffer.from('<svg></svg>'))).status,415);
   const oversized=await submit(uuid(302),0,'upload',Buffer.alloc(2*1024*1024+1));assert.equal(oversized.status,413,await oversized.text());
@@ -371,6 +372,7 @@ test('staff photo editor uploads and restores via real Worker, D1 and private R2
   assert.equal((await media.list()).objects.length,0);
   const saved=await submit(uuid(305),0);assert.equal(saved.status,303,await saved.text());
   assert.equal(saved.headers.get('location'),editor+'?gift='+gift.slug+'&saved=1');
+  assert.equal((await db.prepare('SELECT reason FROM content_admin_requests WHERE request_id=?').bind(uuid(305)).first()).reason,'Staff uploaded a product photo');
   assert.equal((await submit(uuid(305),0)).status,303,'exact form retry is idempotent');
   assert.equal((await submit(uuid(306),0)).status,409,'a stale photo form must not overwrite the newer edit');
   assert.equal((await media.list()).objects.length,1);
@@ -393,6 +395,7 @@ test('staff photo editor uploads and restores via real Worker, D1 and private R2
   assert.equal((await call(replacement)).status,404);
   const html=await(await call(detail)).text();assert.doesNotMatch(html,new RegExp(replacement));assert.match(html,/Corrected photo fixture title/);
   assert.equal((await media.list()).objects.length,1,'previous bytes remain private; do not erase audit history');
+  for(let i=0;i<2;i++)assert.equal((await submit(uuid(309),3,'upload',png,'image/png',{rights:'yes'})).status,303,'legacy form and its exact retry still work');
 });
 
 test('runtime failures log only bounded machine codes, never bucket errors, SQL, queries or private body text',async t=>{
