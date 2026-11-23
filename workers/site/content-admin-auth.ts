@@ -2,6 +2,7 @@ import type {JWTVerifyGetKey} from 'jose';
 
 export interface ContentAdminAuthEnv {
   CONTENT_ADMIN_ENABLED?:string;CONTENT_ADMIN_TEAM_DOMAIN?:string;CONTENT_ADMIN_AUD?:string;CONTENT_ADMIN_STAFF_EMAILS?:string;
+  CONTENT_ADMIN_SERVICE_CLIENT_ID?:string;
 }
 let cached:{issuer:string;keys:JWTVerifyGetKey}|undefined;
 /** Access headers are untrusted until signature/issuer/audience/time validation.
@@ -20,8 +21,14 @@ export async function contentAdminActor(request:Request,env:ContentAdminAuthEnv,
     }
     const {payload}=await jwtVerify(token,keys,{issuer,audience,algorithms:['RS256'],currentDate:new Date(now),
       requiredClaims:['exp','iat','iss','sub','aud']});
+    if(payload.type!=='app')return null;
+    // Cloudflare's service JWT uses a signed common_name and an empty subject,
+    // not a staff email. Raw request credential and identity headers are never proof.
+    const client=env.CONTENT_ADMIN_SERVICE_CLIENT_ID;
+    if(payload.sub===''&&payload.email===undefined&&client&&/^[a-f0-9]{32}\.access$/.test(client)&&payload.common_name===client)
+      return 'service:'+client;
     const staff=env.CONTENT_ADMIN_STAFF_EMAILS.split(',').map(value=>value.trim().toLowerCase()).filter(Boolean);
-    if(payload.type!=='app'||typeof payload.sub!=='string'||!payload.sub||payload.sub.length>256
+    if(typeof payload.sub!=='string'||!payload.sub||payload.sub.length>256
       ||typeof payload.email!=='string'||!staff.includes(payload.email.toLowerCase()))return null;
     return payload.sub;
   }catch{return null;}

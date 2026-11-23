@@ -49,7 +49,7 @@ export async function deployRuntimeApp({runtime,source,root=ROOT,send=fetch,comm
       publicAnalytics:{enabled:true,posthogHost:'https://us.i.posthog.com',posthogKey:'phc_ATVKSPwDYTRfX9qDtDVLzZuXQcNdV9d55SjC8bHtuU8w'}});
     const current=await api('/versions/'+(await active()).version),bindings=current.resources?.bindings;
     if(!Array.isArray(bindings)||bindings.some(b=>!['DB','ASSETS','VECTORIZE','SEMANTIC_VECTORIZE','OPENAI_API_KEY','ENVIRONMENT','SEMANTIC_SEARCH_ENABLED','RUNTIME_CATALOG_ENABLED',
-      'CONTENT_ADMIN_ENABLED','CONTENT_ADMIN_TEAM_DOMAIN','CONTENT_ADMIN_AUD','CONTENT_ADMIN_STAFF_EMAILS','CONTENT_ADMIN_DISPATCH_ENABLED',
+      'CONTENT_ADMIN_ENABLED','CONTENT_ADMIN_TEAM_DOMAIN','CONTENT_ADMIN_AUD','CONTENT_ADMIN_STAFF_EMAILS','CONTENT_ADMIN_SERVICE_CLIENT_ID','CONTENT_ADMIN_DISPATCH_ENABLED',
       'GITHUB_CATALOG_DISPATCH_TOKEN','CATALOG_DATA','PRODUCT_MEDIA'].includes(b.name))
       ||bindings.some(b=>b.name==='PRODUCT_MEDIA'&&(b.type!=='r2_bucket'||b.bucket_name!==PRODUCT_MEDIA_BUCKET)))fail('bindings_need_review');
     const variables={...Object.fromEntries(bindings.filter(b=>b.type==='plain_text').map(b=>[b.name,b.text])),...contentAdminSettings,ENVIRONMENT:'production',RUNTIME_CATALOG_ENABLED:'true'};

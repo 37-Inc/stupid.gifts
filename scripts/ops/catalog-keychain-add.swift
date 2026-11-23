@@ -9,6 +9,7 @@ let allowed = Set([
     "goose.gifts.AMAZON_CREATORS_CREDENTIAL_SECRET",
     "goose.gifts.OPENAI_API_KEY",
     "goose.gifts.STAGING_AUTH_SECRET",
+    "goose.gifts.CONTENT_ADMIN_ACCESS",
 ])
 var created: [String] = []
 func finish(_ error: String = "none") -> Never {
