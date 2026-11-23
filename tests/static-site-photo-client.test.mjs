@@ -31,7 +31,7 @@ function client(serve = async (_path, body) => body, json = true, initialIndex, 
   const react = { createElement: element, createContext: () => ({}), useContext: () => context,
     useState(initial) {
       const fiber = active, i = cursor++;
-      if (!(i in fiber.values)) fiber.values[i] = initial;
+      if (!(i in fiber.values)) fiber.values[i] = typeof initial === 'function' ? initial() : initial;
       return [fiber.values[i], value => { if (!fiber.alive) { lateUpdates++; return; } fiber.values[i] = value; fiber.dirty = true; }];
     },
     useEffect(fn, deps) {

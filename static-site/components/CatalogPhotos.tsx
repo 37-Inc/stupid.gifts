@@ -78,14 +78,15 @@ export function CatalogCardArt({ href, label, illustrative = false, ...props }: 
 export function CatalogImage({ id, ...props }: React.ComponentProps<typeof ProductImage> & { id: string }) {
   const { indexPath, initialIndex, initialPhotos, hydrating } = useContext(PhotoContext);
   const initialPhoto = props.imageUrl === PHOTO_PLACEHOLDER && initialPhotos && Object.hasOwn(initialPhotos, id) ? initialPhotos[id] : undefined;
-  // Hydrate the exact server markup, but don't restart a stale URL on a later
-  // mount (for example after clearing search on a long-open show page).
   return <PhotoImage key={`${id}:${indexPath}:${props.imageUrl}`} id={id} indexPath={indexPath} initialIndex={initialIndex}
-    initialPhoto={initialPhoto} inlineFresh={hydrating || (initialPhoto !== undefined && Date.parse(initialPhoto.eligibleUntil) > Date.now())} {...props} />;
+    initialPhoto={initialPhoto} hydrating={hydrating} {...props} />;
 }
-function PhotoImage({ id, indexPath, initialIndex, initialPhoto, inlineFresh, ...props }: React.ComponentProps<typeof ProductImage> &
-  { id: string; indexPath: string | null; initialIndex?: PhotoIndex; initialPhoto?: CatalogPhoto; inlineFresh?: boolean }) {
-  const [photo, setPhoto] = useState<CatalogPhoto | null>(inlineFresh ? initialPhoto ?? null : null);
+function PhotoImage({ id, indexPath, initialIndex, initialPhoto, hydrating, ...props }: React.ComponentProps<typeof ProductImage> &
+  { id: string; indexPath: string | null; initialIndex?: PhotoIndex; initialPhoto?: CatalogPhoto; hydrating?: boolean }) {
+  // Match server markup at hydration, but don't re-request expired images
+  // when the saved grid mounts again (for example after clearing search).
+  const [photo, setPhoto] = useState<CatalogPhoto | null>(() =>
+    initialPhoto && (hydrating || Date.parse(initialPhoto.eligibleUntil) > Date.now()) ? initialPhoto : null);
   const [loading, setLoading] = useState(Boolean(!initialPhoto && indexPath && props.imageUrl === PHOTO_PLACEHOLDER));
   useEffect(() => {
     let cancelled = false;
