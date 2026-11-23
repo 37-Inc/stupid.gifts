@@ -16,6 +16,7 @@ import type { Row, SemanticProduct } from './maintenance-state.ts';
 import { planProductFreshness } from './freshness-selection.ts';
 import type { FreshnessSelection } from './freshness-selection.ts';
 import {readProductRows} from './read-product-rows.ts';
+import {preferredAmazonPhotoIds} from '../../lib/catalog/amazon-photo-preferences.mjs';
 
 export interface MaintenanceIntent {
   /** Preparation is read-only; reject a stale product at its atomic commit. */
@@ -46,7 +47,8 @@ const HASH = /^[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const KEY = /^[a-zA-Z0-9._:/-]{1,200}$/;
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
-export const PHOTO_EXPIRY_SQL = `CASE WHEN json_extract(p.rights_json,'$.persistent.imageUrl.value')='/images/gift-placeholder.svg'
+export const PHOTO_EXPIRY_SQL = `CASE WHEN (json_extract(p.rights_json,'$.persistent.imageUrl.value')='/images/gift-placeholder.svg'
+  OR p.id IN (${preferredAmazonPhotoIds.map(id=>"'"+id+"'").join(',')}))
   AND json_extract(p.rights_json,'$.imageUrl.basis')='merchant' THEN json_extract(p.rights_json,'$.imageUrl.expiresAt') END`;
 const UPSERT_INPUT = ['id','title','price','currency','imageUrl','affiliateUrl','source','sourceQuery','humorTags','punnyTitle',
   'wittyDescription','qualityScore','rating','reviewCount','isActive','embedding','remotelyVerified','editorialWriteup','sourceFacts',
