@@ -184,8 +184,9 @@ The reviewed serving package must explicitly retain these nonsecret bindings:
 
 Missing/invalid configuration denies access. The app publisher loads the reviewed
 nonsecret `scripts/catalog/content-admin-settings.mjs` and verifies every setting
-on the uploaded version. It names only the owner-approved Access audience and
-`cam@37.technology`; it does not provision credentials or change Access policies.
+on the uploaded version. It names the owner-approved Access audience,
+`cam@37.technology`, and, when enabled, the approved service client ID.
+It does not provision credentials or change Access policies.
 The Free Access app is `6a8715bd-84b8-4ecb-87d0-3ec807731d6a`, team
 `37-technology`, six-hour sessions, HTTP-only path-scoped cookie, one email-only
 allow policy. Public routes remain outside Access.
