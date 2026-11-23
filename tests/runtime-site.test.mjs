@@ -222,6 +222,39 @@ test('finite photos retain exact deadlines, never enter evergreen SSR, and disap
   const fresh=await (await f.request('/gifts/'+base.slug)).text();assert.match(fresh,/A cleared offline desk toy description 1/);assert.doesNotMatch(fresh,/OFFLINE-NOT-FETCHED/);
 });
 
+test('saved show requests deliver only the opening row’s valid photo URLs, without leaking them into other pages',async t=>{
+  const f=await runtimeFixture(t),picks=f.products.slice(0,5),expiresAt=new Date(f.time.now+10000).toISOString();
+  const imageUrl=n=>'https://m.media-amazon.com/images/I/OFFLINE-SHOW-'+n+'.jpg';
+  for(const n of [2,4])picks[n].imageUrl=imageUrl(n);
+  const overlays=[0,1,3].map(n=>({...picks[n],imageUrl:imageUrl(n),eligibleUntil:expiresAt,persistent:picks[n]}));
+  const bytes=new TextEncoder().encode(JSON.stringify(overlays)+'\n'),sha256=await runtimeDigest(bytes);
+  f.data.overlays=[{sha256,expiresAt}];f.objects.set(`catalog-v1/public-overlays/${Date.parse(expiresAt)}/${sha256}.json`,bytes);
+  f.collections[0].payload_json=JSON.stringify({ids:picks.map(p=>p.publicId)});await f.publish();
+  const fromHtml=html=>JSON.parse(html.match(/id="runtime-props" type="application\/json">([^<]+)</)[1]);
+  for(const route of ['/h?utm_medium=qa','/h/saved-offline']){
+    const response=await f.request(route),html=await response.text(),props=fromHtml(html);
+    assert.equal(response.headers.get('Cache-Control'),'no-store');
+    assert.deepEqual(props.initialShowPhotos,Object.fromEntries(overlays.slice(0,2).map(p=>[p.id,{imageUrl:p.imageUrl,eligibleUntil:expiresAt}])));
+    assert.deepEqual(props.products.map(p=>p.id),picks.map(p=>p.id));
+    assert.equal(props.products[0].imageUrl,'/images/gift-placeholder.svg');
+    const images=[...html.matchAll(/<img[^>]+>/g)].map(match=>match[0]);
+    assert.equal(images.length,4);
+    assert.ok(images.slice(0,3).every((tag,i)=>tag.includes(imageUrl(i))&&tag.includes('fetchPriority="high"')));
+    assert.ok(images[3].includes('loading="lazy"'));
+    assert.ok(!html.includes(imageUrl(3)));
+  }
+  for(const route of ['/','/gifts/'+picks[0].slug,'/h?ids='+picks[0].publicId,'/h?q=puppet']){
+    const html=await (await f.request(route)).text();
+    assert.equal(fromHtml(html).initialShowPhotos,undefined);
+    assert.ok(!html.includes(imageUrl(0)),route);
+  }
+  f.time.now=Date.parse(expiresAt);
+  const fresh=await (await f.request('/h')).text(),props=fromHtml(fresh);
+  assert.equal(props.initialShowPhotos,undefined);
+  assert.ok(!fresh.includes(imageUrl(0)));
+  assert.deepEqual(props.products.map(p=>p.id),picks.map(p=>p.id));
+});
+
 test('homepage backfills only expired photo slots, without changing the edition, show or browse membership',async t=>{
   const f=await runtimeFixture(t),[anchor]=f.products;
   for(const p of f.products.slice(1))p.imageUrl='/images/offline.jpg';

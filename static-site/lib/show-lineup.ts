@@ -1,4 +1,6 @@
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+// Three desktop columns; this also covers the two-column mobile first row.
+export const SHOW_PRIORITY_COUNT = 3;
 
 /** URL-only curation: no stored configuration, model call or catalog mutation. */
 export function showLineupIds(search: string): string[] | null {

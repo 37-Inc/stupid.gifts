@@ -1,6 +1,10 @@
 /** Optional supplier photos never become part of evergreen HTML or card shards. */
 export const PHOTO_SHARD_SIZE = 24;
 export const PHOTO_PLACEHOLDER = "/images/gift-placeholder.svg";
+export interface CatalogPhoto {
+  imageUrl: string;
+  eligibleUntil: string;
+}
 export interface PhotoIndex {
   schemaVersion: 1;
   status: "ready";
@@ -12,7 +16,7 @@ export interface PhotoShard {
   status: "ready";
   version: string;
   eligibleUntil: string;
-  images: Record<string, { imageUrl: string; eligibleUntil: string }>;
+  images: Record<string, CatalogPhoto>;
 }
 function fail(): never { throw new Error("Catalog photos unavailable"); }
 function record(value: unknown): Record<string, unknown> {

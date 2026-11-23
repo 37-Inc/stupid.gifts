@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchCardShard } from "../lib/card-shard";
 import type { CatalogCard } from "../lib/card-shard";
-import { showLineupIds } from "../lib/show-lineup";
+import { SHOW_PRIORITY_COUNT, showLineupIds } from "../lib/show-lineup";
 import { ProductCard } from "./ProductCard";
 import { captureRenderedLists } from "../lib/analytics";
 import { catalogDeadline } from "../../lib/catalog/display";
@@ -48,7 +48,7 @@ export function ShowLineup({ children, catalogRevision, action }: {
     {state.status === "loading" && <p role="status">Loading gifts…</p>}
     {state.status === "error" && <p role="status">This lineup couldn’t load. <a href={action}>Open the saved picks.</a></p>}
     {state.status === "ready" && <div className="catalog-grid" aria-label="Gifts">
-      {state.products.map((product, index) => <ProductCard key={product.id} product={product} eager lead={index === 0} context="show-curated" />)}
+      {state.products.map((product, index) => <ProductCard key={product.id} product={product} eager={index < SHOW_PRIORITY_COUNT} lead={index === 0} context="show-curated" />)}
     </div>}
   </>;
 }

@@ -16,9 +16,11 @@ import {projectCard} from '../../static-site/lib/card-shard.ts';
 import {guides,selectGuideProducts,guideSchema} from '../../static-site/lib/guides.ts';
 import {createRelatedGiftSelector} from '../../static-site/lib/related-gifts.ts';
 import {SHOW_PRESETS,ACTIVE_SHOW_PRESET} from '../../static-site/lib/show-rehearsal.ts';
+import {SHOW_PRIORITY_COUNT} from '../../static-site/lib/show-lineup.ts';
 import {buildGiftPageSchema} from '../../lib/gift-page-schema.ts';
 import {shortProductName} from '../../static-site/lib/product-presentation.ts';
 import {PHOTO_SHARD_SIZE,PHOTO_PLACEHOLDER} from '../../static-site/lib/photo-shard.ts';
+import type {CatalogPhoto} from '../../static-site/lib/photo-shard.ts';
 import type {CatalogD1} from '../../lib/catalog/storage/d1.ts';
 import {createStaticFeedPlan} from './feed.ts';
 
@@ -101,14 +103,15 @@ async function prepare(view:RuntimeCatalogView,options:RuntimeSiteOptions,now:()
   const virtual=new Map<string,{value:unknown;deadline:number}>();
   const photoVersion=await runtimeDigest(canonicalJson({revision:snapshot.catalogRevision,photos:snapshot.products.filter(p=>p.persistent&&p.eligibleUntil!==null).map(p=>[p.id,p.imageUrl,p.eligibleUntil])}));
   const photoBase='/catalog/'+photoVersion,index:{schemaVersion:1;status:'ready';version:string;products:Record<string,{shard:number;eligibleUntil:string}>}={schemaVersion:1,status:'ready',version:photoVersion,products:{}};
-  const photoGroups=new Map<string,PublicCatalogProduct[]>();
+  const photoGroups=new Map<string,PublicCatalogProduct[]>(),photos=new Map<string,CatalogPhoto>();
   for(const p of snapshot.products)if(p.persistent&&p.eligibleUntil!==null&&catalogDeadline(p.eligibleUntil)>at&&p.imageUrl.startsWith('https://')){
     const group=photoGroups.get(p.eligibleUntil)??[];group.push(p);photoGroups.set(p.eligibleUntil,group);}
   let photoShard=0;
   for(const [eligibleUntil,group]of photoGroups)for(let i=0;i<group.length;i+=PHOTO_SHARD_SIZE){const batch=group.slice(i,i+PHOTO_SHARD_SIZE);photoShard++;
-    for(const p of batch)index.products[p.id]={shard:photoShard,eligibleUntil};
+    const images=Object.fromEntries(batch.map(p=>[p.id,{imageUrl:p.imageUrl,eligibleUntil}]));
+    for(const [id,photo] of Object.entries(images)){index.products[id]={shard:photoShard,eligibleUntil};photos.set(id,photo);}
     virtual.set(`${photoBase}/photos-${photoShard}.json`,{value:{schemaVersion:1,status:'ready',version:photoVersion,eligibleUntil,
-      images:Object.fromEntries(batch.map(p=>[p.id,{imageUrl:p.imageUrl,eligibleUntil}]))},deadline:Date.parse(eligibleUntil)});}
+      images},deadline:Date.parse(eligibleUntil)});}
   virtual.set(photoBase+'/photos.json',{value:index,deadline:Math.min(...Object.values(index.products).map(p=>Date.parse(p.eligibleUntil)))});
   const ranked=picturedOpening(await browseProducts(products,snapshot,edition),index.products),cards=ranked.map(projectCard);
   const version=await runtimeDigest(JSON.stringify({schemaVersion:1,initialBrowseCount:24,feedShardSize:24,randomPoolLimit:48,catalogRevision:snapshot.catalogRevision,cards})),base='/catalog/'+version;
@@ -143,7 +146,7 @@ async function prepare(view:RuntimeCatalogView,options:RuntimeSiteOptions,now:()
   };
   const active=collection(view,'active-show').name;
   const activeName=typeof active==='string'&&names.has(active)?active:ACTIVE_SHOW_PRESET;
-  return{snapshot,products,ranked,cards,version,base,feedCount,virtual,photoLookup:index,photoIndex:photoShard?photoBase+'/photos.json':null,photoSlots:Object.keys(index.products),manifest,api,bySlug,byId,related,names,showIds,activeName,listedGuides};
+  return{snapshot,products,ranked,cards,version,base,feedCount,virtual,photos,photoLookup:index,photoIndex:photoShard?photoBase+'/photos.json':null,photoSlots:Object.keys(index.products),manifest,api,bySlug,byId,related,names,showIds,activeName,listedGuides};
 }
 type Prepared=Awaited<ReturnType<typeof prepare>>;
 async function pageOg(view:RuntimeCatalogView,props:RuntimePageProps,at:number){
@@ -275,11 +278,27 @@ export function createRuntimeSite(options:RuntimeSiteOptions){
       value.props.analytics=options.analytics===true&&env.ENVIRONMENT==='production';
       if(path==='/random-gift'&&url.searchParams.has('gift')){value.status=404;value.indexable=false;value.props.kind='missing';}
       const indexable=value.indexable&&!url.searchParams.has('q')&&env.ENVIRONMENT==='production';
-      const stream=await renderToReadableStream(<RuntimeApp {...value.props}/>);await stream.allReady;
-      const html=await new Response(stream).text();
+      const og=await pageOg(view,value.props,now())??options.brandOgPath;
+      if(value.props.kind==='show'&&!url.searchParams.has('ids')&&!url.searchParams.has('q')){
+        // These are the same finite entries the photo shards serve, not durable
+        // product fields. Only the no-store saved lineup gets first-row URLs.
+        const at=now(),photos=Object.fromEntries(value.props.products.slice(0,SHOW_PRIORITY_COUNT).flatMap(product=>{
+          const photo=p.photos.get(product.id);
+          return product.imageUrl===PHOTO_PLACEHOLDER&&photo&&catalogDeadline(photo.eligibleUntil)>at?[[product.id,photo]]:[];
+        }));
+        if(Object.keys(photos).length)value.props.initialShowPhotos=photos;
+      }
+      const render=async()=>{
+        const stream=await renderToReadableStream(<RuntimeApp {...value.props}/>);await stream.allReady;
+        return new Response(stream).text();
+      };
+      let html=await render();
+      if(value.props.initialShowPhotos&&Object.values(value.props.initialShowPhotos).some(photo=>catalogDeadline(photo.eligibleUntil)<=now())){
+        delete value.props.initialShowPhotos;
+        html=await render();
+      }
       // An SSR read can cross a finite content deadline. Never emit that body.
       if(catalogDeadline(value.props.eligibleUntil)<=now())return finish(json({error:'Catalog data expired'},503));
-      const og=await pageOg(view,value.props,now())??options.brandOgPath;
       const document='<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escape(value.title)+' — Stupid Gifts</title>'+
         '<meta name="description" content="'+escape(value.description)+'"><link rel="canonical" href="'+escape(canonical)+'"><meta name="robots" content="'+(indexable?'index, follow':'noindex, follow')+'">'+
         '<meta property="og:type" content="website"><meta property="og:title" content="'+escape(value.title)+'"><meta property="og:description" content="'+escape(value.description)+'"><meta property="og:url" content="'+escape(canonical)+'">'+
