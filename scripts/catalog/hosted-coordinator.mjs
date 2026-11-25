@@ -115,6 +115,11 @@ export function hostedPublicationProgress(line){
     &&['start','complete'].includes(value.stage)&&[value.phase,value.totalPhases,value.elapsedMs].every(n=>Number.isSafeInteger(n)&&n>=0)
     &&value.phase>0&&value.phase<=value.totalPhases)
     return{...value,state:'progress',step:value.state==='catalog_application_progress'?'application':'catalog'};
+  const applicationMetrics=['elapsedMs','reserveMs','requestMs','settleMs','journalMs','engineStatements','requests'];
+  if(value?.state==='catalog_application_profile'&&exact(value,'state,engineMs,'+applicationMetrics.join(','))
+    &&applicationMetrics.every(key=>Number.isSafeInteger(value[key])&&value[key]>=0)
+    &&(value.engineStatements===0?value.engineMs===null:Number.isSafeInteger(value.engineMs)&&value.engineMs>=0))
+    return{...value,state:'progress',step:'application',stage:'profile'};
   if(exact(value,'state,phase,stage,products,elapsedMs')&&value.state==='publication_progress'&&['inventory','native_batch','projection','source_check','source_capture'].includes(value.phase)
     &&['start','complete','reused'].includes(value.stage)&&[value.products,value.elapsedMs].every(n=>Number.isSafeInteger(n)&&n>=0))
     return{state:'progress',step:'publication',phase:value.phase,stage:value.stage,products:value.products,elapsedMs:value.elapsedMs};

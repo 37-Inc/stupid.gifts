@@ -103,7 +103,8 @@ type RestOptions={
 };
 type RestClient=CatalogD1 & { providerIdentity:string;metrics:()=>{
   requests:number;statements:number;reportedRowsRead:number|null;reportedRowsWritten:number|null;unconfirmedRequests:number;
-} };
+};queryTimings:()=>QueryTimings };
+type QueryTimings={reserveMs:number;requestMs:number;settleMs:number;engineMs:number;engineStatements:number;requests:number};
 export function createCatalogD1Rest(options:RestOptions):Promise<RestClient>{return createRest(options);}
 
 /** Diagnostics reject unsupported SQL before a reservation or dispatch.
@@ -265,6 +266,11 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
   const send=options.fetch??fetch;
   const base=`https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}`;
   let requests=0,statements=0,rowsRead=0,rowsWritten=0,unconfirmedRequests=0;
+  const timings:Omit<QueryTimings,'requests'>={reserveMs:0,requestMs:0,settleMs:0,engineMs:0,engineStatements:0};
+  async function measure<T>(key:'reserveMs'|'requestMs'|'settleMs',action:()=>Promise<T>):Promise<T>{
+    const started=performance.now();
+    try{return await action();}finally{timings[key]+=performance.now()-started;}
+  }
   const accounting=options.accounting;
   if(accounting){
     const initial=accounting.initial;
@@ -279,13 +285,13 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     migrationAssert?.();
     if(!accounting)return undefined;
     const id=randomUUID();const requestSha256=createHash('sha256').update(JSON.stringify({accountId,databaseId,body:body??null})).digest('hex');
-    try{await accounting.reserve({id,requestSha256,units:{httpRequests:1,sqlStatements:count}});return id;}
+    try{await measure('reserveMs',()=>accounting.reserve({id,requestSha256,units:{httpRequests:1,sqlStatements:count}}));return id;}
     catch(error){if(error instanceof Error&&(/^run_workspace_[a-z_]+$/.test(error.message)||error.message==='publication_recovery_budget_refused'))throw error;
       throw new Error('catalog_d1_accounting_reservation_failed');}
   }
   async function settle(id:string|undefined,usage:{rowsRead:number;rowsWritten:number}|null){
     if(!accounting||!id)return;
-    try{await accounting.settle(id,usage?{status:'known',usage}:{status:'unknown',usage:null});}
+    try{await measure('settleMs',()=>accounting.settle(id,usage?{status:'known',usage}:{status:'unknown',usage:null}));}
     catch{throw new Error('catalog_d1_accounting_unknown');}
   }
   const bindings=new WeakMap<D1Statement,Query>();
@@ -354,7 +360,7 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
     statements+=batch.length;
     let results:Result[];
     try{
-      const raw=await request(body,signal,detail);
+      const raw=await measure('requestMs',()=>request(body,signal,detail));
       if(!Array.isArray(raw)||raw.length!==batch.length)throw new Error();
       results=raw.map(value=>{
         if(!object(value)||value.success!==true||!Array.isArray(value.results)||value.results.some(row=>!object(row))
@@ -366,6 +372,9 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
         }
         return {success:true as const,results:value.results,meta};
       });
+      for(const {meta} of results)if(typeof meta.duration==='number'){
+        timings.engineMs+=meta.duration;timings.engineStatements++;
+      }
     }catch(error){unconfirmedRequests++;await settle(reservation,null);
       if(error instanceof CatalogD1RequestError)throw error;
       throw new CatalogD1RequestError('catalog_d1_result_unknown',{...detail,stage:'response',dispatched:true,reason:'invalid_response'});}
@@ -413,6 +422,7 @@ async function createRest(options:RestOptions,migrationAssert?:()=>void,beforeBa
   const client=Object.freeze({providerIdentity:`cloudflare:${accountId}:${databaseId}`,
     metrics:()=>({requests,statements,reportedRowsRead:unconfirmedRequests?null:rowsRead,
       reportedRowsWritten:unconfirmedRequests?null:rowsWritten,unconfirmedRequests}),
+    queryTimings:()=>({...timings,requests}),
     prepare:(sql:string)=>statement(sqlText(sql)),
     batch(values:D1Statement[],options?:D1ReadOptions){
       if(!Array.isArray(values)||Array.from(values).some(value=>!bindings.has(value)))return Promise.reject(new Error('catalog_d1_batch_invalid'));

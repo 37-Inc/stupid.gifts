@@ -489,6 +489,11 @@ test('COMPOSED runtime driver prepares owner-free then publishes the same saved 
   assert.equal(f.sql.prepare('SELECT state FROM catalog_build_requests WHERE release_id=?').get(f.config.publication.releaseId).state,'resolved');
   assert.equal(await readMutationOwner(f.local,{environment:f.config.environment,indexName:f.config.vectorIndex.name}),null);
   assert.equal(f.sql.prepare('SELECT count(*) n FROM products').get().n,3);
+  const {timings_ms:timings}=JSON.parse(f.sql.prepare('SELECT finish_json FROM catalog_run_telemetry WHERE run_id=?').get(f.config.runId).finish_json);
+  assert.ok(timings.productApplication>0);
+  for(const key of ['applicationD1Reserve','applicationD1Request','applicationD1Settle','applicationIntentJournal'])
+    assert.ok(Number.isSafeInteger(timings[key])&&timings[key]>=0,key);
+  assert.equal(Object.hasOwn(timings,'applicationD1Engine'),false,'missing provider durations are not zero');
   const before=structuredClone(f.calls);assert.equal((await f.run('resume',undefined,{publicationOnly:true})).state,'finalized');
   assert.deepEqual(f.calls,before,'finalized readback cannot replay any provider work');
 });
