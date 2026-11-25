@@ -27,6 +27,28 @@ const result=(results=[],meta={})=>({success:true,results,meta:{served_by_primar
 const originalFetch=globalThis.fetch;
 globalThis.fetch=async()=>{throw new Error('Live network is forbidden in this test');};
 test.after(()=>{globalThis.fetch=originalFetch;});
+test('timing snapshots split accounted D1 calls and do not infer an engine duration from an unknown response',async()=>{
+  let fail=false;
+  const events=[],db=await createCatalogD1Rest({...config,fetch:async(url,init)=>{
+    events.push('request');
+    if(url===base)return ok(identity);
+    if(fail)return new Response(null,{status:503});
+    return ok(JSON.parse(init.body).batch.map(()=>result([{catalog_d1_primary:1}],{duration:1.25})));
+  },accounting:{scope:{accountId:config.accountId,databaseId:config.databaseId,databaseName:config.databaseName},
+    initial:{httpRequests:0,sqlStatements:0,knownRowsRead:0,knownRowsWritten:0,unconfirmedRequests:0},
+    async reserve(){events.push('reserve');},async settle(_id,settlement){events.push(settlement.status);}}});
+  const before=db.queryTimings();events.length=0;
+  await db.batch([db.prepare('SELECT 1'),db.prepare('SELECT 2')]);
+  fail=true;await assert.rejects(db.prepare('SELECT 3').all(),/catalog_d1_result_unknown/);
+  const after=db.queryTimings();
+  assert.deepEqual(events,['reserve','request','known','reserve','request','unknown']);
+  assert.equal(after.requests-before.requests,2);
+  assert.equal(after.engineStatements-before.engineStatements,2);
+  assert.equal(after.engineMs-before.engineMs,2.5);
+  for(const key of ['reserveMs','requestMs','settleMs'])assert.ok(after[key]>=before[key]);
+  assert.equal(db.metrics().unconfirmedRequests,1);
+  before.requests=-1;assert.equal(db.queryTimings().requests,after.requests);
+});
 test('diagnostic SQL is checked before reservation, including WITH and table metadata reads',async()=>{
   const events=[],calls=[];
   const fetch=async(url,init)=>{calls.push(url);if(url===base)return ok(identity);

@@ -695,36 +695,53 @@ export async function runCloudflareWeekly(options:WeeklyDriverOptions,dependenci
         if(!owner)return{state:'pending',phase:cp.phase,errorCode:'weekly_owner_busy',budget:await ws.budget()};
         const cursor=applying={current:owner};await write({owner});
         let capturedIntent:unknown=null;
+        let intentJournalMs=0;
+        const beforeMutation=async(input:Parameters<typeof journal.beforeMutation>[0])=>{
+          const started=performance.now();
+          try{await journal.beforeMutation(input);}finally{intentJournalMs+=performance.now()-started;}
+        };
         const maintenance=createD1CatalogMaintenanceStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision,preservePermanentListings:true,
           intent:async(method,args)=>{
             if(!capturedIntent)throw new Error('reviewed_preparation_required');
             const intent=capturedIntent as ReturnType<typeof evidence.intent>;
             const inputSha256=maintenanceDigest({method,args,intent,runId:config.runId,catalogRevision:config.catalogRevision,
               environment:owner.environment,indexName:owner.indexName,listingPolicy:'permanent-base-v1'});
-            await journal.beforeMutation({operationId:sha256(`${config.runId}:${inputSha256}`),inputSha256,owner:cursor.current});return intent;
+            await beforeMutation({operationId:sha256(`${config.runId}:${inputSha256}`),inputSha256,owner:cursor.current});return intent;
           }});
         const telemetry=createD1CatalogTelemetryStore({db,owner,ownerCursor:cursor,runId:config.runId,catalogRevision:config.catalogRevision,
-          beforeMutation:input=>journal.beforeMutation(input)});
+          beforeMutation});
         const run=async()=>{
-          const applicationStarted=Date.now();
-          await telemetry.startCatalogRun({id:config.runId,mode:'daily',trigger:'scheduled',gitSha:config.codeSha,config:{backfillLimit:0}});
+          const applicationStarted=performance.now(),d1Start=db.queryTimings();
           const results=[],warnings=[],timingsMs:Record<string,number>={},merchandising:Record<string,unknown>={},changed=new Set<string>(),admitted=new Set<string>();
-          for(let index=0;index<phases.length;index++){
-            const key=`phase-${index}`,prepared=preparedPhases[index];
-            const phaseStarted=Date.now(),progress=(stage:'start'|'complete')=>console.info(JSON.stringify({state:'catalog_application_progress',
-              phase:index+1,totalPhases:phases.length,stage,elapsedMs:Math.max(0,Date.now()-phaseStarted)}));
-            progress('start');
-            await applyReviewedPhase({key,journal,prepared,store:maintenance,telemetryStore:telemetry,runId:config.runId,
-              withIntent:async(value:unknown,action:()=>Promise<unknown>)=>{capturedIntent=value;try{return await action();}finally{capturedIntent=null;}}});
-            progress('complete');
-            results.push(numbers(prepared.result));warnings.push(...prepared.warnings);Object.assign(merchandising,prepared.merchandising);
-            for(const[key,value]of Object.entries(prepared.timingsMs))timingsMs[key]=(timingsMs[key]||0)+Number(value);
-            for(const mutation of prepared.mutations){
-              if(mutation.method==='upsertProduct'){changed.add(mutation.args[0].id);if(phases[index].discoveryNewOnly)admitted.add(mutation.args[0].id);}
-              if(mutation.method==='markConfirmedMissingUnavailable')for(const id of mutation.args[0])changed.add(id);
+          try{
+            await telemetry.startCatalogRun({id:config.runId,mode:'daily',trigger:'scheduled',gitSha:config.codeSha,config:{backfillLimit:0}});
+            for(let index=0;index<phases.length;index++){
+              const key=`phase-${index}`,prepared=preparedPhases[index];
+              const phaseStarted=Date.now(),progress=(stage:'start'|'complete')=>console.info(JSON.stringify({state:'catalog_application_progress',
+                phase:index+1,totalPhases:phases.length,stage,elapsedMs:Math.max(0,Date.now()-phaseStarted)}));
+              progress('start');
+              await applyReviewedPhase({key,journal,prepared,store:maintenance,telemetryStore:telemetry,runId:config.runId,
+                withIntent:async(value:unknown,action:()=>Promise<unknown>)=>{capturedIntent=value;try{return await action();}finally{capturedIntent=null;}}});
+              progress('complete');
+              results.push(numbers(prepared.result));warnings.push(...prepared.warnings);Object.assign(merchandising,prepared.merchandising);
+              for(const[key,value]of Object.entries(prepared.timingsMs))timingsMs[key]=(timingsMs[key]||0)+Number(value);
+              for(const mutation of prepared.mutations){
+                if(mutation.method==='upsertProduct'){changed.add(mutation.args[0].id);if(phases[index].discoveryNewOnly)admitted.add(mutation.args[0].id);}
+                if(mutation.method==='markConfirmedMissingUnavailable')for(const id of mutation.args[0])changed.add(id);
+              }
             }
+          }finally{
+            const end=db.queryTimings(),elapsedMs=Math.round(performance.now()-applicationStarted);
+            const reserveMs=Math.round(end.reserveMs-d1Start.reserveMs),requestMs=Math.round(end.requestMs-d1Start.requestMs),
+              settleMs=Math.round(end.settleMs-d1Start.settleMs),journalMs=Math.round(intentJournalMs),
+              engineStatements=end.engineStatements-d1Start.engineStatements,
+              engineMs=engineStatements?Math.round(end.engineMs-d1Start.engineMs):null;
+            Object.assign(timingsMs,{productApplication:elapsedMs,applicationD1Request:requestMs,applicationD1Reserve:reserveMs,
+              applicationD1Settle:settleMs,applicationIntentJournal:journalMs,...(engineMs===null?{}:{applicationD1Engine:engineMs})});
+            // D1 engine time is inside request time, not additive. Missing duration metadata stays unknown.
+            console.info(JSON.stringify({state:'catalog_application_profile',elapsedMs,reserveMs,requestMs,settleMs,journalMs,
+              engineMs,engineStatements,requests:end.requests-d1Start.requests}));
           }
-          timingsMs.productApplication=Math.max(0,Date.now()-applicationStarted);
           const summary={counts:{phases:results},warnings,timingsMs,usage:config.inputs.staffPreparation?await journal.read('staff-usage'):await journal.usage()};
           await journal.put('provider-phases-complete',{schemaVersion:1,summary,merchandising,changedIds:[...changed],admittedIds:[...admitted]});
         };

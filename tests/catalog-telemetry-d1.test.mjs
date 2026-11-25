@@ -47,14 +47,33 @@ test('confirmed atomic telemetry ACK avoids redundant post-commit receipt/owner 
   }finally{f.close();}
 });
 
-test('appending twenty observations costs the same read round trips as one',async()=>{
+test('one and twenty observations each use one primary preflight and one atomic write',async t=>{
   const f=await fixture();try{
     await f.telemetry.startCatalogRun({id:RUN});
     const append=n=>f.telemetry.insertCatalogRunItems(RUN,Array.from({length:n},()=>catalogRunItem(product,{decision:'selected'})));
     const before=f.queries();await append(1);const after=f.queries();
-    assert.equal(after-before,2);
+    assert.equal(after-before,1);
     await append(20);assert.equal(f.queries()-after,after-before);
     assert.equal((await f.telemetry.loadCatalogRun(RUN)).items.length,21);
+    t.diagnostic(JSON.stringify({beforeReadsPerBatch:2,afterReadsPerBatch:1,atomicWritesPerBatch:1}));
+  }finally{f.close();}
+});
+
+test('a mixed append preserves an existing item byte-for-byte and binds only new items to the new clock',async()=>{
+  const f=await fixture();try{
+    await f.telemetry.startCatalogRun({id:RUN});
+    const original=catalogRunItem(product,{decision:'persisted'}),next=catalogRunItem(product,{decision:'selected'});
+    const raw=id=>({...f.sqlite.prepare('SELECT * FROM catalog_run_items WHERE id=?').get(id)});
+    await f.telemetry.insertCatalogRunItems(RUN,[original]);
+    const first=raw(original.id),later='2026-10-21T12:00:00.000Z';f.clock(later);
+    await f.telemetry.insertCatalogRunItems(RUN,[original,next]);
+    assert.deepEqual(raw(original.id),first);
+    assert.equal(raw(next.id).created_at,later);
+    const epoch=f.cursor.current.epoch;f.clock('2026-10-22T12:00:00.000Z');
+    await f.telemetry.insertCatalogRunItems(RUN,[original,next]);assert.equal(f.cursor.current.epoch,epoch);
+    const rejected=catalogRunItem(product,{decision:'selected'});
+    await assert.rejects(f.telemetry.insertCatalogRunItems(RUN,[rejected,{...original,decision:'tampered'}]),/conflict/);
+    assert.deepEqual(raw(rejected.id),{});assert.deepEqual(raw(original.id),first);assert.equal(f.cursor.current.epoch,epoch);
   }finally{f.close();}
 });
 

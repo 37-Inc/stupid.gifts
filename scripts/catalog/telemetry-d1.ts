@@ -44,7 +44,7 @@ export function createD1CatalogTelemetryStore(options:{db:CatalogD1;owner:Mutati
   const rows=async(sql:string,params:unknown[]=[])=> (await prepare(sql,params).all<Row>()).results;
   const assert=(condition:string,params:unknown[]=[])=>prepare(`SELECT json(CASE WHEN ${condition} THEN 'true' ELSE 'telemetry_conflict' END)`,params);
   const serialize=<T>(operation:()=>Promise<T>)=>{const work=tail.then(operation);tail=work.catch(()=>{});return work;};
-  async function mutate(method:string,input:unknown,build:(now:string,operationId:string)=>Promise<D1Statement[]>) {
+  async function mutate(method:string,input:unknown,build:(now:string,preflight:Row)=>Promise<D1Statement[]>,itemIds?:string[]) {
     const owner={...cursor.current};if(!same(owner,options.owner))throw new Error('telemetry_fenced');
     const bytes=canonicalJson({method,input,runId,catalogRevision,environment:owner.environment,indexName:owner.indexName});
     // Raw item JSON appears twice in the atomic batch (insert + assertion).
@@ -62,13 +62,18 @@ export function createD1CatalogTelemetryStore(options:{db:CatalogD1;owner:Mutati
       cursor.current=Object.freeze(actual!);return true;
     };
     const fence=mutationFenceQuery(owner);
-    const [preflight]=await rows(`SELECT o.*,CASE WHEN ${fence.sql} THEN ${NOW} END telemetry_clock
-      FROM (SELECT 1) LEFT JOIN catalog_maintenance_operations o ON o.operation_id=?`,[...fence.params,operationId]);
+    // The append needs at most twenty original timestamps. Return them with
+    // the fenced primary observation, not a second accounted D1 round trip.
+    const [preflight]=await rows(`SELECT o.*,CASE WHEN ${fence.sql} THEN ${NOW} END telemetry_clock${itemIds? `,
+      (SELECT json_group_object(id,created_at) FROM catalog_run_items
+        WHERE id IN (SELECT value FROM json_each(?))) item_times`:''}
+      FROM (SELECT 1) LEFT JOIN catalog_maintenance_operations o ON o.operation_id=?`,
+    [...fence.params,...(itemIds?[JSON.stringify(itemIds)]:[]),operationId]);
     if(await recover(preflight?.operation_id?preflight:null))return;
     if(typeof preflight?.telemetry_clock!=='string')throw new Error('telemetry_fenced');
     const now=preflight.telemetry_clock;canonicalTimestamp(now);
     const next={...owner,epoch:owner.epoch+1};
-    const statements=[mutationAssertion(db,owner),...await build(now,operationId),
+    const statements=[mutationAssertion(db,owner),...await build(now,preflight),
       prepare(`INSERT INTO catalog_maintenance_operations(operation_id,input_sha256,run_id,catalog_revision,environment,index_name,
         generation,prior_epoch,next_epoch,database_time,result_json,changes_json) VALUES(?,?,?,?,?,?,?,?,?,?,'null','[]')`,
       [operationId,hash,runId,catalogRevision,owner.environment,owner.indexName,owner.generation,owner.epoch,next.epoch,now]),
@@ -117,21 +122,20 @@ export function createD1CatalogTelemetryStore(options:{db:CatalogD1;owner:Mutati
           return {...Object.fromEntries(ITEM_FIELDS.map(key=>[snake(key),item[key]??null])),run_id:id,
             requires_manual_review:item.requiresManualReview===true,details:sanitizeTelemetryValue(item.details||{})} as Row;
         });
-        await mutate('append',batch,async now=>{
+        await mutate('append',batch,async(now,preflight)=>{
           // Explicit recovery may append the exact pending observations to a
           // failed/partial current run; its immutable finish remains truthful.
           const statements=[assert(`EXISTS(SELECT 1 FROM catalog_runs r JOIN catalog_run_telemetry t ON t.run_id=r.id WHERE r.id=?
             AND ((r.status='running' AND t.finish_json IS NULL) OR
               (r.status IN('partial','failed') AND json_extract(t.finish_json,'$.status')=r.status)))`,[id])];
-          const prior=new Map((await rows('SELECT id,created_at FROM catalog_run_items WHERE id IN (SELECT value FROM json_each(?))',
-            [JSON.stringify(batch.map(item=>item.id))])).map(row=>[row.id,row.created_at]));
+          const prior=JSON.parse(String(preflight.item_times)) as Record<string,string>;
           for(const item of batch){
-            const created=prior.get(item.id)||now;const raw=canonicalJson({...item,created_at:created});
+            const created=prior[String(item.id)]||now;const raw=canonicalJson({...item,created_at:created});
             statements.push(prepare(`INSERT INTO catalog_run_items(id,run_id,product_id,external_id,decision,requires_manual_review,created_at,source_record_json)
               VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,[item.id,id,item.product_id,item.external_id,item.decision,item.requires_manual_review?1:0,created,raw]),
             assert('EXISTS(SELECT 1 FROM catalog_run_items WHERE id=? AND run_id=? AND source_record_json=?)',[item.id,id,raw]));
           }return statements;
-        });
+        },batch.map(item=>String(item.id)));
       }
     }),
     loadCatalogRun:(id:string,options:{items?:boolean}={})=>serialize(async()=>{

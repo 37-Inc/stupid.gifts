@@ -48,6 +48,12 @@ test('publication progress streams split lines before exit and never echoes raw 
   assert.deepEqual(hostedPublicationProgress(JSON.stringify(phase)),{...phase,state:'progress',step:'catalog'});
   assert.deepEqual(hostedPublicationProgress(JSON.stringify({...phase,state:'catalog_application_progress'})),{...phase,state:'progress',step:'application'});
   assert.equal(hostedPublicationProgress(JSON.stringify({...phase,state:'catalog_application_progress',product:'private'})),undefined);
+  const profile={state:'catalog_application_profile',elapsedMs:100,reserveMs:20,requestMs:25,settleMs:21,journalMs:18,
+    engineMs:null,engineStatements:0,requests:3};
+  assert.deepEqual(hostedPublicationProgress(JSON.stringify(profile)),{...profile,state:'progress',step:'application',stage:'profile'});
+  assert.equal(hostedPublicationProgress(JSON.stringify({...profile,engineMs:2,engineStatements:7})).engineMs,2);
+  for(const changed of [{sql:'private'},{engineMs:0},{requests:-1},{journalMs:'18'}])
+    assert.equal(hostedPublicationProgress(JSON.stringify({...profile,...changed})),undefined);
   for(const changed of [{phase:15},{stage:'private'},{product:'private'}])assert.equal(hostedPublicationProgress(JSON.stringify({...phase,...changed})),undefined);
   for(const invalid of ['private supplier body',JSON.stringify({...value,token:'secret'}),JSON.stringify({...value,phase:'arbitrary'}),
     JSON.stringify({...value,completedBytes:-1}),JSON.stringify({...value,completedFiles:5})])assert.equal(hostedPublicationProgress(invalid),undefined);
