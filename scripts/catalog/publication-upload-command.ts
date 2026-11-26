@@ -30,9 +30,10 @@ export function isAccountedPublicationUploadCommand(value:unknown):value is Uplo
   return typeof value==='function'&&protectedCommands.has(value as UploadCommand);
 }
 export class PublicationUploadCommandError extends Error {
-  constructor(readonly code:'publication_upload_scope_invalid'|'publication_upload_budget_failed'|'publication_upload_unknown'|'publication_upload_command_failed'|'publication_upload_sandbox_unavailable',
-    readonly detail?:{versionDispatched:boolean;reason:string}){
-    super(code);this.name='PublicationUploadCommandError';
+  readonly code:'publication_upload_scope_invalid'|'publication_upload_budget_failed'|'publication_upload_unknown'|'publication_upload_command_failed'|'publication_upload_sandbox_unavailable';
+  readonly detail?:{versionDispatched:boolean;reason:string}|undefined;
+  constructor(code:PublicationUploadCommandError['code'],detail?:PublicationUploadCommandError['detail']){
+    super(code);this.name='PublicationUploadCommandError';this.code=code;this.detail=detail;
   }
 }
 function allowed(url:URL,method:string,scope:Scope):boolean {

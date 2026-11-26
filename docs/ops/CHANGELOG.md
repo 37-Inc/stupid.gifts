@@ -1,5 +1,20 @@
 # goose.gifts — Running Changelog & Plan
 
+## 2026-11-16 — Node 26 development and operator toolchain
+
+[owner+codex] Qualify Node 26.13.1 for the local build/tests and all setup-node
+workflow pins; align the package engine, lockfile and nvm selection and remove
+obsolete Node 22 launcher fallbacks. This changes the build/operator toolchain,
+not the Cloudflare Workers runtime or compatibility date. No production
+publication, data migration or provider configuration change is included.
+Runtime consistency is covered by `tests/node-runtime.test.mjs`. PR
+[#460](https://github.com/37-Inc/stupid.gifts/pull/460); local Node 26 lint,
+127 focused tests and both synthetic export/release checks passed. The active
+canonical/operator checkouts remain unmoved until a safe integration checkpoint.
+The Linux isolation fixture also uses a digest-verified Node 26 image. Replace
+the removed experimental type-transform flag with native erasable TypeScript
+(explicit error fields), preserving uploader behavior and sandbox policies.
+
 ## 2026-11-05 — Campaign-selection proposal and search-health audit
 
 [owner+codex] Expand PR350 with a single-product-view refactor, confirmed retained

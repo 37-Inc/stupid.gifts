@@ -763,7 +763,7 @@ test('one externally clocked workflow remains main-only, protected, serialized a
   assert.match(yaml,/timeout-minutes: 360/);
   const source=await readFile(new URL('../scripts/catalog/hosted-coordinator.mjs',import.meta.url),'utf8');
   assert.doesNotMatch(source.slice(source.indexOf('async invoke('),source.indexOf('async inspect(')),/\btimeout:/);
-  assert.match(yaml,/if: github.ref == 'refs\/heads\/main'/);assert.match(yaml,/runs-on: ubuntu-24.04/);assert.match(yaml,/node-version: '22.23.1'/);
+  assert.match(yaml,/if: github.ref == 'refs\/heads\/main'/);assert.match(yaml,/runs-on: ubuntu-24.04/);assert.match(yaml,/node-version: '26.13.1'/);
   assert.match(yaml,/persist-credentials: false/);assert.match(yaml,/apparmor_parser -r \.github\/catalog-bwrap.apparmor/);
   assert.doesNotMatch(yaml,/sysctl|--privileged|curl.*secret/i);assert.match(yaml,/npm ci --ignore-scripts/);
   const daily=await readFile(new URL('../scripts/catalog/daily-operator.mjs',import.meta.url),'utf8'),
